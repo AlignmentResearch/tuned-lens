@@ -1,5 +1,6 @@
 from contextlib import contextmanager
-from typing import Generator, Optional, Type
+from .model_surgery import get_transformer_layers
+from typing import Generator, Type, Union
 import torch as th
 
 
@@ -7,10 +8,11 @@ import torch as th
 def record_residual_stream(
     model: th.nn.Module,
     *,
-    input_name: str = "input",
+    include_input: bool = True,
     norm_class: Type[th.nn.Module] = th.nn.LayerNorm,
     post_norm: bool = False,
     retain_grads: bool = False,
+    sublayers: bool = False,
 ) -> Generator[dict[str, th.Tensor], None, None]:
     """Record every state of the residual stream in a transformer forward pass.
 
@@ -22,17 +24,14 @@ def record_residual_stream(
     on the dictionary or create a new `record_residual_stream` context each time.
     """
     hooks = {}
-    last_module_name: Optional[str] = None
     module_to_name: dict[th.nn.Module, str] = {}
     residual_stream: dict[str, th.Tensor] = {}
 
     def record_hook(
-        module: th.nn.Module, inputs: tuple[th.Tensor], output: th.Tensor
+        module: th.nn.Module, inputs: tuple[th.Tensor], output: Union[th.Tensor, tuple]
     ) -> None:
         module_name = module_to_name.get(module)
-
         assert module_name is not None, "Forward hook being called on unknown module"
-        assert len(inputs) == 1, "Expected single input to LayerNorm"
 
         if module_name in residual_stream:
             raise RuntimeError(
@@ -40,39 +39,55 @@ def record_residual_stream(
                 f".clear() the stream dictionary"
             )
 
-        # For post-norm architectures, we just record the output of the layer norm
-        if post_norm:
-            state_name = module_name
-            stream_state = output
+        # We need to support this output format for HuggingFace models
+        if isinstance(output, tuple):
+            output = output[0]
+            if not isinstance(output, th.Tensor):
+                raise RuntimeError(
+                    f"Expected first element of {module_name} output to be a Tensor"
+                )
+
+        # We're supposed to record the input embeddings and we haven't yet
+        if include_input and "input" not in residual_stream:
+            record_state(inputs[0], "input")
+
+        # When sublayers=True for pre-LN models, we record the *input* to the second LN
+        if isinstance(module, norm_class) and not post_norm:
+            assert len(inputs) == 1, "Expected single input to LayerNorm"
+            record_state(inputs[0], module_name)
         else:
-            (stream_state,) = inputs
+            record_state(output, module_name)
 
-            # If this is a pre-norm architecture, we need to record the *input* to
-            # this LayerNorm under the name of the *previous* layer
-            nonlocal last_module_name
-            if last_module_name is None:
-                # Special case for the first layer
-                state_name = input_name
-            else:
-                state_name = last_module_name
-
-            # Remember the name of this module for the next iteration
-            last_module_name = module_name
-
+    def record_state(state: th.Tensor, name: str) -> None:
         if retain_grads:
-            stream_state.requires_grad_(True)
-            stream_state.retain_grad()
+            state.requires_grad_(True)
+            state.retain_grad()
         else:
-            stream_state = stream_state.detach()
+            state = state.detach()
 
-        residual_stream[state_name] = stream_state
+        residual_stream[name] = state
 
-    for name, module in model.named_modules():
-        if not isinstance(module, norm_class):
-            continue
+    _, layers = get_transformer_layers(model)
+    for i, layer in enumerate(layers):
+        hooks[f"layer{i}"] = layer.register_forward_hook(record_hook)
+        module_to_name[layer] = f"layer{i}"
 
-        hooks[name] = module.register_forward_hook(record_hook)
-        module_to_name[module] = name
+        # For sublayers=True, we need to hook into one of the layer norms in this layer
+        if sublayers:
+            layer_norms = [m for m in layer.modules() if isinstance(m, norm_class)]
+            if not layer_norms:
+                raise ValueError(
+                    f"No layer norms found in layer {i}; try specifying `norm_class`"
+                )
+            elif len(layer_norms) != 2:
+                raise ValueError(
+                    f"Expected 2 layer norms per layer when sublayers=True, "
+                    f"but layer {i} has {len(layer_norms)}"
+                )
+
+            post_attn_ln = layer_norms[0 if post_norm else 1]
+            hooks[f"layer{i}_attn"] = post_attn_ln.register_forward_hook(record_hook)
+            module_to_name[post_attn_ln] = f"layer{i}_attn"
 
     try:
         yield residual_stream

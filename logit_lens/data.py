@@ -38,7 +38,7 @@ def chunk_and_tokenize(
             for k, v in tokenizer(
                 # Concatenate all the samples together, separated by the EOS token.
                 tokenizer.eos_token.join(x[text_key]),
-                # The tokenizer will split this long text into 2048 token chunks.
+                max_length=min(tokenizer.model_max_length, 2048),
                 return_overflowing_tokens=True,
                 truncation=True,
             ).items()

@@ -10,7 +10,7 @@ def test_record_residual_stream():
     """
     model = GPT2LMHeadModel(GPT2Config())
 
-    with record_residual_stream(model) as stream:
+    with record_residual_stream(model, sublayers=True) as stream:
         outputs = model(th.ones(1, 1, dtype=th.long), output_hidden_states=True)
 
     # Exclude the final hidden state because HF applies ln_f while we don't
