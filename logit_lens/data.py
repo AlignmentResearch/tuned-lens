@@ -1,4 +1,5 @@
 from datasets import Dataset, DatasetDict
+from functools import partial
 from multiprocessing import cpu_count
 from transformers import PreTrainedTokenizerBase
 from typing import TypeVar, Union
@@ -31,18 +32,7 @@ def chunk_and_tokenize(
         The chunked and tokenized dataset.
     """
     return data.map(
-        lambda x: {
-            # We know that the last sample will almost always be less than the max
-            # number of tokens, and we don't want to pad, so we just drop it.
-            k: v[:-1]
-            for k, v in tokenizer(
-                # Concatenate all the samples together, separated by the EOS token.
-                tokenizer.eos_token.join(x[text_key]),
-                max_length=min(tokenizer.model_max_length, 2048),
-                return_overflowing_tokens=True,
-                truncation=True,
-            ).items()
-        },
+        partial(_tokenize_fn, tokenizer=tokenizer, text_key=text_key),
         batched=True,
         num_proc=cpu_count() // 2,
         remove_columns=get_columns_all_equal(data),
@@ -52,6 +42,22 @@ def chunk_and_tokenize(
         # elements of the dataset to a model
         columns=["input_ids", "attention_mask"],
     )
+
+
+def _tokenize_fn(x: dict, tokenizer: PreTrainedTokenizerBase, text_key: str):
+    """Annoyingly, we need to use a separate function so it can be hashed correctly."""
+    return {
+        # We know that the last sample will almost always be less than the max
+        # number of tokens, and we don't want to pad, so we just drop it.
+        k: v[:-1]
+        for k, v in tokenizer(
+            # Concatenate all the samples together, separated by the EOS token.
+            tokenizer.eos_token.join(x[text_key]),
+            max_length=min(tokenizer.model_max_length, 2048),
+            return_overflowing_tokens=True,
+            truncation=True,
+        ).items()
+    }
 
 
 def get_columns_all_equal(dataset: Union[Dataset, DatasetDict]) -> list[str]:

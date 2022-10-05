@@ -1,1 +1,1 @@
-from .feature_extraction import record_residual_stream
+from .feature_extraction import record_residual_stream, ResidualStream

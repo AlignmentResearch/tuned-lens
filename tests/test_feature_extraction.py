@@ -14,8 +14,6 @@ def test_record_residual_stream():
         outputs = model(th.ones(1, 1, dtype=th.long), output_hidden_states=True)
 
     # Exclude the final hidden state because HF applies ln_f while we don't
-    their_hiddens = outputs.hidden_states[:-1]
-    our_hiddens = [h for i, h in enumerate(stream.values()) if i % 2 == 0]
-
-    for their_hidden, our_hidden in zip(their_hiddens, our_hiddens):
+    their_hiddens = outputs.hidden_states[1:-1]
+    for their_hidden, our_hidden in zip(their_hiddens, stream.layers):
         th.testing.assert_allclose(their_hidden, our_hidden)

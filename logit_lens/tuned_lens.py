@@ -1,20 +1,12 @@
 from copy import deepcopy
+from itertools import chain
 from transformers import PreTrainedModel
-from typing import Iterable, Optional
+from typing import Iterable, Optional, overload
 import torch as th
 
 
 class TunedLens(th.nn.Module):
-    """Stores all parameters necessary to decode hidden states into logits.
-
-    There are three possible ways to initialize this class:
-    1. From a HuggingFace model
-    2. From a manually specified unembedding layer
-    3. From scratch, with manually specified dimensions
-
-    The third option is mainly supported for testing purposes, and to make
-    serialization easier.
-    """
+    """Stores all parameters necessary to decode hidden states into logits."""
 
     def __init__(
         self,
@@ -56,41 +48,70 @@ class TunedLens(th.nn.Module):
         # Try to prevent finetuning the decoder
         assert d_model and num_layers
         self.unembedding.requires_grad_(False)
-        self.adapters = th.nn.ModuleDict()
 
-        def create_adapter(name: str):
-            lens = th.nn.Linear(d_model, d_model, bias=bias)
-            if identity_init:
-                lens.weight.data = th.eye(d_model)  # Initialize with identity matrix
-                lens.bias.data.zero_()
+        lens = th.nn.Linear(d_model, d_model, bias=bias)
+        if identity_init:
+            lens.weight.data = th.eye(d_model)  # Initialize with identity matrix
+            lens.bias.data.zero_()
 
-            # Enforce orthogonality with matrix exponential parametrization
-            if orthogonal:
-                lens = th.nn.utils.parametrizations.orthogonal(lens)
+        # Enforce orthogonality with matrix exponential parametrization
+        if orthogonal:
+            lens = th.nn.utils.parametrizations.orthogonal(lens)
 
-            self.adapters[name] = lens
+        self.add_module("input_adapter", lens if include_input else None)
+        self.layer_adapters = th.nn.ModuleList(
+            [deepcopy(lens) for _ in range(num_layers)]
+        )
+        self.attn_adapters = th.nn.ModuleList(
+            [deepcopy(lens) for _ in range(num_layers)] if sublayers else []
+        )
 
-        if include_input:
-            create_adapter("input")
+    @overload
+    def iter_logits(
+        self, hiddens: Iterable[tuple[str, th.Tensor]], tuned: bool = True
+    ) -> Iterable[tuple[str, th.Tensor]]:
+        ...
 
-        for i in range(num_layers):
-            if sublayers:
-                create_adapter(f"layer{i}_attn")
-
-            create_adapter(f"layer{i}")
-
+    @overload
     def iter_logits(
         self, hiddens: Iterable[th.Tensor], tuned: bool = True
-    ) -> Iterable[tuple[str, th.Tensor]]:
+    ) -> Iterable[th.Tensor]:
+        ...
+
+    def iter_logits(self, hiddens: Iterable, tuned: bool = True) -> Iterable:
         """Yield the logits for each hidden state in an iterable."""
         # Sanity check to make sure we don't finetune the decoder
         if self.unembedding.weight.requires_grad:
             raise RuntimeError("Make sure to freeze the decoder")
 
-        for (name, adapter), h in zip(self.adapters.items(), hiddens):
-            h = self.layer_norm(h)
-            yield name, self.unembedding(adapter(h) if tuned else h)
+        adapters = self.layer_adapters
+        if self.attn_adapters:
+            # Interleave attention adapters with layer adapters
+            adapters = chain.from_iterable(zip(self.attn_adapters, self.layer_adapters))
 
-    def forward(self, hiddens: list[th.Tensor]) -> list[th.Tensor]:
+        # Tack on the input adapter if it exists
+        if isinstance(self.input_adapter, th.nn.Module):
+            adapters = chain([self.input_adapter], adapters)
+
+        for adapter, item in zip(adapters, hiddens):
+            if isinstance(item, th.Tensor):
+                h = self.layer_norm(item)
+                yield self.unembedding(adapter(h) if tuned else h)
+
+            elif isinstance(item, tuple):
+                name, h = item
+                h = self.layer_norm(h)
+                yield name, self.unembedding(adapter(h) if tuned else h)
+            else:
+                raise TypeError(f"Unexpected type {type(item)}")
+
+    def forward(self, hiddens: Iterable[th.Tensor]) -> list[th.Tensor]:
         """Decode hidden states into logits"""
         return [logits for _, logits in self.iter_logits(hiddens)]
+
+    def __len__(self) -> int:
+        N = len(self.attn_adapters) + len(self.layer_adapters)
+        if self.input_adapter:
+            N += 1
+
+        return N

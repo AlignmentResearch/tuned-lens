@@ -128,7 +128,7 @@ def main():
         total_loss = 0.0
 
         # We do this sequentially to save VRAM
-        for name, logits in lens.iter_logits(stream.values()):
+        for name, logits in lens.iter_logits(stream.items()):
             labels = batch["input_ids"]
             if args.token_shift > 0:
                 labels = labels[:, args.token_shift :]
@@ -148,7 +148,7 @@ def main():
 
             wandb.log(metrics)
 
-        total_loss = total_loss / len(lens.adapters)
+        total_loss = total_loss / len(lens)
         scaled_loss = total_loss / args.grad_acc_steps
         scaled_loss.backward()
 
