@@ -128,7 +128,7 @@ def record_residual_stream(
     norm_class: Type[th.nn.Module] = th.nn.LayerNorm,
     post_norm: bool = False,
     retain_grads: bool = False,
-    sublayers: bool = False,
+    sublayers: bool = True,
 ) -> Generator[ResidualStream, None, None]:
     """Record every state of the residual stream in a transformer forward pass.
 

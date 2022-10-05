@@ -5,8 +5,7 @@ from argparse import ArgumentParser
 from datasets import Dataset, DatasetDict, load_dataset
 from itertools import islice
 from logit_lens.data import chunk_and_tokenize, silence_datasets_messages
-from logit_lens.feature_extraction import record_residual_stream
-from logit_lens.tuned_lens import TunedLens
+from logit_lens import record_residual_stream, TunedLens
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
