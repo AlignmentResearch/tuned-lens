@@ -1,4 +1,5 @@
-from .feature_extraction import ResidualStream, record_residual_stream
+from .residual_stream import ResidualStream, record_residual_stream
+from .tuned_lens import TunedLens
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -19,20 +20,32 @@ def plot_logit_lens(
     model_or_name: Union[PreTrainedModel, str],
     *,
     input_ids: Optional[th.Tensor] = None,
-    text: Optional[str] = None,
-    tokenizer: Optional[PreTrainedTokenizerBase] = None,
     metric: Literal["ce", "entropy", "kl"] = "entropy",
+    residual_means: Optional[ResidualStream] = None,
+    text: Optional[str] = None,
+    tuned_lens: Optional[TunedLens] = None,
+    tokenizer: Optional[PreTrainedTokenizerBase] = None,
 ):
     """Plot the cosine similarities of hidden states with the final state."""
     model, tokens, outputs, stream = _run_inference(
         model_or_name, input_ids, text, tokenizer
     )
 
-    E = model.get_output_embeddings()
-    ln = model.base_model.ln_f
-    assert isinstance(ln, th.nn.LayerNorm)
+    if residual_means is not None:
+        acc = th.zeros_like(residual_means.layers[0])
+        for state, mean in zip(reversed(stream), reversed(residual_means)):
+            state += acc
+            acc += mean
 
-    hidden_lps = stream.map(lambda x: E(ln(x)).log_softmax(-1))
+    if tuned_lens is not None:
+        logits = stream.new_from_list(list(tuned_lens.iter_logits(stream)))
+        hidden_lps = logits.map(lambda x: x.log_softmax(dim=-1))
+    else:
+        E = model.get_output_embeddings()
+        ln = model.base_model.ln_f
+        assert isinstance(ln, th.nn.LayerNorm)
+        hidden_lps = stream.map(lambda x: E(ln(x)).log_softmax(-1))
+
     top_tokens = hidden_lps.map(lambda x: x.argmax(-1).squeeze().cpu().tolist())
     top_strings = top_tokens.map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
     if metric == "ce":
@@ -55,6 +68,30 @@ def plot_logit_lens(
 
 @th.no_grad()
 def plot_residuals(
+    model_or_name: Union[PreTrainedModel, str],
+    *,
+    input_ids: Optional[th.Tensor] = None,
+    text: Optional[str] = None,
+    tokenizer: Optional[PreTrainedTokenizerBase] = None,
+):
+    """Plot the residuals."""
+    model, tokens, _, stream = _run_inference(model_or_name, input_ids, text, tokenizer)
+
+    E = model.get_output_embeddings()
+    ln = model.base_model.ln_f
+    assert isinstance(ln, th.nn.LayerNorm)
+
+    prob_diffs = stream.map(lambda x: E(ln(x)).softmax(-1)).residuals()
+    changed_ids = prob_diffs.map(lambda x: x.abs().argmax(-1))
+    changed_tokens = changed_ids.map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
+    biggest_diffs = prob_diffs.zip_map(changed_ids, lambda x, y: x.gather(-1, y))
+
+    _plot_stream(biggest_diffs, changed_tokens, tokens)
+    plt.title("Residuals")
+
+
+@th.no_grad()
+def plot_residual_norms(
     model_or_name: Union[PreTrainedModel, str],
     *,
     input_ids: Optional[th.Tensor] = None,

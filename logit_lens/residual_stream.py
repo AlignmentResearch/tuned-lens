@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import zip_longest
+
 from .model_surgery import get_transformer_layers
 from typing import Callable, Generator, Optional, overload, Type, Union
 import torch as th
@@ -31,29 +32,45 @@ class ResidualStream:
         """Return whether the stream contains both attention and layer outputs."""
         return bool(self.attentions) and bool(self.layers)
 
-    def items(self) -> Generator[tuple[str, th.Tensor], None, None]:
+    def items(
+        self, reverse: bool = False
+    ) -> Generator[tuple[str, th.Tensor], None, None]:
         """Iterate over residual states in topological order, yielding labels."""
-        if self.embeddings is not None:
-            yield "input", self.embeddings
+        # Forward order
+        if not reverse:
+            if self.embeddings is not None:
+                yield "input", self.embeddings
 
-        # Yield attention and layer outputs in alternating order
-        for i, (attn, layer) in enumerate(zip_longest(self.attentions, self.layers)):
-            if attn is not None:
-                yield f"{i}.attn", attn
-            if layer is not None:
-                yield f"{i}.ffn", layer
+            # Yield attention and layer outputs in alternating order
+            for i, (attn, layer) in enumerate(
+                zip_longest(self.attentions, self.layers)
+            ):
+                if attn is not None:
+                    yield f"{i}.attn", attn
+                if layer is not None:
+                    yield f"{i}.ffn", layer
+
+        # Reverse order
+        else:
+            # Yield attention and layer outputs in alternating order
+            attns, layers = reversed(self.attentions), reversed(self.layers)
+            for i, (attn, layer) in enumerate(zip_longest(attns, layers)):
+                if layer is not None:
+                    yield f"{i}.ffn", layer
+                if attn is not None:
+                    yield f"{i}.attn", attn
+
+            if self.embeddings is not None:
+                yield "input", self.embeddings
 
     def labels(self) -> list[str]:
         """Return labels for the residual states suitable for e.g. plotting."""
         return [label for label, _ in self.items()]
 
-    def map(self, fn: Callable) -> "ResidualStream":
+    def map(self, fn: Callable, reverse: bool = False) -> "ResidualStream":
         """Map a function over all states, returning a new `ResidualStream`."""
-        return ResidualStream(
-            embeddings=fn(self.embeddings) if self.embeddings is not None else None,
-            attentions=[fn(t) for t in self.attentions],
-            layers=[fn(t) for t in self.layers],
-        )
+        it = reversed(self) if reverse else iter(self)
+        return self.new_from_list(list(map(fn, it)))
 
     def pairwise_map(
         self, fn: Callable[[th.Tensor, th.Tensor], th.Tensor]
@@ -63,17 +80,32 @@ class ResidualStream:
             raise ValueError("Can't map pairwise without input embeddings")
 
         states = list(self)
-        results = [fn(s1, s2) for s1, s2 in zip(states[:-1], states[1:])]
-        if self.has_sublayers:
-            return ResidualStream(attentions=results[::2], layers=results[1::2])
-        else:
-            return ResidualStream(layers=results)
+        return self.new_from_list(
+            [fn(s1, s2) for s1, s2 in zip(states[:-1], states[1:])]
+        )
 
-    def plot(self, tick_spacing: int = 2):
+    def zip_map(
+        self, other: "ResidualStream", fn: Callable[[th.Tensor, th.Tensor], th.Tensor]
+    ) -> "ResidualStream":
+        """Map over corresponding states, returning a new `ResidualStream`."""
+        return self.new_from_list([fn(s1, s2) for s1, s2 in zip(self, other)])
+
+    def new_from_list(self, states: list[th.Tensor]) -> "ResidualStream":
+        """Create a new `ResidualStream` with the given states."""
+        embeddings = states.pop(0) if self.embeddings is not None else None
+
+        if self.has_sublayers:
+            return ResidualStream(
+                embeddings=embeddings, attentions=states[::2], layers=states[1::2]
+            )
+        else:
+            return ResidualStream(embeddings=embeddings, layers=states)
+
+    def plot(self, tick_spacing: int = 2, **kwargs):
         """Plot the residual states."""
         import matplotlib.pyplot as plt
 
-        plt.plot(self)
+        plt.plot(self, **kwargs)
         if not self.has_sublayers:
             plt.xlabel("Layer")
         else:
@@ -85,6 +117,12 @@ class ResidualStream:
                 ticks=range(0, len(self), tick_spacing),
                 rotation=60,
             )
+
+    def cumsum(self, reverse: bool = False) -> "ResidualStream":
+        """Compute cumulative sum of states, returning a new `ResidualStream`."""
+        acc = th.zeros_like(self.layers[0])
+        result = self.map(lambda t: acc.add_(t).clone(), reverse=reverse)
+        return self.new_from_list(list(reversed(result))) if reverse else result
 
     def residuals(self) -> "ResidualStream":
         """Compute residual (hidden state diff) for each block."""
@@ -119,6 +157,11 @@ class ResidualStream:
 
         return num_states
 
+    def __reversed__(self) -> Generator[th.Tensor, None, None]:
+        """Iterate over residual states in reverse topological order."""
+        for _, state in self.items(reverse=True):
+            yield state
+
 
 @contextmanager
 def record_residual_stream(
@@ -128,7 +171,7 @@ def record_residual_stream(
     norm_class: Type[th.nn.Module] = th.nn.LayerNorm,
     post_norm: bool = False,
     retain_grads: bool = False,
-    sublayers: bool = True,
+    sublayers: Optional[bool] = None,
 ) -> Generator[ResidualStream, None, None]:
     """Record every state of the residual stream in a transformer forward pass.
 
@@ -138,6 +181,15 @@ def record_residual_stream(
 
     If you want to record multiple forward passes, you should either call `clear()`
     on the stream object or create a new `record_residual_stream` context each time.
+
+    Args:
+        model: The transformer model to record.
+        include_input: Whether to include the input embeddings in the stream.
+        norm_class: The class of normalization layer to record.
+        post_norm: Whether the transformer uses LayerNorm after residual connections.
+        retain_grads: Whether to retain gradients for the recorded states.
+        sublayers: Whether to record attention and layer outputs separately. If `None`,
+            this will be inferred from the number of layer norms in the model.
     """
     hooks = []
     residual_stream = ResidualStream()
@@ -177,17 +229,23 @@ def record_residual_stream(
         hooks.append(layer.register_forward_hook(store_layer))
 
         # For sublayers=True, we need to hook into one of the layer norms in this layer
-        if sublayers:
+        if sublayers is not False:
             layer_norms = [m for m in layer.modules() if isinstance(m, norm_class)]
             if not layer_norms:
-                raise ValueError(
-                    f"No layer norms found in layer {i}; try specifying `norm_class`"
-                )
+                if sublayers:
+                    raise ValueError(
+                        f"No layer norms found in layer {i}; try specifying `norm_class`"
+                    )
+                else:
+                    continue
             elif len(layer_norms) != 2:
-                raise ValueError(
-                    f"Expected 2 layer norms per layer when sublayers=True, "
-                    f"but layer {i} has {len(layer_norms)}"
-                )
+                if sublayers:
+                    raise ValueError(
+                        f"Expected 2 layer norms per layer when sublayers=True, "
+                        f"but layer {i} has {len(layer_norms)}"
+                    )
+                else:
+                    continue
 
             post_attn_ln = layer_norms[0 if post_norm else 1]
             hooks.append(post_attn_ln.register_forward_pre_hook(store_attn))

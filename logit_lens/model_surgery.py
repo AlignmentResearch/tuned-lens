@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from typing import Any, Generator, TypeVar, Union
+from .nn import LayerScale
 import torch as th
 
 
@@ -129,13 +130,12 @@ T = TypeVar("T", bound=th.nn.Module)
 
 
 @contextmanager
-def swap_layers(model: T, src: int, dest: int) -> Generator[T, None, None]:
-    """Temporarily swap layer at index `src` with layer at index `dest`."""
+def scale_layers(model: T) -> Generator[T, None, None]:
+    """Temporarily wrap each layer in a LayerScale object."""
     list_path, layer_list = get_transformer_layers(model)
-    permuted_list = th.nn.ModuleList(layer_list)
+    wrapped_list = th.nn.ModuleList([LayerScale(layer) for layer in layer_list])
 
-    permuted_list[src], permuted_list[dest] = permuted_list[dest], permuted_list[src]
-    set_key_path_(model, list_path, permuted_list)
+    set_key_path_(model, list_path, wrapped_list)
 
     try:
         yield model
