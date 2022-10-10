@@ -82,7 +82,7 @@ class TunedLens(th.nn.Module):
         )
 
     @classmethod
-    def load(cls, path: Union[str, Path]) -> "TunedLens":
+    def load(cls, path: Union[str, Path], ckpt: str = "params.pt") -> "TunedLens":
         """Load a TunedLens from a file."""
         path = Path(path)
 
@@ -91,16 +91,16 @@ class TunedLens(th.nn.Module):
             config = json.load(f)
 
         # Load parameters
-        state = th.load(path / "params.pt")
+        state = th.load(path / ckpt)
 
         model = cls(**config)
         model.load_state_dict(state, strict=False)
         return model
 
-    def save(self, path: Union[Path, str]) -> None:
+    def save(self, path: Union[Path, str], ckpt: str = "params.pt") -> None:
         path = Path(path)
         path.mkdir(exist_ok=True, parents=True)
-        th.save(self.state_dict(), path / "params.pt")
+        th.save(self.state_dict(), path / ckpt)
 
         with open(path / "config.json", "w") as f:
             json.dump(self.config, f)

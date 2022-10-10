@@ -197,7 +197,7 @@ def main():
 
         if i % args.save_every == 0:
             args.output.mkdir(parents=True, exist_ok=True)
-            th.save(lens.state_dict(), args.output / f"ckpt-{i}.pt")
+            lens.save(args.output, f"ckpt-{i}.pt")
 
         # Update the exponential moving average of the loss
         ema = beta * ema + (1 - beta) * float(total_loss)

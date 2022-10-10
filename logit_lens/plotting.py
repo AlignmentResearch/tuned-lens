@@ -63,7 +63,9 @@ def plot_logit_lens(
 
     uniform_loss = math.log(model.config.vocab_size)
     _plot_stream(stats, top_strings, tokens, vmax=uniform_loss, fmt="")
-    plt.title(f"Logit lens ({model.name_or_path})")
+
+    name = "Logit" if tuned_lens is None else "Tuned"
+    plt.title(f"{name} lens ({model.name_or_path})")
 
 
 @th.no_grad()
