@@ -40,6 +40,13 @@ def main():
         "--device", type=str, default="cuda:0", help="Device to use for training."
     )
     parser.add_argument(
+        "--fp16",
+        type=str,
+        choices=("full", "mixed", "none"),
+        default="none",
+        help="Whether to use mixed precision training.",
+    )
+    parser.add_argument(
         "--grad-acc-steps",
         type=int,
         default=1,
@@ -48,12 +55,12 @@ def main():
     parser.add_argument(
         "--loss",
         type=str,
-        default="ce",
-        choices=("ce", "kl", "mse"),
+        default="kl",
+        choices=("ce", "cosine", "kl", "mse"),
         help="Loss function to use for training.",
     )
     parser.add_argument(
-        "--num-steps", type=int, default=1000, help="Number of training steps."
+        "--num-steps", type=int, default=1500, help="Number of training steps."
     )
     parser.add_argument(
         "--orthogonal",
@@ -74,7 +81,12 @@ def main():
         help="Save residual means alongside the tuned lens.",
     )
     parser.add_argument(
-        "--save-every", type=int, default=100, help="Save the lenses every N steps."
+        "--save-every", type=int, default=50, help="Save the lenses every N steps."
+    )
+    parser.add_argument(
+        "--no-sublayers",
+        action="store_true",
+        help="Omit tuned lenses for attention blocks.",
     )
     parser.add_argument(
         "--slow-tokenizer", action="store_true", help="Use a Python tokenizer."
@@ -88,14 +100,18 @@ def main():
     parser.add_argument(
         "--token-shift",
         type=int,
-        default=1,
+        default=None,
         help="How to shift the labels wrt the input tokens (1 = next token, "
         "0 = current token, -1 = previous token, etc.)",
     )
     parser.add_argument("--wandb", type=str, help="Name of run in Weights & Biases.")
     args = parser.parse_args()
 
-    model = AutoModelForCausalLM.from_pretrained(args.model_name).to(args.device)
+    print("Loading model...")
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name, torch_dtype=th.float16 if args.fp16 == "full" else None
+    ).to(args.device)
+
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name, use_fast=not args.slow_tokenizer
     )
@@ -113,10 +129,15 @@ def main():
             raise ValueError("Only Dataset and DatasetDict instances are supported.")
 
     processed = chunk_and_tokenize(dataset, tokenizer, text_key=args.text_column)
-    lens = TunedLens(model, rank=args.rank, orthogonal=args.orthogonal).to(args.device)
+    lens = TunedLens(
+        model,
+        orthogonal=args.orthogonal,
+        rank=args.rank,
+        sublayers=not args.no_sublayers,
+    ).to(args.device)
 
     dl = DataLoader(processed, batch_size=args.batch_size)  # type: ignore[arg-type]
-    opt = th.optim.Adam(lens.parameters())
+    opt = th.optim.AdamW(lens.parameters())
     schedule = get_cosine_schedule_with_warmup(
         opt,
         num_warmup_steps=min(args.num_steps // 5, 1000),
@@ -140,71 +161,115 @@ def main():
 
     num_batches = args.grad_acc_steps * args.num_steps
     pbar = tqdm(desc="Tuning", total=num_batches)
-    for i, batch in enumerate(islice(dl, num_batches)):
-        batch = send_to_device(batch, args.device)
-        with record_residual_stream(model) as stream, th.no_grad():
-            model(**batch)
+    with th.autocast("cuda", enabled=args.fp16 != "none"):
+        for i, batch in enumerate(islice(dl, num_batches)):
+            batch = send_to_device(batch, args.device)
+            with (
+                record_residual_stream(
+                    model, sublayers=not args.no_sublayers
+                ) as stream,
+                th.no_grad(),
+            ):
+                final_logits = model(**batch).logits
 
-        metrics = {}
-        total_loss = 0.0
+            metrics = {}
+            total_loss = 0.0
 
-        if args.residual_means:
-            # Pool across tokens first
-            pooled_stream = stream.map(lambda h: h.mean(dim=(0, 1)))
-            sample_residuals = pooled_stream.residuals()
+            if args.residual_means:
+                # Pool across tokens first
+                pooled_stream = stream.map(lambda h: h.mean(dim=(0, 1)))
+                sample_residuals = pooled_stream.residuals()
 
-            if mean_residuals is None:
-                mean_residuals = sample_residuals
+                if mean_residuals is None:
+                    mean_residuals = sample_residuals
+                else:
+                    # Online mean update
+                    mean_residuals = mean_residuals.zip_map(
+                        sample_residuals, lambda mu, x: (i * mu + x) / (i + 1)
+                    )
+
+                if i % args.save_every == 0:
+                    args.output.mkdir(parents=True, exist_ok=True)
+                    th.save(mean_residuals, args.output / "residual_means.pt")
+
+            shift = args.token_shift
+            use_logits = args.loss not in ("cosine", "mse")
+            if not use_logits:
+                labels = stream.layers[-1]
+
+                # Predict the final hidden state for the *current* token by default
+                if shift is None:
+                    shift = 0
             else:
-                # Online mean update
-                mean_residuals = mean_residuals.zip_map(
-                    sample_residuals, lambda mu, x: (i * mu + x) / (i + 1)
-                )
+                if args.loss == "ce":
+                    labels = batch["input_ids"]
+
+                    # Predict the *next* token by default w/ cross entropy
+                    if shift is None:
+                        shift = 1
+                elif args.loss == "kl":
+                    labels = final_logits.log_softmax(dim=-1)
+
+                    # Match the *current* token distribution by default
+                    if shift is None:
+                        shift = 0
+                else:
+                    raise NotImplementedError(f"Unknown loss {args.loss}")
+
+            if shift > 0:
+                labels = labels[:, shift:]
+            elif shift < 0:
+                labels = labels[:, :shift]
+
+            # We do this sequentially to save VRAM
+            for name, preds in lens.map(stream.items(), logits=use_logits):
+                if shift > 0:
+                    preds = preds[:, :-shift]
+                elif shift < 0:
+                    preds = preds[:, -shift:]
+
+                if args.loss == "ce":
+                    loss = th.nn.functional.cross_entropy(
+                        preds.flatten(0, -2), labels.flatten()
+                    )
+                elif args.loss == "cosine":
+                    loss = 1 - th.cosine_similarity(preds, labels, dim=-1).mean()
+                elif args.loss == "kl":
+                    loss = th.sum(
+                        labels.exp() * (labels - preds.log_softmax(-1)), dim=-1
+                    ).mean()
+                elif args.loss == "mse":
+                    loss = th.nn.functional.mse_loss(preds, labels)
+                else:
+                    raise NotImplementedError
+
+                scaled_loss = loss / args.grad_acc_steps
+                scaled_loss.backward()
+
+                total_loss += loss.detach()
+                metrics[name] = loss.detach()
+
+            if args.wandb:
+                import wandb
+
+                wandb.log(metrics)
+
+            total_loss = total_loss / len(lens)
+
+            if (pbar.n + 1) % args.grad_acc_steps == 0:
+                opt.step()
+                opt.zero_grad()
+                schedule.step()
 
             if i % args.save_every == 0:
-                th.save(mean_residuals, args.output / "residual_means.pt")
+                lens.save(args.output, f"ckpt-{i}.pt")
 
-        # We do this sequentially to save VRAM
-        for name, logits in lens.iter_logits(stream.items()):
-            labels = batch["input_ids"]
-            if args.token_shift > 0:
-                labels = labels[:, args.token_shift :]
-                logits = logits[:, : -args.token_shift]
-            elif args.token_shift < 0:
-                labels = labels[:, : args.token_shift]
-                logits = logits[:, -args.token_shift :]
+            # Update the exponential moving average of the loss
+            ema = beta * ema + (1 - beta) * float(total_loss)
 
-            loss = th.nn.functional.cross_entropy(
-                logits.flatten(0, -2), labels.flatten()
-            )
-            scaled_loss = loss / args.grad_acc_steps
-            scaled_loss.backward()
-
-            total_loss += loss.detach()
-            metrics[name] = loss.detach()
-
-        if args.wandb:
-            import wandb
-
-            wandb.log(metrics)
-
-        total_loss = total_loss / len(lens)
-
-        if (pbar.n + 1) % args.grad_acc_steps == 0:
-            opt.step()
-            opt.zero_grad()
-            schedule.step()
-
-        if i % args.save_every == 0:
-            args.output.mkdir(parents=True, exist_ok=True)
-            lens.save(args.output, f"ckpt-{i}.pt")
-
-        # Update the exponential moving average of the loss
-        ema = beta * ema + (1 - beta) * float(total_loss)
-
-        # Bias correction
-        pbar.set_postfix(loss=ema / (1 - beta ** (pbar.n + 1)))
-        pbar.update()
+            # Bias correction
+            pbar.set_postfix(loss=ema / (1 - beta ** (pbar.n + 1)))
+            pbar.update()
 
     print(f"Saving lens to {args.output}")
     lens.save(args.output)

@@ -3,8 +3,9 @@ from itertools import chain
 from pathlib import Path
 
 from .nn.low_rank_linear import LowRankLinear
+from .utils import pairwise
 from transformers import PreTrainedModel
-from typing import Iterable, Optional, Union, overload
+from typing import Generator, Iterable, Optional, Union, overload
 import json
 import torch as th
 
@@ -81,6 +82,16 @@ class TunedLens(th.nn.Module):
             [deepcopy(lens) for _ in range(num_layers)] if sublayers else []
         )
 
+    def __iter__(self) -> Generator[th.nn.Module, None, None]:
+        if isinstance(self.input_adapter, th.nn.Module):
+            yield self.input_adapter
+
+        if self.attn_adapters:
+            # Interleave attention adapters with layer adapters
+            yield from chain.from_iterable(zip(self.attn_adapters, self.layer_adapters))
+        else:
+            yield from self.layer_adapters
+
     @classmethod
     def load(cls, path: Union[str, Path], ckpt: str = "params.pt") -> "TunedLens":
         """Load a TunedLens from a file."""
@@ -106,47 +117,68 @@ class TunedLens(th.nn.Module):
             json.dump(self.config, f)
 
     @overload
-    def iter_logits(
+    def iter_hiddens(
         self, hiddens: Iterable[tuple[str, th.Tensor]], tuned: bool = True
     ) -> Iterable[tuple[str, th.Tensor]]:
         ...
 
     @overload
-    def iter_logits(
+    def iter_hiddens(
         self, hiddens: Iterable[th.Tensor], tuned: bool = True
     ) -> Iterable[th.Tensor]:
         ...
 
-    def iter_logits(self, hiddens: Iterable, tuned: bool = True) -> Iterable:
+    def iter_hiddens(self, hiddens: Iterable, tuned: bool = True) -> Iterable:
+        """Yield the transformed hiddens for each hidden state in an iterable."""
+        # Sanity check to make sure we don't finetune the decoder
+        if any(p.requires_grad for p in self.parameters(recurse=False)):
+            raise RuntimeError("Make sure to freeze the decoder")
+
+        for adapter, item in zip(self, hiddens):
+            if isinstance(item, th.Tensor):
+                yield item + adapter(item) if tuned else item
+
+            elif isinstance(item, tuple):
+                name, h = item
+                yield name, h + adapter(h) if tuned else h
+            else:
+                raise TypeError(f"Unexpected type {type(item)}")
+
+    @overload
+    def map(
+        self, hiddens: Iterable[tuple[str, th.Tensor]], logits: bool = True
+    ) -> Iterable[tuple[str, th.Tensor]]:
+        ...
+
+    @overload
+    def map(
+        self,
+        hiddens: Iterable[th.Tensor],
+        logits: bool = True,
+    ) -> Iterable[th.Tensor]:
+        ...
+
+    def map(self, hiddens: Iterable, logits: bool = True) -> Iterable:
         """Yield the logits for each hidden state in an iterable."""
         # Sanity check to make sure we don't finetune the decoder
         if any(p.requires_grad for p in self.parameters(recurse=False)):
             raise RuntimeError("Make sure to freeze the decoder")
 
-        adapters = self.layer_adapters
-        if self.attn_adapters:
-            # Interleave attention adapters with layer adapters
-            adapters = chain.from_iterable(zip(self.attn_adapters, self.layer_adapters))
-
-        # Tack on the input adapter if it exists
-        if isinstance(self.input_adapter, th.nn.Module):
-            adapters = chain([self.input_adapter], adapters)
-
-        for adapter, item in zip(adapters, hiddens):
+        for adapter, item in zip(self, hiddens):
             if isinstance(item, th.Tensor):
-                h = item + adapter(item) if tuned else item
-                yield self.unembedding(self.layer_norm(h))
+                h = self.layer_norm(item + adapter(item))
+                yield self.unembedding(h) if logits else h
 
             elif isinstance(item, tuple):
                 name, h = item
-                h = h + adapter(h) if tuned else h
-                yield name, self.unembedding(self.layer_norm(h))
+                h = self.layer_norm(h + adapter(h))
+                yield name, self.unembedding(h) if logits else h
             else:
                 raise TypeError(f"Unexpected type {type(item)}")
 
     def forward(self, hiddens: Iterable[th.Tensor]) -> list[th.Tensor]:
         """Decode hidden states into logits"""
-        return [logits for _, logits in self.iter_logits(hiddens)]
+        return [logits for _, logits in self.map(hiddens)]
 
     def __len__(self) -> int:
         N = len(self.attn_adapters) + len(self.layer_adapters)

@@ -57,6 +57,9 @@ def main():
         "--split", type=str, default="validation", help="Split of the dataset to use."
     )
     parser.add_argument(
+        "--sublayers", action="store_true", help="Create tuned lenses for sublayers."
+    )
+    parser.add_argument(
         "--text-column", type=str, default="text", help="Column of the dataset to use."
     )
     parser.add_argument(
@@ -106,12 +109,12 @@ def main():
     pbar = tqdm(dl, desc="Evaluating")
     for batch in islice(dl, args.num_batches):
         batch = send_to_device(batch, args.device)
-        with record_residual_stream(model, sublayers=True) as stream, th.no_grad():
+        with record_residual_stream(model, sublayers=args.sublayers) as stream:
             model(**batch)
 
         total_loss = 0.0
         if lens is not None:
-            logit_iter = lens.iter_logits(stream.items())
+            logit_iter = lens.map(stream.items())
         else:
             for s, b in zip(reversed(stream), biases):
                 s.add_(b)

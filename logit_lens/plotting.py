@@ -22,13 +22,15 @@ def plot_logit_lens(
     input_ids: Optional[th.Tensor] = None,
     metric: Literal["ce", "entropy", "kl"] = "entropy",
     residual_means: Optional[ResidualStream] = None,
+    start_pos: int = 0,
+    end_pos: Optional[int] = None,
     text: Optional[str] = None,
     tuned_lens: Optional[TunedLens] = None,
     tokenizer: Optional[PreTrainedTokenizerBase] = None,
 ):
     """Plot the cosine similarities of hidden states with the final state."""
     model, tokens, outputs, stream = _run_inference(
-        model_or_name, input_ids, text, tokenizer
+        model_or_name, input_ids, text, tokenizer, start_pos, end_pos
     )
 
     if residual_means is not None:
@@ -38,7 +40,7 @@ def plot_logit_lens(
             acc += mean
 
     if tuned_lens is not None:
-        logits = stream.new_from_list(list(tuned_lens.iter_logits(stream)))
+        logits = stream.new_from_list(list(tuned_lens.map(stream)))
         hidden_lps = logits.map(lambda x: x.log_softmax(dim=-1))
     else:
         E = model.get_output_embeddings()
@@ -73,11 +75,14 @@ def plot_residuals(
     model_or_name: Union[PreTrainedModel, str],
     *,
     input_ids: Optional[th.Tensor] = None,
+    start_pos: int = 0,
     text: Optional[str] = None,
     tokenizer: Optional[PreTrainedTokenizerBase] = None,
 ):
     """Plot the residuals."""
-    model, tokens, _, stream = _run_inference(model_or_name, input_ids, text, tokenizer)
+    model, tokens, _, stream = _run_inference(
+        model_or_name, input_ids, text, tokenizer, start_pos
+    )
 
     E = model.get_output_embeddings()
     ln = model.base_model.ln_f
@@ -97,11 +102,14 @@ def plot_residual_norms(
     model_or_name: Union[PreTrainedModel, str],
     *,
     input_ids: Optional[th.Tensor] = None,
+    start_pos: int = 0,
     text: Optional[str] = None,
     tokenizer: Optional[PreTrainedTokenizerBase] = None,
 ):
     """Plot the residual L2 norms."""
-    _, tokens, _, stream = _run_inference(model_or_name, input_ids, text, tokenizer)
+    _, tokens, _, stream = _run_inference(
+        model_or_name, input_ids, text, tokenizer, start_pos
+    )
     residual_norms = stream.residuals().map(lambda x: x.norm(dim=-1).squeeze().cpu())
 
     _plot_stream(residual_norms, residual_norms, tokens)
@@ -113,11 +121,14 @@ def plot_similarity(
     model_or_name: Union[PreTrainedModel, str],
     *,
     input_ids: Optional[th.Tensor] = None,
+    start_pos: int = 0,
     text: Optional[str] = None,
     tokenizer: Optional[PreTrainedTokenizerBase] = None,
 ):
     """Plot the cosine similarities of hidden states with the final state."""
-    _, tokens, _, stream = _run_inference(model_or_name, input_ids, text, tokenizer)
+    _, tokens, _, stream = _run_inference(
+        model_or_name, input_ids, text, tokenizer, start_pos
+    )
     similarities = stream.map(
         lambda x: F.cosine_similarity(x, stream.layers[-1], dim=-1).squeeze().cpu()
     )
@@ -130,6 +141,8 @@ def _run_inference(
     input_ids: Optional[th.Tensor] = None,
     text: Optional[str] = None,
     tokenizer: Optional[PreTrainedTokenizerBase] = None,
+    start_pos: int = 0,
+    end_pos: Optional[int] = None,
 ) -> tuple:
     if isinstance(model_or_name, PreTrainedModel):
         model = model_or_name
@@ -154,6 +167,12 @@ def _run_inference(
         outputs = model(input_ids.to(model_device))
 
     tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())  # type: ignore[arg-type]
+
+    if start_pos > 0:
+        outputs.logits = outputs.logits[..., start_pos:end_pos, :]
+        stream = stream.map(lambda x: x[..., start_pos:end_pos, :])
+        tokens = tokens[start_pos:end_pos]
+
     return model, tokens, outputs, stream
 
 
