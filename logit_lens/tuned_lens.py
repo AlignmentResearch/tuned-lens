@@ -2,8 +2,8 @@ from copy import deepcopy
 from itertools import chain
 from pathlib import Path
 
-from .nn.low_rank_linear import LowRankLinear
-from .utils import pairwise
+from .model_surgery import get_final_layer_norm, get_transformer_layers
+from .nn import LowRankLinear, MultiDeviceWrapper
 from transformers import PreTrainedModel
 from typing import Generator, Iterable, Optional, Union, overload
 import json
@@ -42,18 +42,25 @@ class TunedLens(th.nn.Module):
             d_model = model.config.hidden_size
             num_layers = model.config.num_hidden_layers
             vocab_size = model.config.vocab_size
+            assert isinstance(d_model, int) and isinstance(vocab_size, int)
 
-            # For HuggingFace models, we use whatever they call the "output embeddings"
-            self.unembedding = deepcopy(model.get_output_embeddings())
-            self.layer_norm = (
-                getattr(model.base_model, "ln_f", None) or th.nn.Identity()
-            )
+            # Loading the state dict removes weird Accelerate hooks
+            U = th.nn.Linear(d_model, vocab_size, bias=False)
+            U.load_state_dict(model.get_output_embeddings().state_dict())
+            self.unembedding = U.float()
+
+            if ln := get_final_layer_norm(model):
+                self.layer_norm = th.nn.LayerNorm(d_model)
+                self.layer_norm.load_state_dict(ln.state_dict())
+                self.layer_norm.float()
+            else:
+                self.layer_norm = th.nn.Identity()
 
         # Save config for later
         self.config = {
             k: v
             for k, v in locals().items()
-            if k not in ("self", "model") and not k.startswith("_")
+            if not k.startswith("_") and not isinstance(v, th.nn.Module)
         }
 
         # Try to prevent finetuning the decoder
@@ -81,6 +88,11 @@ class TunedLens(th.nn.Module):
         self.attn_adapters = th.nn.ModuleList(
             [deepcopy(lens) for _ in range(num_layers)] if sublayers else []
         )
+
+        self._layer_norm = MultiDeviceWrapper(self.layer_norm)
+        self._unembedding = MultiDeviceWrapper(self.unembedding)
+        if model:
+            self.dispatch_for_model(model)
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
         if isinstance(self.input_adapter, th.nn.Module):
@@ -116,33 +128,27 @@ class TunedLens(th.nn.Module):
         with open(path / "config.json", "w") as f:
             json.dump(self.config, f)
 
-    @overload
-    def iter_hiddens(
-        self, hiddens: Iterable[tuple[str, th.Tensor]], tuned: bool = True
-    ) -> Iterable[tuple[str, th.Tensor]]:
-        ...
+    def dispatch_for_model(self, model: PreTrainedModel) -> None:
+        first_device = next(model.parameters()).device
+        if not model.hf_device_map:
+            self.to(first_device)
+            return
 
-    @overload
-    def iter_hiddens(
-        self, hiddens: Iterable[th.Tensor], tuned: bool = True
-    ) -> Iterable[th.Tensor]:
-        ...
+        layer_prefix, _ = get_transformer_layers(model)
+        if self.input_adapter:
+            self.input_adapter.to(first_device)
 
-    def iter_hiddens(self, hiddens: Iterable, tuned: bool = True) -> Iterable:
-        """Yield the transformed hiddens for each hidden state in an iterable."""
-        # Sanity check to make sure we don't finetune the decoder
-        if any(p.requires_grad for p in self.parameters(recurse=False)):
-            raise RuntimeError("Make sure to freeze the decoder")
+        for name, device_idx in model.hf_device_map.items():
+            if not name.startswith(layer_prefix):
+                continue
 
-        for adapter, item in zip(self, hiddens):
-            if isinstance(item, th.Tensor):
-                yield item + adapter(item) if tuned else item
+            *_, suffix = name.split(".")
+            if suffix.isdigit():
+                layer_idx = int(suffix)
 
-            elif isinstance(item, tuple):
-                name, h = item
-                yield name, h + adapter(h) if tuned else h
-            else:
-                raise TypeError(f"Unexpected type {type(item)}")
+                self.layer_adapters[layer_idx].to(device_idx)
+                if self.attn_adapters:
+                    self.attn_adapters[layer_idx].to(device_idx)
 
     @overload
     def map(
@@ -166,13 +172,13 @@ class TunedLens(th.nn.Module):
 
         for adapter, item in zip(self, hiddens):
             if isinstance(item, th.Tensor):
-                h = self.layer_norm(item + adapter(item))
-                yield self.unembedding(h) if logits else h
+                h = self._layer_norm(item + adapter(item))
+                yield self._unembedding(h) if logits else h
 
             elif isinstance(item, tuple):
                 name, h = item
-                h = self.layer_norm(h + adapter(h))
-                yield name, self.unembedding(h) if logits else h
+                h = self._layer_norm(h + adapter(h))
+                yield name, self._unembedding(h) if logits else h
             else:
                 raise TypeError(f"Unexpected type {type(item)}")
 

@@ -1,5 +1,6 @@
 from contextlib import contextmanager
-from typing import Any, Generator, TypeVar, Union
+from transformers import PreTrainedModel
+from typing import Any, Generator, Optional, Type, TypeVar, Union
 from .nn import LayerScale
 import torch as th
 
@@ -48,6 +49,18 @@ def assign_key_path(model: T, key_path: str, value: Any) -> Generator[T, None, N
         yield model
     finally:
         set_key_path_(model, key_path, old_value)
+
+
+def get_final_layer_norm(
+    model: PreTrainedModel, norm_class: Type[th.nn.Module] = th.nn.LayerNorm
+) -> Optional[th.nn.Module]:
+    """Use heuristics to find the final layer norm in a model, if it exists."""
+    top_level_lns = [
+        module
+        for module in model.base_model.children()
+        if isinstance(module, norm_class)
+    ]
+    return top_level_lns[-1] if top_level_lns else None
 
 
 def get_transformer_layers(model: th.nn.Module) -> tuple[str, th.nn.ModuleList]:

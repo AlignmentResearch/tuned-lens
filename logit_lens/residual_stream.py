@@ -15,12 +15,6 @@ class ResidualStream:
     attentions: list[th.Tensor] = field(default_factory=list)
     layers: list[th.Tensor] = field(default_factory=list)
 
-    @classmethod
-    def from_hf(cls, hiddens: list[th.Tensor]) -> "ResidualStream":
-        """Create a `ResidualStream` from Huggingface hidden states."""
-        embeddings, *layers = hiddens
-        return cls(embeddings=embeddings, layers=layers)
-
     def clear(self) -> None:
         """Clear all residual states."""
         self.embeddings = None
@@ -81,7 +75,7 @@ class ResidualStream:
 
         states = list(self)
         return self.new_from_list(
-            [fn(s1, s2) for s1, s2 in zip(states[:-1], states[1:])]
+            [fn(s1.to(s2.device), s2) for s1, s2 in zip(states[:-1], states[1:])]
         )
 
     def zip_map(
