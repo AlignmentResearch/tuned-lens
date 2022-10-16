@@ -1,11 +1,12 @@
 """Train a set of tuned lenses for a language model."""
 
+from collections import defaultdict
 from accelerate.utils import find_executable_batch_size, send_to_device
 from argparse import ArgumentParser
 from datasets import Dataset, DatasetDict, load_dataset
 from itertools import islice
-from logit_lens.data import chunk_and_tokenize, silence_datasets_messages
-from logit_lens import record_residual_stream, TunedLens
+from white_box.data import chunk_and_tokenize, silence_datasets_messages
+from logit_lens import ResidualStats, record_residual_stream, TunedLens
 from pathlib import Path
 from torch.utils.data import DataLoader
 from transformers import (
@@ -75,9 +76,9 @@ def main():
     )
     parser.add_argument("--rank", type=int, help="Rank of the tuned lenses.")
     parser.add_argument(
-        "--residual-means",
+        "--residual-stats",
         action="store_true",
-        help="Save residual means alongside the tuned lens.",
+        help="Save residual means and variances alongside the tuned lens.",
     )
     parser.add_argument("--resume", type=Path, help="File to resume training from.")
     parser.add_argument(
@@ -166,12 +167,9 @@ def main():
         )
         wandb.watch(lens)
 
-    # Exponential moving average of the loss
-    ema = 0.0
-    beta = 0.9
-
-    # Running mean of the residuals
-    mean_residuals = None
+    # Running mean & variance of the residuals
+    residual_stats = ResidualStats()
+    stream_stats = ResidualStats()
 
     num_batches = args.grad_acc_steps * args.num_steps
     pbar = tqdm(desc="Tuning", total=num_batches)
@@ -186,113 +184,104 @@ def main():
 
     first_device = next(model.parameters()).device
 
-    for i, batch in enumerate(islice(dl, num_batches)):
-        batch = send_to_device(batch, first_device)
-        with (
-            th.autocast("cuda", enabled=use_autocast),
-            record_residual_stream(model, sublayers=not args.no_sublayers) as stream,
-            th.no_grad(),
-        ):
-            final_logits = model(**batch).logits.float()
+    for step in range(args.num_steps):
+        metrics = defaultdict(list)
 
-        metrics = {}
-        stream = stream.map(lambda t: t.float())
+        for batch in islice(dl, args.grad_acc_steps):
+            batch = send_to_device(batch, first_device)
+            with (
+                th.autocast("cuda", enabled=use_autocast),
+                record_residual_stream(
+                    model, sublayers=not args.no_sublayers
+                ) as stream,
+                th.no_grad(),
+            ):
+                final_logits = model(**batch).logits.float()
+            stream = stream.map(lambda t: t.float())
+            if args.residual_stats:
+                sample_residuals = stream.residuals()
+                residual_stats.update(sample_residuals)
+                stream_stats.update(stream)
 
-        if args.residual_means:
-            # Pool across tokens first
-            pooled_stream = stream.map(lambda h: h.mean(dim=(0, 1)))
-            sample_residuals = pooled_stream.residuals()
+            shift = args.token_shift
+            use_logits = args.loss not in ("cosine", "mse")
+            if not use_logits:
+                labels = stream.layers[-1]
 
-            if mean_residuals is None:
-                mean_residuals = sample_residuals
-            else:
-                # Online mean update
-                mean_residuals = mean_residuals.zip_map(
-                    sample_residuals, lambda mu, x: (i * mu + x) / (i + 1)
-                )
-
-            if i % args.save_every == 0:
-                args.output.mkdir(parents=True, exist_ok=True)
-                th.save(mean_residuals, args.output / "residual_means.pt")
-
-        shift = args.token_shift
-        use_logits = args.loss not in ("cosine", "mse")
-        if not use_logits:
-            labels = stream.layers[-1]
-
-            # Predict the final hidden state for the *current* token by default
-            if shift is None:
-                shift = 0
-        else:
-            if args.loss == "ce":
-                labels = batch["input_ids"]
-
-                # Predict the *next* token by default w/ cross entropy
-                if shift is None:
-                    shift = 1
-            elif args.loss == "kl":
-                labels = final_logits.log_softmax(dim=-1)
-
-                # Match the *current* token distribution by default
+                # Predict the final hidden state for the *current* token by default
                 if shift is None:
                     shift = 0
             else:
-                raise NotImplementedError(f"Unknown loss {args.loss}")
+                if args.loss == "ce":
+                    labels = batch["input_ids"]
 
-        if shift > 0:
-            labels = labels[:, shift:]
-        elif shift < 0:
-            labels = labels[:, :shift]
+                    # Predict the *next* token by default w/ cross entropy
+                    if shift is None:
+                        shift = 1
+                elif args.loss == "kl":
+                    labels = final_logits.log_softmax(dim=-1)
 
-        # We do this sequentially to save VRAM
-        for mod, (name, preds) in zip(
-            lens, lens.map(stream.items(), logits=use_logits)
-        ):
-            preds = preds.to(labels.device)
+                    # Match the *current* token distribution by default
+                    if shift is None:
+                        shift = 0
+                else:
+                    raise NotImplementedError(f"Unknown loss {args.loss}")
+
             if shift > 0:
-                preds = preds[:, :-shift]
+                labels = labels[:, shift:]
             elif shift < 0:
-                preds = preds[:, -shift:]
+                labels = labels[:, :shift]
 
-            if args.loss == "ce":
-                loss = th.nn.functional.cross_entropy(
-                    preds.flatten(0, -2), labels.flatten()
+            # We do this sequentially to save VRAM
+            for mod, (name, preds) in zip(
+                lens, lens.map(stream.items(), logits=use_logits)
+            ):
+                preds = preds.to(labels.device)
+                if shift > 0:
+                    preds = preds[:, :-shift]
+                elif shift < 0:
+                    preds = preds[:, -shift:]
+
+                if args.loss == "ce":
+                    loss = th.nn.functional.cross_entropy(
+                        preds.flatten(0, -2), labels.flatten()
+                    )
+                elif args.loss == "cosine":
+                    loss = 1 - th.cosine_similarity(preds, labels, dim=-1).mean()
+                elif args.loss == "kl":
+                    loss = th.sum(
+                        labels.exp() * (labels - preds.log_softmax(-1)), dim=-1
+                    ).mean()
+                elif args.loss == "mse":
+                    loss = th.nn.functional.mse_loss(preds, labels)
+                else:
+                    raise NotImplementedError
+
+                loss.div(args.grad_acc_steps).backward()
+                metrics[f"grad_norm/{name}"].append(
+                    th.nn.utils.clip_grad_norm_(mod.parameters(), 1.0)
                 )
-            elif args.loss == "cosine":
-                loss = 1 - th.cosine_similarity(preds, labels, dim=-1).mean()
-            elif args.loss == "kl":
-                loss = th.sum(
-                    labels.exp() * (labels - preds.log_softmax(-1)), dim=-1
-                ).mean()
-            elif args.loss == "mse":
-                loss = th.nn.functional.mse_loss(preds, labels)
-            else:
-                raise NotImplementedError
+                metrics[f"loss/{name}"].append(loss.detach())
 
-            loss.div(args.grad_acc_steps).backward()
-            metrics[f"grad_norm/{name}"] = th.nn.utils.clip_grad_norm_(
-                mod.parameters(), 1.0
-            )
-            metrics[f"loss/{name}"] = loss.detach()
+            # End of batch
+            pbar.update()
 
         if args.wandb:
             import wandb
 
-            wandb.log(metrics)
+            wandb.log({k: th.stack(v).mean().item() for k, v in metrics.items()})
 
-        if (pbar.n + 1) % args.grad_acc_steps == 0:
-            opt.zero_grad()
-            schedule.step()
+        opt.step()
+        opt.zero_grad()
+        schedule.step()
 
-        if i % args.save_every == 0:
-            lens.save(args.output, f"ckpt-{i}.pt")
-
-        pbar.update()
+        if step % args.save_every == 0:
+            lens.save(args.output, f"latest.pt")
 
     print(f"Saving lens to {args.output}")
     lens.save(args.output)
     if args.residual_means:
-        th.save(mean_residuals, args.output / "residual_means.pt")
+        th.save(residual_stats, args.output / "residual_stats.pt")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-from logit_lens.residual_stream import record_residual_stream
+from white_box.residual_stream import record_residual_stream
 from transformers import GPT2LMHeadModel, GPT2Config
 import torch as th
 

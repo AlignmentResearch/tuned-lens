@@ -91,7 +91,7 @@ def plot_residuals(
     prob_diffs = stream.map(lambda x: E(ln(x)).softmax(-1)).residuals()
     changed_ids = prob_diffs.map(lambda x: x.abs().argmax(-1))
     changed_tokens = changed_ids.map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
-    biggest_diffs = prob_diffs.zip_map(changed_ids, lambda x, y: x.gather(-1, y))
+    biggest_diffs = prob_diffs.zip_map(lambda x, y: x.gather(-1, y), changed_ids)
 
     _plot_stream(biggest_diffs, changed_tokens, tokens)
     plt.title("Residuals")

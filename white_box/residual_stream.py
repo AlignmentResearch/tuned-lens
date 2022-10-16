@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from itertools import zip_longest
+from itertools import starmap, zip_longest
 
 from .model_surgery import get_transformer_layers
 from typing import Callable, Generator, Optional, overload, Type, Union
@@ -25,6 +25,11 @@ class ResidualStream:
     def has_sublayers(self) -> bool:
         """Return whether the stream contains both attention and layer outputs."""
         return bool(self.attentions) and bool(self.layers)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Return the shape of the first state."""
+        return next(iter(self)).shape
 
     def items(
         self, reverse: bool = False
@@ -78,11 +83,9 @@ class ResidualStream:
             [fn(s1.to(s2.device), s2) for s1, s2 in zip(states[:-1], states[1:])]
         )
 
-    def zip_map(
-        self, other: "ResidualStream", fn: Callable[[th.Tensor, th.Tensor], th.Tensor]
-    ) -> "ResidualStream":
+    def zip_map(self, fn: Callable, *others: "ResidualStream") -> "ResidualStream":
         """Map over corresponding states, returning a new `ResidualStream`."""
-        return self.new_from_list([fn(s1, s2) for s1, s2 in zip(self, other)])
+        return self.new_from_list(list(starmap(fn, zip(self, *others))))
 
     def new_from_list(self, states: list[th.Tensor]) -> "ResidualStream":
         """Create a new `ResidualStream` with the given states."""

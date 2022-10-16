@@ -1,2 +1,2 @@
-# logit-lens
-Tools for understanding how transformer predictions are built up iteratively layer-by-layer
+# white-box
+Tools for understanding how transformer predictions are built layer-by-layer
