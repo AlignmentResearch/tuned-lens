@@ -1,21 +1,21 @@
 """Train a set of tuned lenses for a language model."""
 
-from collections import defaultdict
-from accelerate.utils import find_executable_batch_size, send_to_device
+from accelerate.utils import send_to_device
 from argparse import ArgumentParser
+from collections import defaultdict
 from datasets import Dataset, DatasetDict, load_dataset
 from itertools import islice
-from white_box.data import chunk_and_tokenize, silence_datasets_messages
-from logit_lens import ResidualStats, record_residual_stream, TunedLens
 from pathlib import Path
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
-from tqdm import tqdm
+from white_box import ResidualStats, record_residual_stream, TunedLens
+from white_box.data import chunk_and_tokenize, silence_datasets_messages
 import torch as th
 
 

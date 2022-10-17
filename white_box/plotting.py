@@ -1,5 +1,6 @@
+from .model_surgery import get_final_layer_norm
 from .residual_stream import ResidualStream, record_residual_stream
-from .tuned_lens import TunedLens
+from .nn.tuned_lens import TunedLens
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -40,11 +41,10 @@ def plot_logit_lens(
             acc += mean
 
     if tuned_lens is not None:
-        logits = stream.new_from_list(list(tuned_lens.map(stream)))
-        hidden_lps = logits.map(lambda x: x.log_softmax(dim=-1))
+        hidden_lps = tuned_lens.apply(stream).map(lambda x: x.log_softmax(dim=-1))
     else:
         E = model.get_output_embeddings()
-        ln = model.base_model.ln_f
+        ln = get_final_layer_norm(model.base_model)
         assert isinstance(ln, th.nn.LayerNorm)
         hidden_lps = stream.map(lambda x: E(ln(x)).log_softmax(-1))
 
@@ -158,12 +158,11 @@ def _run_inference(
 
     if text is not None:
         input_ids = cast(th.Tensor, tokenizer.encode(text, return_tensors="pt"))
-        print(input_ids)
     elif input_ids is None:
         raise ValueError("Either text or input_ids must be provided")
 
     model_device = next(model.parameters()).device
-    with record_residual_stream(model) as stream:
+    with record_residual_stream(model, sublayers=False) as stream:
         outputs = model(input_ids.to(model_device))
 
     tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())  # type: ignore[arg-type]

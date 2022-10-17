@@ -46,13 +46,14 @@ def chunk_and_tokenize(
 
 def _tokenize_fn(x: dict, tokenizer: PreTrainedTokenizerBase, text_key: str):
     """Annoyingly, we need to use a separate function so it can be hashed correctly."""
+    sep = tokenizer.eos_token or "<|endoftext|>"
     return {
         # We know that the last sample will almost always be less than the max
         # number of tokens, and we don't want to pad, so we just drop it.
         k: v[:-1]
         for k, v in tokenizer(
             # Concatenate all the samples together, separated by the EOS token.
-            tokenizer.eos_token.join(x[text_key]),
+            sep.join(x[text_key]),
             max_length=min(tokenizer.model_max_length, 2048),
             return_overflowing_tokens=True,
             truncation=True,

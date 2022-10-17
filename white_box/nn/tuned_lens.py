@@ -2,8 +2,9 @@ from copy import deepcopy
 from itertools import chain
 from pathlib import Path
 
-from .model_surgery import get_final_layer_norm, get_transformer_layers
-from .nn import LowRankLinear, MultiDeviceWrapper
+from ..model_surgery import get_final_layer_norm, get_transformer_layers
+from ..residual_stream import ResidualStream
+from . import LowRankLinear, MultiDeviceWrapper
 from transformers import PreTrainedModel
 from typing import Generator, Iterable, Optional, Union, overload
 import json
@@ -130,7 +131,7 @@ class TunedLens(th.nn.Module):
 
     def dispatch_for_model(self, model: PreTrainedModel) -> None:
         first_device = next(model.parameters()).device
-        if not model.hf_device_map:
+        if not hasattr(model, "hf_device_map"):
             self.to(first_device)
             return
 
@@ -149,6 +150,14 @@ class TunedLens(th.nn.Module):
                 self.layer_adapters[layer_idx].to(device_idx)
                 if self.attn_adapters:
                     self.attn_adapters[layer_idx].to(device_idx)
+
+    def apply(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
+        if len(stream) != len(self):
+            raise ValueError(
+                f"Expected {len(self)} layers, but got {len(stream)} layers."
+            )
+
+        return stream.new_from_list(list(self.map(stream, logits=logits)))
 
     @overload
     def map(

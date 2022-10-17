@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 from transformers import PreTrainedModel
 from typing import Any, Generator, Optional, Type, TypeVar, Union
-from .nn import LayerScale
 import torch as th
 
 
@@ -137,20 +136,3 @@ def permute_layers_(model: th.nn.Module, indices: list[int]):
     list_path, layer_list = get_transformer_layers(model)
     permuted_list = th.nn.ModuleList([layer_list[i] for i in indices])
     set_key_path_(model, list_path, permuted_list)
-
-
-T = TypeVar("T", bound=th.nn.Module)
-
-
-@contextmanager
-def scale_layers(model: T) -> Generator[T, None, None]:
-    """Temporarily wrap each layer in a LayerScale object."""
-    list_path, layer_list = get_transformer_layers(model)
-    wrapped_list = th.nn.ModuleList([LayerScale(layer) for layer in layer_list])
-
-    set_key_path_(model, list_path, wrapped_list)
-
-    try:
-        yield model
-    finally:
-        set_key_path_(model, list_path, layer_list)
