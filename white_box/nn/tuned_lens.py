@@ -46,8 +46,9 @@ class TunedLens(th.nn.Module):
             assert isinstance(d_model, int) and isinstance(vocab_size, int)
 
             # Loading the state dict removes weird Accelerate hooks
-            U = th.nn.Linear(d_model, vocab_size, bias=False)
-            U.load_state_dict(model.get_output_embeddings().state_dict())
+            raw_U = model.get_output_embeddings()
+            U = th.nn.Linear(d_model, vocab_size, bias=raw_U.bias is not None)
+            U.load_state_dict(raw_U.state_dict())
             self.unembedding = U.float()
 
             if ln := get_final_layer_norm(model):

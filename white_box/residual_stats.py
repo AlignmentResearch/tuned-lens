@@ -12,9 +12,11 @@ class ResidualStats:
     mean: Optional[ResidualStream] = None
     M2: Optional[ResidualStream] = None
     autocorr: Optional[ResidualStream] = None
+    mean_norm: Optional[ResidualStream] = None
 
     n: int = 0
     pool: bool = True
+    track_cov: bool = True
 
     @th.no_grad()
     def update(self, stream: ResidualStream):
@@ -35,10 +37,13 @@ class ResidualStats:
                 lambda mu, x: mu + (x - mu) / self.n, sample_autocorr
             )
 
-        if self.mean is None or self.M2 is None:
-            mean_shape = stream.shape[-1] if self.pool else stream.shape[1:]
-            self.mean = stream.map(lambda x: x.new_zeros(mean_shape))
-            self.M2 = stream.map(lambda x: x.new_zeros(mean_shape))
+        if self.mean is None or self.M2 is None or self.mean_norm is None:
+            mu_shape = (stream.shape[-1],) if self.pool else stream.shape[1:]
+            var_shape = (*mu_shape, mu_shape[-1]) if self.track_cov else mu_shape
+
+            self.mean = stream.map(lambda x: x.new_zeros(mu_shape))
+            self.mean_norm = stream.map(lambda x: x.new_zeros(()))
+            self.M2 = stream.map(lambda x: x.new_zeros(var_shape))
 
         # Flatten all but the last dimension
         if self.pool:
@@ -48,9 +53,16 @@ class ResidualStats:
         delta = stream.zip_map(lambda x, mu: x - mu, self.mean)
         self.mean = self.mean.zip_map(lambda acc, d: acc + d.sum(0) / self.n, delta)
         delta2 = stream.zip_map(lambda x, mu: x - mu, self.mean)
-        self.M2 = self.M2.zip_map(
-            lambda acc, d, d2: acc + th.sum(d * d2, dim=0), delta, delta2
+
+        self.mean_norm = self.mean_norm.zip_map(
+            lambda mu, x: mu + th.sum(x.norm(-1) - mu) / self.n, stream
         )
+        if self.track_cov:
+            self.M2 = self.M2.zip_map(lambda acc, d, d2: acc + d.T @ d2, delta, delta2)
+        else:
+            self.M2 = self.M2.zip_map(
+                lambda acc, d, d2: acc + th.sum(d * d2, dim=0), delta, delta2
+            )
 
     @property
     def autocov(self) -> ResidualStream:
@@ -67,9 +79,22 @@ class ResidualStats:
         return self.autocorr.zip_map(lambda ac, mu: ac - mu[:-1] * mu[1:], self.mean)
 
     @property
+    def covariance(self) -> ResidualStream:
+        """Return the covariance matrix."""
+        if not self.track_cov:
+            raise ValueError("Set track_cov=True to compute covariance")
+        if not self.M2 or self.n < 2:
+            raise ValueError("Not enough data")
+
+        return self.M2.map(lambda x: x / (self.n - 1))
+
+    @property
     def variance(self) -> ResidualStream:
         """Return the current estimate of the variance."""
         if not self.M2 or self.n < 2:
             raise ValueError("Not enough data")
 
-        return self.M2.map(lambda x: x / (self.n - 1))
+        if self.track_cov:
+            return self.M2.map(lambda x: x.diag() / (self.n - 1))
+        else:
+            return self.M2.map(lambda x: x / (self.n - 1))

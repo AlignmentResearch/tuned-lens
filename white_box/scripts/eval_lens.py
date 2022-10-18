@@ -6,7 +6,8 @@ from collections import defaultdict
 from datasets import Dataset, DatasetDict, load_dataset
 from itertools import islice
 from white_box.data import chunk_and_tokenize, silence_datasets_messages
-from logit_lens import record_residual_stream, TunedLens
+from white_box.model_surgery import get_final_layer_norm
+from white_box import record_residual_stream, TunedLens
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -29,7 +30,7 @@ def main():
     parser.add_argument(
         "--lens", type=str, help="File containing the lenses to evaluate."
     )
-    parser.add_argument("--means", type=str, help="File containing residual means.")
+    parser.add_argument("--stats", type=str, help="File containing residual stats.")
     parser.add_argument(
         "--batch-size", type=int, default=6, help="Per-GPU batch size for eval."
     )
@@ -46,9 +47,6 @@ def main():
     )
     parser.add_argument(
         "--num-batches", type=int, default=1000, help="Number of batches to evaluate."
-    )
-    parser.add_argument(
-        "--rank", type=int, default=0, help="Rank of the lens to evaluate."
     )
     parser.add_argument(
         "--slow-tokenizer", action="store_true", help="Use a Python tokenizer."
@@ -71,7 +69,9 @@ def main():
     )
     args = parser.parse_args()
 
-    model = AutoModelForCausalLM.from_pretrained(args.model_name).to(args.device)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name, torch_dtype="auto"
+    ).to(args.device)
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name, use_fast=not args.slow_tokenizer
     )
@@ -99,28 +99,36 @@ def main():
 
     # Reverse cumsum of the residual means for mean ablation
     biases = []
-    if args.means:
-        residual_means = th.load(args.means, map_location=args.device)
-        acc = th.zeros_like(residual_means.layers[0])
-        for mean in reversed(residual_means):
+    if args.stats:
+        residual_means = th.load(args.stats, map_location=args.device)
+        acc = th.zeros_like(residual_means.mean.layers[0])
+        for mean in reversed(residual_means.mean):
             biases.append(acc.clone())
             acc += mean
 
     pbar = tqdm(dl, desc="Evaluating")
+    use_autocast = model.dtype == th.float16
+    if use_autocast:
+        pbar.write("Using fp16 inference for the model.")
+
     for batch in islice(dl, args.num_batches):
         batch = send_to_device(batch, args.device)
-        with record_residual_stream(model, sublayers=args.sublayers) as stream:
+        with (
+            record_residual_stream(model, sublayers=args.sublayers) as stream,
+            th.autocast("cuda", enabled=use_autocast),
+        ):
             model(**batch)
 
         total_loss = 0.0
         if lens is not None:
-            logit_iter = lens.map(stream.items())
+            logit_iter = lens.map(stream.map(lambda x: x.float()).items())
         else:
             for s, b in zip(reversed(stream), biases):
                 s.add_(b)
 
             E = model.get_output_embeddings()
-            ln = model.base_model.ln_f
+            ln = get_final_layer_norm(model.base_model)  # type: ignore[attr-defined]
+            assert isinstance(ln, th.nn.LayerNorm)
             logit_iter = stream.map(lambda x: E(ln(x))).items()
 
         # We do this sequentially to save VRAM

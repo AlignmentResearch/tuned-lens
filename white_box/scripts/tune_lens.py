@@ -85,9 +85,9 @@ def main():
         "--save-every", type=int, default=50, help="Save the lenses every N steps."
     )
     parser.add_argument(
-        "--no-sublayers",
+        "--sublayers",
         action="store_true",
-        help="Omit tuned lenses for attention blocks.",
+        help="Train tuned lenses for attention blocks.",
     )
     parser.add_argument(
         "--shard-model", action="store_true", help="Shard the model across GPUs."
@@ -146,7 +146,7 @@ def main():
         model,
         orthogonal=args.orthogonal,
         rank=args.rank,
-        sublayers=not args.no_sublayers,
+        sublayers=args.sublayers,
     ).float()
 
     if args.resume:
@@ -168,6 +168,7 @@ def main():
         wandb.watch(lens)
 
     # Running mean & variance of the residuals
+    cumsum_residual_stats = ResidualStats(track_cov=False)
     residual_stats = ResidualStats()
     stream_stats = ResidualStats()
 
@@ -180,7 +181,7 @@ def main():
 
     use_autocast = model.dtype == th.float16
     if use_autocast:
-        print("Using fp16 inference for the model.")
+        pbar.write("Using fp16 inference for the model.")
 
     first_device = next(model.parameters()).device
 
@@ -191,15 +192,15 @@ def main():
             batch = send_to_device(batch, first_device)
             with (
                 th.autocast("cuda", enabled=use_autocast),
-                record_residual_stream(
-                    model, sublayers=not args.no_sublayers
-                ) as stream,
+                record_residual_stream(model, sublayers=args.sublayers) as stream,
                 th.no_grad(),
             ):
                 final_logits = model(**batch).logits.float()
+
             stream = stream.map(lambda t: t.float())
             if args.residual_stats:
                 sample_residuals = stream.residuals()
+                cumsum_residual_stats.update(sample_residuals.cumsum(reverse=True))
                 residual_stats.update(sample_residuals)
                 stream_stats.update(stream)
 
@@ -278,9 +279,16 @@ def main():
         if step % args.save_every == 0:
             lens.save(args.output, f"latest.pt")
 
+            if args.residual_stats:
+                th.save(cumsum_residual_stats, args.output / "cumsum_residual_stats.pt")
+                th.save(stream_stats, args.output / "stream_stats.pt")
+                th.save(residual_stats, args.output / "residual_stats.pt")
+
     print(f"Saving lens to {args.output}")
     lens.save(args.output)
-    if args.residual_means:
+    if args.residual_stats:
+        th.save(cumsum_residual_stats, args.output / "cumsum_residual_stats.pt")
+        th.save(stream_stats, args.output / "stream_stats.pt")
         th.save(residual_stats, args.output / "residual_stats.pt")
 
 
