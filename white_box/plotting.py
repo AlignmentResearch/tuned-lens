@@ -31,6 +31,8 @@ def plot_logit_lens(
     text: Optional[str] = None,
     tuned_lens: Optional[TunedLens] = None,
     tokenizer: Optional[PreTrainedTokenizerBase] = None,
+    whitespace_token: str = "Ġ",
+    whitespace_replacement: str = " ",
 ):
     """Plot the cosine similarities of hidden states with the final state."""
     model, tokens, outputs, stream = _run_inference(
@@ -64,6 +66,9 @@ def plot_logit_lens(
 
     top_tokens = hidden_lps.map(lambda x: x.argmax(-1).squeeze().cpu().tolist())
     top_strings = top_tokens.map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
+    top_strings = top_strings.map(
+        lambda x: [t.replace(whitespace_token, whitespace_replacement) for t in x]
+    )
     if metric == "ce":
         raise NotImplementedError
     elif metric == "kl":
@@ -108,7 +113,7 @@ def plot_residuals(
     )
 
     E = model.get_output_embeddings()
-    ln = model.base_model.ln_f
+    ln = get_final_layer_norm(model.base_model)
     assert isinstance(ln, th.nn.LayerNorm)
 
     prob_diffs = stream.map(lambda x: E(ln(x)).softmax(-1)).residuals()

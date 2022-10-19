@@ -12,6 +12,7 @@ license = {text = "MIT License"}
 dependencies = [
     "accelerate",
     "datasets",
+    "seaborn",
     "torch",
     "transformers",
 ]
