@@ -4,7 +4,7 @@ import torch as th
 
 
 class LowRankLinear(th.nn.Module):
-    """Linear layer with low-rank weight matrix."""
+    """Linear layer with low-rank weight matrix and optional diagonal scaling."""
 
     def __init__(
         self,
@@ -12,6 +12,7 @@ class LowRankLinear(th.nn.Module):
         out_features: int,
         rank: int,
         bias: bool = True,
+        scale: bool = True,
         device: Optional[th.device] = None,
         dtype: Optional[th.dtype] = None,
     ):
@@ -41,6 +42,26 @@ class LowRankLinear(th.nn.Module):
         else:
             self.register_parameter("bias", None)
 
+        if scale:
+            self.scale = th.nn.Parameter(
+                th.zeros(in_features, device=device, dtype=dtype)
+            )
+        else:
+            self.register_parameter("scale", None)
+
     def forward(self, x: th.Tensor) -> th.Tensor:
         # Make sure to do the matmuls in the efficient order
-        return th.nn.functional.linear(x @ self.v, self.u, self.bias)
+        y = th.nn.functional.linear(x @ self.v, self.u, self.bias)
+        if self.scale is not None:
+            y.addcmul_(x, self.scale)
+
+        return y
+
+    @property
+    def weight(self) -> th.Tensor:
+        """Return the weight matrix"""
+        matrix = self.u @ self.v.T
+        if self.scale is not None:
+            matrix += self.scale.diag()
+
+        return matrix

@@ -121,6 +121,10 @@ class ResidualStream:
         result = self.map(lambda t: acc.add_(t).clone(), reverse=reverse)
         return self.new_from_list(list(reversed(result))) if reverse else result
 
+    def mean_update(self, other: "ResidualStream", i: int) -> "ResidualStream":
+        """Interpret `self` as a running mean and update it with `other`."""
+        return self.zip_map(lambda mu, x: i / (i + 1) * mu + 1 / (i + 1) * x, other)
+
     def residuals(self) -> "ResidualStream":
         """Compute residual (hidden state diff) for each block."""
         return self.pairwise_map(lambda s1, s2: s2 - s1)

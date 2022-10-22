@@ -86,7 +86,7 @@ def plot_logit_lens(
     _plot_stream(
         stats,
         top_strings,
-        tokens,
+        [t.replace(whitespace_token, whitespace_replacement) for t in tokens],
         colorbar_label=f"{metric} (nats)",
         fmt="",
         layer_stride=layer_stride,
