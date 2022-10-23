@@ -21,6 +21,8 @@ class ResidualStats:
     @th.no_grad()
     def update(self, stream: ResidualStream):
         """Update the online stats in-place with a new stream."""
+        # Compute stats in full precision
+        stream = stream.map(lambda x: x.float())
         self.n += math.prod(stream.shape[:-1]) if self.pool else stream.shape[0]
 
         # Autocorrelation is E[x_t * x_{t-1}]. It gets computed first because it

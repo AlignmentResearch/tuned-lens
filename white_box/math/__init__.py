@@ -1,1 +1,1 @@
-from .incremental_pca import IncrementalPCA
+from .wasserstein import gaussian_wasserstein_l2, gaussian_wasserstein_l2_origin, sqrtmh
