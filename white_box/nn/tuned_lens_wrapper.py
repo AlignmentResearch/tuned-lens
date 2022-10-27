@@ -9,16 +9,18 @@ class TunedLensWrapper(th.nn.Module):
 
     def __init__(self, model: PreTrainedModel, lens: TunedLens):
         super().__init__()
+
+        model.requires_grad_(False)
         self.model = model
         self.lens = lens
 
     def forward(
         self, input_ids: th.Tensor, **kwargs
     ) -> tuple[th.Tensor, ResidualStream]:
-        """Forward pass through the model and tuned lens."""
+        """Forward pass through the model and extract hiddens."""
         use_sublayers = len(self.lens.attn_adapters) > 0
 
         with record_residual_stream(self.model, sublayers=use_sublayers) as stream:
             output = self.model(input_ids, **kwargs)
 
-        return output, self.lens.apply(stream)
+        return output, stream

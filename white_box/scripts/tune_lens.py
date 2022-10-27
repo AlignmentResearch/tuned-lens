@@ -1,24 +1,53 @@
 """Train a set of tuned lenses for a language model."""
 
-from accelerate.utils import send_to_device
 from argparse import ArgumentParser
 from collections import defaultdict
 from datasets import Dataset, DatasetDict, load_dataset
 from itertools import islice
 from pathlib import Path
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+from white_box.utils import send_to_device
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
-from white_box import ResidualStats, record_residual_stream, TunedLens
+from white_box import ResidualStats, TunedLens, TunedLensWrapper
 from white_box.data import chunk_and_tokenize, silence_datasets_messages
+import deepspeed
 import torch as th
+import torch.distributed as dist
 
 
+def _get_momentum_norms(adam: th.optim.Adam) -> list:
+    """Get the momentum norms for each tuned lens using hacky heuristics.
+
+    Unfortunately this is needed because when Deepspeed wraps the optimizer,
+    it apparently copies the parameter *objects* used to key the state dict,
+    so we can't directly key into the state dict to get the momentum norms.
+    """
+
+    # Thank God for order preservation in Python dicts
+    states = list(adam.state.values())
+    step = states[0].get("step", 1)
+    beta1, _ = adam.param_groups[0]["betas"]
+
+    assert len(states) % 2 == 0
+    return [
+        th.cat(
+            [
+                weight.get("exp_avg", th.tensor([0.0])).flatten(),
+                bias.get("exp_avg", th.tensor([0.0])),
+            ]
+        )
+        .norm()
+        .div(1 - beta1**step)
+        for weight, bias in zip(*[iter(states)] * 2)  # type: ignore
+    ]
+
+
+@th.autocast("cuda")
 def main():
     parser = ArgumentParser(
         description="Train a set of tuned lenses for a language model."
@@ -27,7 +56,10 @@ def main():
         "model_name", type=str, help="Name of model to use in the Huggingface Hub."
     )
     parser.add_argument(
-        "--batch-size", type=int, default=6, help="Per-GPU batch size for training."
+        "--per-gpu-batch-size",
+        type=int,
+        default=12,
+        help="Number of samples to try to fit on a GPU at once.",
     )
     parser.add_argument(
         "--dataset",
@@ -37,30 +69,24 @@ def main():
         "suitable to be passed to the HuggingFace load_dataset function.",
     )
     parser.add_argument(
-        "--device", type=str, default="cuda:0", help="Device to use for training."
-    )
-    parser.add_argument(
-        "--fp16",
-        type=str,
-        choices=("full", "mixed", "none"),
-        default="none",
-        help="Whether to use mixed precision training.",
-    )
-    parser.add_argument(
         "--grad-acc-steps",
         type=int,
         default=1,
         help="Number of gradient accumulation steps.",
     )
     parser.add_argument(
+        "--local_rank", type=int, default=0, help="Local rank for deepspeed training."
+    )
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate.")
+    parser.add_argument(
         "--loss",
         type=str,
         default="kl",
-        choices=("ce", "cosine", "kl", "mse"),
+        choices=("ce", "kl"),
         help="Loss function to use for training.",
     )
     parser.add_argument(
-        "--num-steps", type=int, default=1000, help="Number of training steps."
+        "--num-steps", type=int, default=100, help="Number of training steps."
     )
     parser.add_argument(
         "--orthogonal",
@@ -82,24 +108,21 @@ def main():
     )
     parser.add_argument("--resume", type=Path, help="File to resume training from.")
     parser.add_argument(
-        "--save-every", type=int, default=50, help="Save the lenses every N steps."
-    )
-    parser.add_argument(
         "--sublayers",
         action="store_true",
         help="Train tuned lenses for attention blocks.",
-    )
-    parser.add_argument(
-        "--shard-model", action="store_true", help="Shard the model across GPUs."
-    )
-    parser.add_argument(
-        "--slow-tokenizer", action="store_true", help="Use a Python tokenizer."
     )
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for training."
     )
     parser.add_argument(
         "--split", type=str, default="validation", help="Split of the dataset to use."
+    )
+    parser.add_argument(
+        "--tokens-per-step",
+        type=int,
+        default=2**21,
+        help="Number of tokens per step.",
     )
     parser.add_argument(
         "--text-column", type=str, default="text", help="Column of the dataset to use."
@@ -113,19 +136,14 @@ def main():
     )
     parser.add_argument("--wandb", type=str, help="Name of run in Weights & Biases.")
     args = parser.parse_args()
+    if args.local_rank == 0:
+        print("Loading model...")
 
-    print("Loading model...")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
-        device_map="auto" if args.shard_model else None,
         torch_dtype="auto",
-    )
-    if not args.shard_model:
-        model = model.to(args.device)
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name, use_fast=not args.slow_tokenizer
-    )
+    ).to(f"cuda:{args.local_rank}")
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
     # Just for type checking
     assert isinstance(model, PreTrainedModel)
@@ -134,6 +152,7 @@ def main():
 
     if args.dataset.endswith(".jsonl"):
         dataset = Dataset.from_json(args.dataset)
+        assert isinstance(dataset, Dataset)
     else:
         dataset = load_dataset(args.dataset, split=args.split)
         if not isinstance(dataset, (Dataset, DatasetDict)):
@@ -142,12 +161,24 @@ def main():
     processed = chunk_and_tokenize(dataset, tokenizer, text_key=args.text_column)
     processed = processed.shuffle(seed=args.seed)
 
+    # chunk_and_tokenize ensures the samples are all the same length
+    tokens_per_sample = len(processed[0]["input_ids"])
+    samples_per_step, rem = divmod(args.tokens_per_step, tokens_per_sample)
+    if rem:
+        raise ValueError(
+            f"Number of tokens per step ({args.tokens_per_step:_}) must be divisible "
+            f"by the number of tokens per sample ({tokens_per_sample})."
+        )
+
+    if args.local_rank == 0:
+        print(f"Using {args.tokens_per_step:_} tokens per training step.")
+
     lens = TunedLens(
         model,
         orthogonal=args.orthogonal,
         rank=args.rank,
         sublayers=args.sublayers,
-    ).float()
+    )
 
     if args.resume:
         # Get the most recently saved lens from the directory
@@ -159,7 +190,7 @@ def main():
         print(f"Resuming training from {ckpt}")
         lens.load_state_dict(th.load(ckpt))
 
-    if args.wandb:
+    if args.wandb and args.local_rank == 0:
         import wandb
 
         wandb.init(
@@ -168,128 +199,125 @@ def main():
         wandb.watch(lens)
 
     # Running mean & variance of the residuals
-    cumsum_residual_stats = ResidualStats(track_cov=False)
     residual_stats = ResidualStats()
     stream_stats = ResidualStats()
 
-    num_batches = args.grad_acc_steps * args.num_steps
-    pbar = tqdm(desc="Tuning", total=num_batches)
+    # Skip the unembedding matrix and final layer norm
+    params = [p for p in lens.parameters() if p.requires_grad]
 
-    dl = DataLoader(processed, batch_size=args.batch_size)  # type: ignore[arg-type]
-    opt = th.optim.AdamW(lens.parameters(), amsgrad=True)
-    schedule = th.optim.lr_scheduler.CosineAnnealingLR(opt, args.num_steps)
+    # AMSGrad actually helps for later layers with identity initialization, because
+    # identity is already close to the optimum. When you start close to the optimum,
+    # the gradients are all small, so the EMA of the squared gradients will be small,
+    # which causes Adam to push up the step size a lot, causing divergence. AMSGrad
+    # partially fixes this by using the max of the EMA of the squared gradients. We
+    # further mitigate this by using a larger value of eps.
+    opt = th.optim.Adam(params, amsgrad=True, lr=args.lr)
 
-    use_autocast = model.dtype == th.float16
-    if use_autocast:
-        pbar.write("Using fp16 inference for the model.")
+    model, opt, dl, _ = deepspeed.initialize(
+        args=args,
+        config=dict(
+            fp16=dict(
+                auto_cast=True,
+                enabled=True,
+            ),
+            gradient_clipping=1.0,
+            train_batch_size=samples_per_step,
+            train_micro_batch_size_per_gpu=args.per_gpu_batch_size,
+        ),
+        model_parameters=params,  # type: ignore[arg-type]
+        model=TunedLensWrapper(model, lens),
+        lr_scheduler=CosineAnnealingLR(opt, args.num_steps),
+        optimizer=opt,
+        mpu=None,
+        training_data=processed,
+    )
 
     first_device = next(model.parameters()).device
+    grad_acc_steps = model.gradient_accumulation_steps()
+    metrics = defaultdict(list)
+    total_batches = args.num_steps * grad_acc_steps
 
-    for step in range(args.num_steps):
-        metrics = defaultdict(list)
+    for step, batch in enumerate(islice(dl, total_batches), start=1):
+        assert isinstance(batch, dict)
+        batch = send_to_device(batch, first_device)
+        output, stream = model(**batch)
+        final_logits = output.logits
 
-        for batch in islice(dl, args.grad_acc_steps):
-            batch = send_to_device(batch, first_device)
-            with (
-                th.autocast("cuda", enabled=use_autocast),
-                record_residual_stream(model, sublayers=args.sublayers) as stream,
-                th.no_grad(),
-            ):
-                final_logits = model(**batch).logits.float()
+        stream = stream.map(lambda t: t.float())
+        if args.residual_stats:
+            sample_residuals = stream.residuals()
+            residual_stats.update(sample_residuals)
+            stream_stats.update(stream)
 
-            stream = stream.map(lambda t: t.float())
-            if args.residual_stats:
-                sample_residuals = stream.residuals()
-                cumsum_residual_stats.update(sample_residuals.cumsum(reverse=True))
-                residual_stats.update(sample_residuals)
-                stream_stats.update(stream)
+        shift = args.token_shift
+        if args.loss == "ce":
+            labels = batch["input_ids"]
 
-            shift = args.token_shift
-            use_logits = args.loss not in ("cosine", "mse")
-            if not use_logits:
-                labels = stream.layers[-1]
+            # Predict the *next* token by default w/ cross entropy
+            if shift is None:
+                shift = 1
+        elif args.loss == "kl":
+            labels = final_logits.log_softmax(dim=-1)
 
-                # Predict the final hidden state for the *current* token by default
-                if shift is None:
-                    shift = 0
-            else:
-                if args.loss == "ce":
-                    labels = batch["input_ids"]
+            # Match the *current* token distribution by default
+            if shift is None:
+                shift = 0
+        else:
+            raise NotImplementedError(f"Unknown loss {args.loss}")
 
-                    # Predict the *next* token by default w/ cross entropy
-                    if shift is None:
-                        shift = 1
-                elif args.loss == "kl":
-                    labels = final_logits.log_softmax(dim=-1)
+        if shift > 0:
+            labels = labels[:, shift:]
+        elif shift < 0:
+            labels = labels[:, :shift]
 
-                    # Match the *current* token distribution by default
-                    if shift is None:
-                        shift = 0
-                else:
-                    raise NotImplementedError(f"Unknown loss {args.loss}")
-
+        # We do this sequentially to save VRAM
+        for (name, preds), mom_norm in zip(
+            lens.map(stream.items()), _get_momentum_norms(opt)
+        ):
+            preds = preds.to(labels.device)
             if shift > 0:
-                labels = labels[:, shift:]
+                preds = preds[:, :-shift]
             elif shift < 0:
-                labels = labels[:, :shift]
+                preds = preds[:, -shift:]
 
-            # We do this sequentially to save VRAM
-            for mod, (name, preds) in zip(
-                lens, lens.map(stream.items(), logits=use_logits)
-            ):
-                preds = preds.to(labels.device)
-                if shift > 0:
-                    preds = preds[:, :-shift]
-                elif shift < 0:
-                    preds = preds[:, -shift:]
-
-                if args.loss == "ce":
-                    loss = th.nn.functional.cross_entropy(
-                        preds.flatten(0, -2), labels.flatten()
-                    )
-                elif args.loss == "cosine":
-                    loss = 1 - th.cosine_similarity(preds, labels, dim=-1).mean()
-                elif args.loss == "kl":
-                    loss = th.sum(
-                        labels.exp() * (labels - preds.log_softmax(-1)), dim=-1
-                    ).mean()
-                elif args.loss == "mse":
-                    loss = th.nn.functional.mse_loss(preds, labels)
-                else:
-                    raise NotImplementedError
-
-                loss.div(args.grad_acc_steps).backward()
-                metrics[f"grad_norm/{name}"].append(
-                    th.nn.utils.clip_grad_norm_(mod.parameters(), 1.0)
+            if args.loss == "ce":
+                loss = th.nn.functional.cross_entropy(
+                    preds.flatten(0, -2), labels.flatten()
                 )
-                metrics[f"loss/{name}"].append(loss.detach())
+            elif args.loss == "kl":
+                loss = th.sum(
+                    labels.exp() * (labels - preds.log_softmax(-1)), dim=-1
+                ).mean()
+            else:
+                raise NotImplementedError
 
-            # End of batch
-            pbar.update()
+            model.backward(loss)
+            # Use Adam momentum buffers to get a lower variance estimate of the
+            # true gradient (and therefore grad norm) at this step
+            metrics[f"grad_norm/{name}"].append(mom_norm)
+            metrics[f"loss/{name}"].append(loss.detach())
 
-        if args.wandb:
+        # Deepspeed keeps track of grad accumulation
+        model.step()
+        lens.normalize_()
+
+        if args.local_rank == 0 and args.wandb and step % grad_acc_steps == 0:
             import wandb
 
             wandb.log({k: th.stack(v).mean().item() for k, v in metrics.items()})
+            metrics.clear()
 
-        opt.step()
-        opt.zero_grad()
-        schedule.step()
+    if args.local_rank == 0:
+        print(f"Saving lens to {args.output}")
+        lens.save(args.output)
 
-        if step % args.save_every == 0:
-            lens.save(args.output, f"latest.pt")
-
-            if args.residual_stats:
-                th.save(cumsum_residual_stats, args.output / "cumsum_residual_stats.pt")
-                th.save(stream_stats, args.output / "stream_stats.pt")
-                th.save(residual_stats, args.output / "residual_stats.pt")
-
-    print(f"Saving lens to {args.output}")
-    lens.save(args.output)
     if args.residual_stats:
-        th.save(cumsum_residual_stats, args.output / "cumsum_residual_stats.pt")
-        th.save(stream_stats, args.output / "stream_stats.pt")
-        th.save(residual_stats, args.output / "residual_stats.pt")
+        stream_stats.all_reduce_()
+        residual_stats.all_reduce_()
+
+        if args.local_rank == 0:
+            th.save(stream_stats, args.output / "stream_stats.pt")
+            th.save(residual_stats, args.output / "residual_stats.pt")
 
 
 if __name__ == "__main__":

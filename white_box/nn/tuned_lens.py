@@ -45,16 +45,9 @@ class TunedLens(th.nn.Module):
             vocab_size = model.config.vocab_size
             assert isinstance(d_model, int) and isinstance(vocab_size, int)
 
-            # Loading the state dict removes weird Accelerate hooks
-            raw_U = model.get_output_embeddings()
-            U = th.nn.Linear(d_model, vocab_size, bias=raw_U.bias is not None)
-            U.load_state_dict(raw_U.state_dict())
-            self.unembedding = U.float()
-
+            self.unembedding = deepcopy(model.get_output_embeddings())
             if ln := get_final_layer_norm(model):
-                self.layer_norm = th.nn.LayerNorm(d_model)
-                self.layer_norm.load_state_dict(ln.state_dict())
-                self.layer_norm.float()
+                self.layer_norm = deepcopy(ln)
             else:
                 self.layer_norm = th.nn.Identity()
 
@@ -93,8 +86,6 @@ class TunedLens(th.nn.Module):
 
         self._layer_norm = MultiDeviceWrapper(self.layer_norm)
         self._unembedding = MultiDeviceWrapper(self.unembedding)
-        if model:
-            self.dispatch_for_model(model)
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
         if isinstance(self.input_adapter, th.nn.Module):
@@ -130,29 +121,24 @@ class TunedLens(th.nn.Module):
         with open(path / "config.json", "w") as f:
             json.dump(self.config, f)
 
-    def dispatch_for_model(self, model: PreTrainedModel) -> None:
-        first_device = next(model.parameters()).device
-        if not hasattr(model, "hf_device_map"):
-            self.to(first_device)
-            return
+    def normalize_(self):
+        """
+        Canonicalize the transforms by centering their weights and biases, then
+        normalizing `weight + th.eye(n)` to have Frobenius norm `sqrt(n)`.
+        """
+        for linear in self:
+            assert isinstance(linear, th.nn.Linear)
 
-        layer_prefix, _ = get_transformer_layers(model)
-        if self.input_adapter:
-            self.input_adapter.to(first_device)
+            A, b = linear.weight.data, linear.bias.data
+            A -= A.mean(dim=0, keepdim=True)
+            b -= b.mean()
 
-        for name, device_idx in model.hf_device_map.items():
-            if not name.startswith(layer_prefix):
-                continue
+            n, n = A.shape
+            I = th.eye(n, device=A.device)
+            norm = th.norm(A + I) / n**0.5
+            A.copy_((A + I) / norm - I)
 
-            *_, suffix = name.split(".")
-            if suffix.isdigit():
-                layer_idx = int(suffix)
-
-                self.layer_adapters[layer_idx].to(device_idx)
-                if self.attn_adapters:
-                    self.attn_adapters[layer_idx].to(device_idx)
-
-    def apply(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
+    def transform(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
         if len(stream) != len(self):
             raise ValueError(
                 f"Expected {len(self)} layers, but got {len(stream)} layers."

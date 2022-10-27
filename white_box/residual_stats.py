@@ -18,6 +18,20 @@ class ResidualStats:
     pool: bool = True
     track_cov: bool = True
 
+    def all_reduce_(self):
+        """All-reduce the stats across all processes."""
+        if self.mean is not None:
+            self.mean.all_reduce_()
+
+        if self.M2 is not None:
+            self.M2.all_reduce_()
+
+        if self.autocorr is not None:
+            self.autocorr.all_reduce_()
+
+        if self.mean_norm is not None:
+            self.mean_norm.all_reduce_()
+
     @th.no_grad()
     def update(self, stream: ResidualStream):
         """Update the online stats in-place with a new stream."""
@@ -56,9 +70,7 @@ class ResidualStats:
         self.mean = self.mean.zip_map(lambda acc, d: acc + d.sum(0) / self.n, delta)
         delta2 = stream.zip_map(lambda x, mu: x - mu, self.mean)
 
-        self.mean_norm = self.mean_norm.zip_map(
-            lambda mu, x: mu + th.sum(x.norm(-1) - mu) / self.n, stream
-        )
+        self.mean_norm = self.mean_norm.mean_update(stream.map(th.norm), self.n)
         if self.track_cov:
             self.M2 = self.M2.zip_map(lambda acc, d, d2: acc + d.T @ d2, delta, delta2)
         else:

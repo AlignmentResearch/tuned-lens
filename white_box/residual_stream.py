@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from itertools import starmap, zip_longest
 
 from .model_surgery import get_transformer_layers
+from torch.distributed import all_reduce, get_world_size
 from typing import Callable, Generator, Optional, overload, Type, Union
 import torch as th
 
@@ -14,6 +15,12 @@ class ResidualStream:
     embeddings: Optional[th.Tensor] = None
     attentions: list[th.Tensor] = field(default_factory=list)
     layers: list[th.Tensor] = field(default_factory=list)
+
+    def all_reduce_(self):
+        """All-reduce all states."""
+        for state in self:
+            all_reduce(state)
+            state /= get_world_size()
 
     def clear(self) -> None:
         """Clear all residual states."""

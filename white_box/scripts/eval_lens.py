@@ -1,6 +1,6 @@
 """Train a set of tuned lenses for a language model."""
 
-from accelerate.utils import send_to_device
+from white_box.utils import send_to_device
 from argparse import ArgumentParser
 from collections import defaultdict
 from datasets import Dataset, DatasetDict, load_dataset

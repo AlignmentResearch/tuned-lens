@@ -86,7 +86,5 @@ def get_columns_all_equal(dataset: Union[Dataset, DatasetDict]) -> list[str]:
 def silence_datasets_messages():
     """Silence the very annoying wall of 'Loading cached processed dataset' messages."""
     handler = logging.StreamHandler()
-    handler.addFilter(
-        lambda log_record: not log_record.getMessage().startswith("Loading cached")
-    )
+    handler.addFilter(lambda log_record: "cached" not in log_record.getMessage())
     logging.getLogger("datasets").addHandler(handler)

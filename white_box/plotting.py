@@ -46,7 +46,7 @@ def plot_logit_lens(
             acc += mean
 
     if tuned_lens is not None:
-        hidden_lps = tuned_lens.apply(stream).map(lambda x: x.log_softmax(dim=-1))
+        hidden_lps = tuned_lens.transform(stream).map(lambda x: x.log_softmax(dim=-1))
     else:
         E = model.get_output_embeddings()
         ln_f = get_final_layer_norm(model.base_model)
