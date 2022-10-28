@@ -17,7 +17,6 @@ from white_box import ResidualStats, TunedLens, TunedLensWrapper
 from white_box.data import chunk_and_tokenize, silence_datasets_messages
 import deepspeed
 import torch as th
-import torch.distributed as dist
 
 
 def _get_momentum_norms(adam: th.optim.Adam) -> list:
@@ -125,6 +124,12 @@ def main():
         help="Number of tokens per step.",
     )
     parser.add_argument(
+        "--tokenizer",
+        type=str,
+        help="Name of pretrained tokenizer to use from the Huggingface Hub. If None, "
+        'will use AutoTokenizer.from_pretrained("<model name>").',
+    )
+    parser.add_argument(
         "--text-column", type=str, default="text", help="Column of the dataset to use."
     )
     parser.add_argument(
@@ -143,7 +148,7 @@ def main():
         args.model_name,
         torch_dtype="auto",
     ).to(f"cuda:{args.local_rank}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer or args.model_name)
 
     # Just for type checking
     assert isinstance(model, PreTrainedModel)
