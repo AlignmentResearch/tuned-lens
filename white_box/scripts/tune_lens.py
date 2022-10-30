@@ -5,8 +5,7 @@ from collections import defaultdict
 from datasets import Dataset, DatasetDict, load_dataset
 from itertools import islice
 from pathlib import Path
-from white_box.utils import send_to_device
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import LambdaLR
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -15,6 +14,7 @@ from transformers import (
 )
 from white_box import ResidualStats, TunedLens, TunedLensWrapper
 from white_box.data import chunk_and_tokenize, silence_datasets_messages
+from white_box.utils import send_to_device
 import deepspeed
 import torch as th
 
@@ -76,7 +76,7 @@ def main():
     parser.add_argument(
         "--local_rank", type=int, default=0, help="Local rank for deepspeed training."
     )
-    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate.")
+    parser.add_argument("--lr", type=float, default=0.002, help="Learning rate.")
     parser.add_argument(
         "--loss",
         type=str,
@@ -107,6 +107,12 @@ def main():
     )
     parser.add_argument("--resume", type=Path, help="File to resume training from.")
     parser.add_argument(
+        "--snapshot-every",
+        type=int,
+        default=10,
+        help="Save a copy of the lenses in CPU RAM every N steps.",
+    )
+    parser.add_argument(
         "--sublayers",
         action="store_true",
         help="Train tuned lenses for attention blocks.",
@@ -118,9 +124,12 @@ def main():
         "--split", type=str, default="validation", help="Split of the dataset to use."
     )
     parser.add_argument(
+        "--text-column", type=str, default="text", help="Column of the dataset to use."
+    )
+    parser.add_argument(
         "--tokens-per-step",
         type=int,
-        default=2**21,
+        default=2**19,
         help="Number of tokens per step.",
     )
     parser.add_argument(
@@ -130,14 +139,16 @@ def main():
         'will use AutoTokenizer.from_pretrained("<model name>").',
     )
     parser.add_argument(
-        "--text-column", type=str, default="text", help="Column of the dataset to use."
-    )
-    parser.add_argument(
         "--token-shift",
         type=int,
         default=None,
         help="How to shift the labels wrt the input tokens (1 = next token, "
         "0 = current token, -1 = previous token, etc.)",
+    )
+    parser.add_argument(
+        "--train-final-lens",
+        action="store_true",
+        help="Train a lens for the final layer even though it's superfluous.",
     )
     parser.add_argument("--wandb", type=str, help="Name of run in Weights & Biases.")
     args = parser.parse_args()
@@ -180,20 +191,11 @@ def main():
 
     lens = TunedLens(
         model,
+        include_final=args.train_final_lens,
         orthogonal=args.orthogonal,
         rank=args.rank,
         sublayers=args.sublayers,
     )
-
-    if args.resume:
-        # Get the most recently saved lens from the directory
-        if args.resume.is_dir():
-            ckpt = max(args.resume.glob("*.pt"), key=lambda p: p.stat().st_mtime)
-        else:
-            ckpt = args.resume
-
-        print(f"Resuming training from {ckpt}")
-        lens.load_state_dict(th.load(ckpt))
 
     if args.wandb and args.local_rank == 0:
         import wandb
@@ -209,14 +211,24 @@ def main():
 
     # Skip the unembedding matrix and final layer norm
     params = [p for p in lens.parameters() if p.requires_grad]
+    opt = th.optim.Adam(params, lr=args.lr)
 
-    # AMSGrad actually helps for later layers with identity initialization, because
-    # identity is already close to the optimum. When you start close to the optimum,
-    # the gradients are all small, so the EMA of the squared gradients will be small,
-    # which causes Adam to push up the step size a lot, causing divergence. AMSGrad
-    # partially fixes this by using the max of the EMA of the squared gradients. We
-    # further mitigate this by using a larger value of eps.
-    opt = th.optim.Adam(params, amsgrad=True, lr=args.lr)
+    if args.resume:
+        # Get the most recently saved lens from the directory
+        if args.resume.is_dir():
+            ckpt = max(args.resume.glob("*.pt"), key=lambda p: p.stat().st_mtime)
+        else:
+            ckpt = args.resume
+
+        print(f"Loading checkpoint from {ckpt}")
+        opt_path = ckpt / "optimizer.pt"
+        lens.load_state_dict(th.load(ckpt))
+
+        if opt_path.exists():
+            print(f"Loading optimizer state from {opt_path}")
+            opt.load_state_dict(th.load(opt_path))
+        else:
+            print("No optimizer state found. Starting Adam from scratch.")
 
     model, opt, dl, _ = deepspeed.initialize(
         args=args,
@@ -224,6 +236,9 @@ def main():
             fp16=dict(
                 auto_cast=True,
                 enabled=True,
+                # Don't waste the first few training steps reducing the scale
+                # down from 2 ** 16
+                initial_scale_power=10,
             ),
             gradient_clipping=1.0,
             train_batch_size=samples_per_step,
@@ -231,7 +246,7 @@ def main():
         ),
         model_parameters=params,  # type: ignore[arg-type]
         model=TunedLensWrapper(model, lens),
-        lr_scheduler=CosineAnnealingLR(opt, args.num_steps),
+        lr_scheduler=LambdaLR(opt, lambda t: 1 - t / args.num_steps),
         optimizer=opt,
         mpu=None,
         training_data=processed,
@@ -297,6 +312,7 @@ def main():
                 raise NotImplementedError
 
             model.backward(loss)
+
             # Use Adam momentum buffers to get a lower variance estimate of the
             # true gradient (and therefore grad norm) at this step
             metrics[f"grad_norm/{name}"].append(mom_norm)
@@ -315,6 +331,7 @@ def main():
     if args.local_rank == 0:
         print(f"Saving lens to {args.output}")
         lens.save(args.output)
+        th.save(opt.state_dict(), args.output / "optimizer.pt")
 
     if args.residual_stats:
         stream_stats.all_reduce_()

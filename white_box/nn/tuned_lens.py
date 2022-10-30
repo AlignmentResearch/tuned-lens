@@ -21,6 +21,7 @@ class TunedLens(th.nn.Module):
         bias: bool = True,
         identity_init: bool = True,
         include_input: bool = True,
+        include_final: bool = False,
         orthogonal: bool = False,
         rank: Optional[int] = None,
         sublayers: bool = True,
@@ -77,13 +78,15 @@ class TunedLens(th.nn.Module):
             lens = th.nn.utils.parametrizations.orthogonal(lens)
 
         self.add_module("input_adapter", lens if include_input else None)
-        self.layer_adapters = th.nn.ModuleList(
-            [deepcopy(lens) for _ in range(num_layers)]
-        )
         self.attn_adapters = th.nn.ModuleList(
             [deepcopy(lens) for _ in range(num_layers)] if sublayers else []
         )
+        if not include_final:
+            num_layers -= 1
 
+        self.layer_adapters = th.nn.ModuleList(
+            [deepcopy(lens) for _ in range(num_layers)]
+        )
         self._layer_norm = MultiDeviceWrapper(self.layer_norm)
         self._unembedding = MultiDeviceWrapper(self.unembedding)
 
@@ -105,6 +108,7 @@ class TunedLens(th.nn.Module):
         # Load config
         with open(path / "config.json", "r") as f:
             config = json.load(f)
+            config.setdefault("include_final", True)  # Backwards compatibility
 
         # Load parameters
         state = th.load(path / ckpt)
