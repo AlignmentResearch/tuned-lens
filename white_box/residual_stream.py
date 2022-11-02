@@ -16,6 +16,15 @@ class ResidualStream:
     attentions: list[th.Tensor] = field(default_factory=list)
     layers: list[th.Tensor] = field(default_factory=list)
 
+    @classmethod
+    def stack(cls, streams: list["ResidualStream"]) -> "ResidualStream":
+        """Stack a list of residual streams into a single stream."""
+        if len(streams) < 2:
+            raise ValueError("Expected at least two streams to stack")
+
+        first, *rest = streams
+        return first.zip_map(lambda *tensors: th.stack(tensors), *rest)
+
     def all_reduce_(self):
         """All-reduce all states."""
         for state in self:
@@ -121,12 +130,6 @@ class ResidualStream:
                 ticks=range(0, len(self), tick_spacing),
                 rotation=60,
             )
-
-    def cumsum(self, reverse: bool = False) -> "ResidualStream":
-        """Compute cumulative sum of states, returning a new `ResidualStream`."""
-        acc = th.zeros_like(self.layers[0])
-        result = self.map(lambda t: acc.add_(t).clone(), reverse=reverse)
-        return self.new_from_list(list(reversed(result))) if reverse else result
 
     def mean_update(self, other: "ResidualStream", i: int) -> "ResidualStream":
         """Interpret `self` as a running mean and update it with `other`."""

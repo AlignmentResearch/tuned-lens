@@ -1,114 +1,89 @@
-from dataclasses import dataclass
 from .residual_stream import ResidualStream
 from typing import Optional
-import math
 import torch as th
 
 
-@dataclass
 class ResidualStats:
-    """Online mean, variance, and auto-covariance for residual streams."""
+    """Online mean and covariance matrix computation for residual streams.
 
-    mean: Optional[ResidualStream] = None
-    M2: Optional[ResidualStream] = None
-    autocorr: Optional[ResidualStream] = None
-    mean_norm: Optional[ResidualStream] = None
+    Shape and device are lazily inferred from the first stream that is passed to
+    `update()`. The mean and variance are computed using the Welford algorithm.
+    Streams are automatically cast to full precision before updating the stats.
+    """
 
-    n: int = 0
-    pool: bool = True
-    track_cov: bool = True
+    def __init__(self):
+        self._mu: Optional[ResidualStream] = None
+        self._M2: Optional[ResidualStream] = None
+        self._mean_norm: Optional[ResidualStream] = None
+
+        self.n: int = 0
 
     def all_reduce_(self):
         """All-reduce the stats across all processes."""
-        if self.mean is not None:
-            self.mean.all_reduce_()
+        if self._mu is not None:
+            self._mu.all_reduce_()
 
-        if self.M2 is not None:
-            self.M2.all_reduce_()
+        if self._M2 is not None:
+            self._M2.all_reduce_()
 
-        if self.autocorr is not None:
-            self.autocorr.all_reduce_()
-
-        if self.mean_norm is not None:
-            self.mean_norm.all_reduce_()
+        if self._mean_norm is not None:
+            self._mean_norm.all_reduce_()
 
     @th.no_grad()
     def update(self, stream: ResidualStream):
         """Update the online stats in-place with a new stream."""
-        # Compute stats in full precision
-        stream = stream.map(lambda x: x.float())
-        self.n += math.prod(stream.shape[:-1]) if self.pool else stream.shape[0]
+        # Compute stats in full precision. Flatten all but the last dimension.
+        stream = stream.map(lambda x: x.reshape(-1, x.shape[-1]).float())
 
-        # Autocorrelation is E[x_t * x_{t-1}]. It gets computed first because it
-        # needs to know about the sequence order of the tokens
-        sample_autocorr = stream.map(lambda x: th.mean(x[:, :-1] * x[:, 1:], dim=0))
-        if self.pool:  # Pool across the sequence length
-            sample_autocorr = sample_autocorr.map(lambda x: x.mean(dim=0))
+        N, D = stream.shape
+        self.n += N
 
-        if self.autocorr is None:
-            self.autocorr = sample_autocorr
-        else:
-            # Incremental mean update
-            self.autocorr = self.autocorr.zip_map(
-                lambda mu, x: mu + (x - mu) / self.n, sample_autocorr
-            )
-
-        if self.mean is None or self.M2 is None or self.mean_norm is None:
-            mu_shape = (stream.shape[-1],) if self.pool else stream.shape[1:]
-            var_shape = (*mu_shape, mu_shape[-1]) if self.track_cov else mu_shape
-
-            self.mean = stream.map(lambda x: x.new_zeros(mu_shape))
-            self.mean_norm = stream.map(lambda x: x.new_zeros(()))
-            self.M2 = stream.map(lambda x: x.new_zeros(var_shape))
-
-        # Flatten all but the last dimension
-        if self.pool:
-            stream = stream.map(lambda x: x.reshape(-1, x.shape[-1]))  # type: ignore
+        if self._mu is None or self._M2 is None or self._mean_norm is None:
+            self._mu = stream.map(lambda x: x.new_zeros(D))
+            self._M2 = stream.map(lambda x: x.new_zeros(D, D))
+            self._mean_norm = stream.map(lambda x: x.new_zeros(()))
 
         # See https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
-        delta = stream.zip_map(lambda x, mu: x - mu, self.mean)
-        self.mean = self.mean.zip_map(lambda acc, d: acc + d.sum(0) / self.n, delta)
-        delta2 = stream.zip_map(lambda x, mu: x - mu, self.mean)
+        delta = stream.zip_map(lambda x, mu: x - mu, self._mu)
+        self._mu = delta.zip_map(lambda d, mu: mu + d.sum(0) / self.n, self._mu)
+        delta2 = stream.zip_map(lambda x, mu: x - mu, self._mu)
 
-        self.mean_norm = self.mean_norm.mean_update(stream.map(th.norm), self.n)
-        if self.track_cov:
-            self.M2 = self.M2.zip_map(lambda acc, d, d2: acc + d.T @ d2, delta, delta2)
-        else:
-            self.M2 = self.M2.zip_map(
-                lambda acc, d, d2: acc + th.sum(d * d2, dim=0), delta, delta2
-            )
-
-    @property
-    def autocov(self) -> ResidualStream:
-        """Return the autocovariance, the de-meaned version of autocorrelation."""
-        if not self.autocorr or not self.mean:
-            raise ValueError("Autocorrelation is not computed yet")
-        if self.pool:
-            # TODO: Implement the online autocovariance algorithm described
-            # here https://www.npmjs.com/package/online-autocovariance
-            raise NotImplementedError(
-                "Autocovariance is not implemented for pooled streams"
-            )
-
-        return self.autocorr.zip_map(lambda ac, mu: ac - mu[:-1] * mu[1:], self.mean)
+        self._M2 = self._M2.zip_map(lambda acc, d, d2: acc + d.mT @ d2, delta, delta2)
+        self._mean_norm = stream.zip_map(
+            lambda x, mu: mu + th.sum(x.norm(dim=-1) - mu) / self.n, self._mean_norm
+        )
 
     @property
     def covariance(self) -> ResidualStream:
         """Return the covariance matrix."""
-        if not self.track_cov:
-            raise ValueError("Set track_cov=True to compute covariance")
-        if not self.M2 or self.n < 2:
+        if not self._M2 or self.n < 2:
             raise ValueError("Not enough data")
 
-        return self.M2.map(lambda x: x / (self.n - 1))
+        return self._M2.map(lambda x: x / (self.n - 1))
+
+    @property
+    def mean(self) -> ResidualStream:
+        """Return the mean, throwing an error if there's not enough data."""
+        if not self._mu:
+            raise ValueError("Not enough data")
+
+        return self._mu
+
+    @property
+    def mean_norm(self) -> ResidualStream:
+        """Return the mean L2 norm, throwing an error if there's not enough data."""
+        if not self._mean_norm:
+            raise ValueError("Not enough data")
+
+        return self._mean_norm
 
     @property
     def variance(self) -> ResidualStream:
         """Return the current estimate of the variance."""
-        if not self.M2 or self.n < 2:
+        if not self._M2 or self.n < 2:
             raise ValueError("Not enough data")
 
-        if self.track_cov:
-            return self.M2.map(lambda x: x.diag() / (self.n - 1))
-        else:
-            return self.M2.map(lambda x: x / (self.n - 1))
+        return self._M2.map(lambda x: th.linalg.diagonal(x) / (self.n - 1))
+
+    def __repr__(self) -> str:
+        return f"ResidualStats(n={self.n})"

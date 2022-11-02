@@ -5,45 +5,19 @@ from collections import defaultdict
 from datasets import Dataset, DatasetDict, load_dataset
 from itertools import islice
 from pathlib import Path
-from torch.optim.lr_scheduler import LambdaLR
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    get_linear_schedule_with_warmup,
 )
-from white_box import ResidualStats, TunedLens, TunedLensWrapper
+from transformers.deepspeed import HfDeepSpeedConfig
+from white_box import ResidualStats, ResidualStream, TunedLens, TunedLensWrapper
 from white_box.data import chunk_and_tokenize, silence_datasets_messages
 from white_box.utils import send_to_device
 import deepspeed
 import torch as th
-
-
-def _get_momentum_norms(adam: th.optim.Adam) -> list:
-    """Get the momentum norms for each tuned lens using hacky heuristics.
-
-    Unfortunately this is needed because when Deepspeed wraps the optimizer,
-    it apparently copies the parameter *objects* used to key the state dict,
-    so we can't directly key into the state dict to get the momentum norms.
-    """
-
-    # Thank God for order preservation in Python dicts
-    states = list(adam.state.values())
-    step = states[0].get("step", 1)
-    beta1, _ = adam.param_groups[0]["betas"]
-
-    assert len(states) % 2 == 0
-    return [
-        th.cat(
-            [
-                weight.get("exp_avg", th.tensor([0.0])).flatten(),
-                bias.get("exp_avg", th.tensor([0.0])),
-            ]
-        )
-        .norm()
-        .div(1 - beta1**step)
-        for weight, bias in zip(*[iter(states)] * 2)  # type: ignore
-    ]
 
 
 @th.autocast("cuda")
@@ -107,12 +81,6 @@ def main():
     )
     parser.add_argument("--resume", type=Path, help="File to resume training from.")
     parser.add_argument(
-        "--snapshot-every",
-        type=int,
-        default=10,
-        help="Save a copy of the lenses in CPU RAM every N steps.",
-    )
-    parser.add_argument(
         "--sublayers",
         action="store_true",
         help="Train tuned lenses for attention blocks.",
@@ -150,19 +118,18 @@ def main():
         action="store_true",
         help="Train a lens for the final layer even though it's superfluous.",
     )
+    parser.add_argument(
+        "--zero-stage",
+        type=int,
+        default=0,
+        help="ZeRO stage to use for DeepSpeed training.",
+    )
     parser.add_argument("--wandb", type=str, help="Name of run in Weights & Biases.")
     args = parser.parse_args()
     if args.local_rank == 0:
         print("Loading model...")
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        torch_dtype="auto",
-    ).to(f"cuda:{args.local_rank}")
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer or args.model_name)
-
-    # Just for type checking
-    assert isinstance(model, PreTrainedModel)
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
     silence_datasets_messages()
 
@@ -189,13 +156,34 @@ def main():
     if args.local_rank == 0:
         print(f"Using {args.tokens_per_step:_} tokens per training step.")
 
+    ds_config = dict(
+        fp16=dict(
+            auto_cast=True,
+            enabled=True,
+            # Don't waste the first few training steps reducing the scale
+            # down from 2 ** 16
+            initial_scale_power=10,
+        ),
+        gradient_clipping=1.0,
+        train_batch_size=samples_per_step,
+        train_micro_batch_size_per_gpu=args.per_gpu_batch_size,
+        zero_optimization=dict(stage=args.zero_stage),
+    )
+    hf_config = HfDeepSpeedConfig(ds_config)
+
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name,
+        torch_dtype="auto",
+    )
+    assert isinstance(model, PreTrainedModel)
+
     lens = TunedLens(
         model,
         include_final=args.train_final_lens,
         orthogonal=args.orthogonal,
         rank=args.rank,
         sublayers=args.sublayers,
-    )
+    ).half()
 
     if args.wandb and args.local_rank == 0:
         import wandb
@@ -232,21 +220,12 @@ def main():
 
     model, opt, dl, _ = deepspeed.initialize(
         args=args,
-        config=dict(
-            fp16=dict(
-                auto_cast=True,
-                enabled=True,
-                # Don't waste the first few training steps reducing the scale
-                # down from 2 ** 16
-                initial_scale_power=10,
-            ),
-            gradient_clipping=1.0,
-            train_batch_size=samples_per_step,
-            train_micro_batch_size_per_gpu=args.per_gpu_batch_size,
-        ),
+        config=ds_config,
         model_parameters=params,  # type: ignore[arg-type]
         model=TunedLensWrapper(model, lens),
-        lr_scheduler=LambdaLR(opt, lambda t: 1 - t / args.num_steps),
+        # Use a short warmup to avoid taking a very bad first step
+        # due to noisy second moments
+        lr_scheduler=get_linear_schedule_with_warmup(opt, 10, args.num_steps),
         optimizer=opt,
         mpu=None,
         training_data=processed,
@@ -260,8 +239,11 @@ def main():
     for step, batch in enumerate(islice(dl, total_batches), start=1):
         assert isinstance(batch, dict)
         batch = send_to_device(batch, first_device)
-        output, stream = model(**batch)
+        output = model(**batch)
         final_logits = output.logits
+        stream = ResidualStream(
+            embeddings=output.hidden_states[0], layers=output.hidden_states[1:-1]
+        )
 
         stream = stream.map(lambda t: t.float())
         if args.residual_stats:
@@ -291,9 +273,7 @@ def main():
             labels = labels[:, :shift]
 
         # We do this sequentially to save VRAM
-        for (name, preds), mom_norm in zip(
-            lens.map(stream.items()), _get_momentum_norms(opt)
-        ):
+        for (name, preds) in lens.map(stream.items()):
             preds = preds.to(labels.device)
             if shift > 0:
                 preds = preds[:, :-shift]
@@ -312,15 +292,12 @@ def main():
                 raise NotImplementedError
 
             model.backward(loss)
-
-            # Use Adam momentum buffers to get a lower variance estimate of the
-            # true gradient (and therefore grad norm) at this step
-            metrics[f"grad_norm/{name}"].append(mom_norm)
             metrics[f"loss/{name}"].append(loss.detach())
 
         # Deepspeed keeps track of grad accumulation
         model.step()
-        lens.normalize_()
+        if args.zero_stage < 3:
+            lens.normalize_()
 
         if args.local_rank == 0 and args.wandb and step % grad_acc_steps == 0:
             import wandb

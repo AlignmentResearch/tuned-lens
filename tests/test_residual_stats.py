@@ -1,30 +1,43 @@
 from white_box import ResidualStats, ResidualStream
-import pytest
 import torch as th
 
 
-@pytest.mark.parametrize("pool", [True, False])
-def test_correctness(pool: bool):
-    """Test that the stats are correct."""
-    B = 2
-    D = 768
-    L = 12
-    S = 2048
+def test_correctness():
+    """Test that the mean and covariance are correct."""
 
-    stats = ResidualStats(pool=pool)
-    stream = ResidualStream(
-        embeddings=th.randn(B, S, D),
-        attentions=[th.randn(B, S, D)] * L,
-        layers=[th.randn(B, S, D)] * L,
-    )
-    stats.update(stream)
-    assert stats.mean and stats.M2 and stats.autocorr
+    th.manual_seed(42)
+    N = 100  # Number of batches
+    B = 2  # Batch size
+    D = 256  # Hidden dimension
+    L = 3  # Number of layers
+    S = 128  # Sequence length
 
-    for h, mu, var, autocorr in zip(stream, stats.mean, stats.variance, stats.autocorr):
-        autocorr_tgt = th.mean(h[:, 1:] * h[:, :-1], dim=(0, 1) if pool else 0)
-        th.testing.assert_allclose(autocorr_tgt, autocorr)
-        if pool:
-            h = h.reshape(-1, D)
+    # Generate correlated random data from a multivariate Gaussian
+    A = th.randn(D, D) / D**0.5
+    master_cov = A @ A.T  # Ensure positive definite
+    dist = th.distributions.MultivariateNormal(th.randn(D), master_cov)
+    batch_dims = th.Size([B, S])
 
-        th.testing.assert_allclose(h.mean(0), mu)
-        th.testing.assert_allclose(h.var(0), var)
+    stats = ResidualStats()
+    streams = []
+    for _ in range(N):
+        stream = ResidualStream(
+            embeddings=dist.sample(batch_dims),
+            attentions=[dist.sample(batch_dims)] * L,
+            layers=[dist.sample(batch_dims)] * L,
+        )
+        streams.append(stream)
+        stats.update(stream)
+
+    # Stack all the streams together so we can compute the non-streaming stats
+    master = ResidualStream.stack(streams).map(lambda h: h.view(N * B * S, D))
+
+    for h, mu, cov, norm in zip(master, stats.mean, stats.covariance, stats.mean_norm):
+        norm_true = h.norm(dim=-1).mean()
+
+        th.testing.assert_close(mu, h.mean(0))
+        th.testing.assert_close(cov, h.T.cov(), atol=0.005, rtol=1e-5)
+        th.testing.assert_close(norm_true, norm)
+
+        # We should at least get close-ish to the true covariance
+        assert th.dist(cov, master_cov) / th.norm(master_cov) < 0.1

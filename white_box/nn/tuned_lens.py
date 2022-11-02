@@ -2,9 +2,9 @@ from copy import deepcopy
 from itertools import chain
 from pathlib import Path
 
-from ..model_surgery import get_final_layer_norm, get_transformer_layers
+from ..model_surgery import get_final_layer_norm
 from ..residual_stream import ResidualStream
-from . import LowRankLinear, MultiDeviceWrapper
+from . import LowRankLinear
 from transformers import PreTrainedModel
 from typing import Generator, Iterable, Optional, Union, overload
 import json
@@ -87,8 +87,6 @@ class TunedLens(th.nn.Module):
         self.layer_adapters = th.nn.ModuleList(
             [deepcopy(lens) for _ in range(num_layers)]
         )
-        self._layer_norm = MultiDeviceWrapper(self.layer_norm)
-        self._unembedding = MultiDeviceWrapper(self.unembedding)
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
         if isinstance(self.input_adapter, th.nn.Module):
@@ -172,13 +170,13 @@ class TunedLens(th.nn.Module):
 
         for adapter, item in zip(self, hiddens):
             if isinstance(item, th.Tensor):
-                h = self._layer_norm(item + adapter(item))
-                yield self._unembedding(h) if logits else h
+                h = self.layer_norm(item + adapter(item))
+                yield self.unembedding(h) if logits else h
 
             elif isinstance(item, tuple):
                 name, h = item
-                h = self._layer_norm(h + adapter(h))
-                yield name, self._unembedding(h) if logits else h
+                h = self.layer_norm(h + adapter(h))
+                yield name, self.unembedding(h) if logits else h
             else:
                 raise TypeError(f"Unexpected type {type(item)}")
 
