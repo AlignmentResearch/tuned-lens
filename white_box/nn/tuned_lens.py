@@ -88,6 +88,20 @@ class TunedLens(th.nn.Module):
             [deepcopy(lens) for _ in range(num_layers)]
         )
 
+    def __getitem__(self, item: int) -> th.nn.Module:
+        """Get the adapter module at the given index."""
+        if isinstance(self.input_adapter, th.nn.Module):
+            if item == 0:
+                return self.input_adapter
+            else:
+                item -= 1
+
+        if len(self.attn_adapters):
+            idx, is_layer = divmod(item, 2)
+            return self.layer_adapters[idx] if is_layer else self.attn_adapters[idx]
+        else:
+            return self.layer_adapters[item]
+
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
         if isinstance(self.input_adapter, th.nn.Module):
             yield self.input_adapter
@@ -180,9 +194,14 @@ class TunedLens(th.nn.Module):
             else:
                 raise TypeError(f"Unexpected type {type(item)}")
 
-    def forward(self, hiddens: Iterable[th.Tensor]) -> list[th.Tensor]:
+    def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Decode hidden states into logits"""
-        return [logits for _, logits in self.map(hiddens)]
+        # Sanity check to make sure we don't finetune the decoder
+        if any(p.requires_grad for p in self.parameters(recurse=False)):
+            raise RuntimeError("Make sure to freeze the decoder")
+
+        h = self.layer_norm(h + self[idx](h))
+        return self.unembedding(h)
 
     def __len__(self) -> int:
         N = len(self.attn_adapters) + len(self.layer_adapters)

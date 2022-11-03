@@ -3,8 +3,14 @@
 from argparse import ArgumentParser
 from collections import defaultdict
 from datasets import Dataset, DatasetDict, load_dataset
+from functools import partial
 from itertools import islice
 from pathlib import Path
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -12,15 +18,14 @@ from transformers import (
     PreTrainedTokenizerBase,
     get_linear_schedule_with_warmup,
 )
-from transformers.deepspeed import HfDeepSpeedConfig
-from white_box import ResidualStats, ResidualStream, TunedLens, TunedLensWrapper
+from white_box import ResidualStats, ResidualStream, TunedLens
 from white_box.data import chunk_and_tokenize, silence_datasets_messages
+from white_box.model_surgery import get_transformer_layers
 from white_box.utils import send_to_device
-import deepspeed
 import torch as th
+import torch.distributed as dist
 
 
-@th.autocast("cuda")
 def main():
     parser = ArgumentParser(
         description="Train a set of tuned lenses for a language model."
@@ -42,13 +47,15 @@ def main():
         "suitable to be passed to the HuggingFace load_dataset function.",
     )
     parser.add_argument(
+        "--fsdp",
+        action="store_true",
+        help="Use Fully Sharded Data Parallelism to train the model.",
+    )
+    parser.add_argument(
         "--grad-acc-steps",
         type=int,
         default=1,
         help="Number of gradient accumulation steps.",
-    )
-    parser.add_argument(
-        "--local_rank", type=int, default=0, help="Local rank for deepspeed training."
     )
     parser.add_argument("--lr", type=float, default=0.002, help="Learning rate.")
     parser.add_argument(
@@ -97,7 +104,7 @@ def main():
     parser.add_argument(
         "--tokens-per-step",
         type=int,
-        default=2**19,
+        default=2**18,
         help="Number of tokens per step.",
     )
     parser.add_argument(
@@ -118,15 +125,13 @@ def main():
         action="store_true",
         help="Train a lens for the final layer even though it's superfluous.",
     )
-    parser.add_argument(
-        "--zero-stage",
-        type=int,
-        default=0,
-        help="ZeRO stage to use for DeepSpeed training.",
-    )
     parser.add_argument("--wandb", type=str, help="Name of run in Weights & Biases.")
     args = parser.parse_args()
-    if args.local_rank == 0:
+
+    dist.init_process_group("nccl")
+    local_rank = dist.get_rank()
+
+    if local_rank == 0:
         print("Loading model...")
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer or args.model_name)
@@ -142,6 +147,8 @@ def main():
             raise ValueError("Only Dataset and DatasetDict instances are supported.")
 
     processed = chunk_and_tokenize(dataset, tokenizer, text_key=args.text_column)
+    assert isinstance(processed, Dataset)
+    processed = processed.shard(dist.get_world_size(), local_rank)
     processed = processed.shuffle(seed=args.seed)
 
     # chunk_and_tokenize ensures the samples are all the same length
@@ -153,39 +160,31 @@ def main():
             f"by the number of tokens per sample ({tokens_per_sample})."
         )
 
-    if args.local_rank == 0:
+    th.cuda.set_device(local_rank)
+    if local_rank == 0:
         print(f"Using {args.tokens_per_step:_} tokens per training step.")
-
-    ds_config = dict(
-        fp16=dict(
-            auto_cast=True,
-            enabled=True,
-            # Don't waste the first few training steps reducing the scale
-            # down from 2 ** 16
-            initial_scale_power=10,
-        ),
-        gradient_clipping=1.0,
-        train_batch_size=samples_per_step,
-        train_micro_batch_size_per_gpu=args.per_gpu_batch_size,
-        zero_optimization=dict(stage=args.zero_stage),
-    )
-    hf_config = HfDeepSpeedConfig(ds_config)
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         torch_dtype="auto",
     )
+    model.eval()
+    model.requires_grad_(False)
     assert isinstance(model, PreTrainedModel)
 
-    lens = TunedLens(
-        model,
-        include_final=args.train_final_lens,
-        orthogonal=args.orthogonal,
-        rank=args.rank,
-        sublayers=args.sublayers,
-    ).half()
+    lens = (
+        TunedLens(
+            model,
+            include_final=args.train_final_lens,
+            orthogonal=args.orthogonal,
+            rank=args.rank,
+            sublayers=args.sublayers,
+        )
+        .cuda(local_rank)
+        .float()
+    )
 
-    if args.wandb and args.local_rank == 0:
+    if args.wandb and local_rank == 0:
         import wandb
 
         wandb.init(
@@ -196,11 +195,36 @@ def main():
     # Running mean & variance of the residuals
     residual_stats = ResidualStats()
     stream_stats = ResidualStats()
+    dl = DataLoader(processed, batch_size=args.per_gpu_batch_size)  # type: ignore
+
+    if args.fsdp:
+        _, layers = get_transformer_layers(model)
+        layer_cls = type(layers[0])
+        if local_rank == 0:
+            print(f"Using '{layer_cls.__name__}' for transformer_auto_wrap_policy.")
+
+        model = FSDP(
+            model,
+            auto_wrap_policy=partial(
+                transformer_auto_wrap_policy, transformer_layer_cls={layer_cls}
+            ),
+            device_id=local_rank,
+            mixed_precision=MixedPrecision(
+                param_dtype=th.float16,
+                reduce_dtype=th.float16,
+                buffer_dtype=th.float16,
+            ),
+        )
+    else:
+        model = DDP(model, device_ids=[local_rank])
+
+    ddp_lens = DDP(lens, device_ids=[local_rank], find_unused_parameters=True)
 
     # Skip the unembedding matrix and final layer norm
-    params = [p for p in lens.parameters() if p.requires_grad]
+    params = [p for p in ddp_lens.parameters() if p.requires_grad]
     opt = th.optim.Adam(params, lr=args.lr)
 
+    scheduler = get_linear_schedule_with_warmup(opt, 10, args.num_steps)
     if args.resume:
         # Get the most recently saved lens from the directory
         if args.resume.is_dir():
@@ -210,7 +234,7 @@ def main():
 
         print(f"Loading checkpoint from {ckpt}")
         opt_path = ckpt / "optimizer.pt"
-        lens.load_state_dict(th.load(ckpt))
+        ddp_lens.load_state_dict(th.load(ckpt))
 
         if opt_path.exists():
             print(f"Loading optimizer state from {opt_path}")
@@ -218,34 +242,25 @@ def main():
         else:
             print("No optimizer state found. Starting Adam from scratch.")
 
-    model, opt, dl, _ = deepspeed.initialize(
-        args=args,
-        config=ds_config,
-        model_parameters=params,  # type: ignore[arg-type]
-        model=TunedLensWrapper(model, lens),
-        # Use a short warmup to avoid taking a very bad first step
-        # due to noisy second moments
-        lr_scheduler=get_linear_schedule_with_warmup(opt, 10, args.num_steps),
-        optimizer=opt,
-        mpu=None,
-        training_data=processed,
+    grad_acc_steps = samples_per_step // (
+        args.per_gpu_batch_size * dist.get_world_size()
     )
-
-    first_device = next(model.parameters()).device
-    grad_acc_steps = model.gradient_accumulation_steps()
     metrics = defaultdict(list)
     total_batches = args.num_steps * grad_acc_steps
+    if local_rank == 0:
+        print(f"Gradient accumulation steps: {grad_acc_steps}")
 
-    for step, batch in enumerate(islice(dl, total_batches), start=1):
+    pbar = tqdm(islice(dl, total_batches), desc="Training", total=total_batches)
+    for step, batch in enumerate(pbar, start=1):
         assert isinstance(batch, dict)
-        batch = send_to_device(batch, first_device)
-        output = model(**batch)
+        batch = send_to_device(batch, th.device(local_rank))
+        output = model(**batch, output_hidden_states=True)
+
         final_logits = output.logits
         stream = ResidualStream(
             embeddings=output.hidden_states[0], layers=output.hidden_states[1:-1]
         )
 
-        stream = stream.map(lambda t: t.float())
         if args.residual_stats:
             sample_residuals = stream.residuals()
             residual_stats.update(sample_residuals)
@@ -273,39 +288,60 @@ def main():
             labels = labels[:, :shift]
 
         # We do this sequentially to save VRAM
-        for (name, preds) in lens.map(stream.items()):
-            preds = preds.to(labels.device)
-            if shift > 0:
-                preds = preds[:, :-shift]
-            elif shift < 0:
-                preds = preds[:, -shift:]
+        for i, (name, h) in enumerate(stream.items()):
+            # bfloat16 has larger dynamic range than float16 and seems to be better for
+            # computing log softmax & KL loss
+            with th.autocast("cuda", dtype=th.bfloat16):
+                preds = ddp_lens(h, idx=i)
 
-            if args.loss == "ce":
-                loss = th.nn.functional.cross_entropy(
-                    preds.flatten(0, -2), labels.flatten()
-                )
-            elif args.loss == "kl":
-                loss = th.sum(
-                    labels.exp() * (labels - preds.log_softmax(-1)), dim=-1
-                ).mean()
-            else:
-                raise NotImplementedError
+                preds = preds.to(labels.device)
+                if shift > 0:
+                    preds = preds[:, :-shift]
+                elif shift < 0:
+                    preds = preds[:, -shift:]
 
-            model.backward(loss)
+                if args.loss == "ce":
+                    loss = th.nn.functional.cross_entropy(
+                        preds.flatten(0, -2), labels.flatten()
+                    )
+                elif args.loss == "kl":
+                    loss = th.sum(
+                        labels.exp() * (labels - preds.log_softmax(-1)), dim=-1
+                    ).mean()
+                else:
+                    raise NotImplementedError
+
+                scaled_loss = loss / grad_acc_steps
+
+            scaled_loss.backward()
             metrics[f"loss/{name}"].append(loss.detach())
 
-        # Deepspeed keeps track of grad accumulation
-        model.step()
-        if args.zero_stage < 3:
-            lens.normalize_()
+        if step % grad_acc_steps == 0:
+            th.nn.utils.clip_grad_norm_(lens.parameters(), 1.0)
+            opt.step()
+            opt.zero_grad()
+            scheduler.step()
 
-        if args.local_rank == 0 and args.wandb and step % grad_acc_steps == 0:
-            import wandb
+            if local_rank == 0 and args.wandb:
+                import wandb
 
-            wandb.log({k: th.stack(v).mean().item() for k, v in metrics.items()})
-            metrics.clear()
+                log_dict = {k: th.stack(v).mean().item() for k, v in metrics.items()}
+                # Approximate the true gradient norm using Adam's moving average
+                for i, l in enumerate(lens):
+                    name = "input" if i == 0 else f"{i - 1}.ffn"
 
-    if args.local_rank == 0:
+                    log_dict["grad_norm/" + name] = th.cat(
+                        [opt.state[p]["exp_avg"].flatten() for p in l.parameters()]
+                    ).norm()
+
+                metrics.clear()
+                wandb.log(log_dict)
+
+        # Make the problem strictly convex with projected gradient descent,
+        # centering the affine transform and normalizing the scale
+        lens.normalize_()
+
+    if local_rank == 0:
         print(f"Saving lens to {args.output}")
         lens.save(args.output)
         th.save(opt.state_dict(), args.output / "optimizer.pt")
@@ -314,7 +350,7 @@ def main():
         stream_stats.all_reduce_()
         residual_stats.all_reduce_()
 
-        if args.local_rank == 0:
+        if local_rank == 0:
             th.save(stream_stats, args.output / "stream_stats.pt")
             th.save(residual_stats, args.output / "residual_stats.pt")
 
