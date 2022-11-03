@@ -46,9 +46,10 @@ class TunedLens(th.nn.Module):
             vocab_size = model.config.vocab_size
             assert isinstance(d_model, int) and isinstance(vocab_size, int)
 
-            self.unembedding = deepcopy(model.get_output_embeddings())
+            # Currently we convert the decoder to full precision
+            self.unembedding = deepcopy(model.get_output_embeddings()).float()
             if ln := get_final_layer_norm(model):
-                self.layer_norm = deepcopy(ln)
+                self.layer_norm = deepcopy(ln).float()
             else:
                 self.layer_norm = th.nn.Identity()
 
