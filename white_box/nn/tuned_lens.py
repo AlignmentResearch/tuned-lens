@@ -139,21 +139,13 @@ class TunedLens(th.nn.Module):
             json.dump(self.config, f)
 
     def normalize_(self):
-        """
-        Canonicalize the transforms by centering their weights and biases, then
-        normalizing `weight + th.eye(n)` to have Frobenius norm `sqrt(n)`.
-        """
+        """Canonicalize the transforms by centering their weights and biases."""
         for linear in self:
             assert isinstance(linear, th.nn.Linear)
 
             A, b = linear.weight.data, linear.bias.data
             A -= A.mean(dim=0, keepdim=True)
             b -= b.mean()
-
-            n, n = A.shape
-            I = th.eye(n, device=A.device)
-            norm = th.norm(A + I) / n**0.5
-            A.copy_((A + I) / norm - I)
 
     def transform(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
         if len(stream) != len(self):
@@ -185,15 +177,19 @@ class TunedLens(th.nn.Module):
 
         for adapter, item in zip(self, hiddens):
             if isinstance(item, th.Tensor):
-                h = self.layer_norm(item + adapter(item))
-                yield self.unembedding(h) if logits else h
+                h = item + adapter(item)
+                yield self.decode(h) if logits else h
 
             elif isinstance(item, tuple):
                 name, h = item
-                h = self.layer_norm(h + adapter(h))
-                yield name, self.unembedding(h) if logits else h
+                h = h + adapter(h)
+                yield name, self.decode(h) if logits else h
             else:
                 raise TypeError(f"Unexpected type {type(item)}")
+
+    def decode(self, h: th.Tensor) -> th.Tensor:
+        """Decode a hidden state into logits."""
+        return self.unembedding(self.layer_norm(h))
 
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Decode hidden states into logits"""
@@ -201,8 +197,7 @@ class TunedLens(th.nn.Module):
         if any(p.requires_grad for p in self.parameters(recurse=False)):
             raise RuntimeError("Make sure to freeze the decoder")
 
-        h = self.layer_norm(h + self[idx](h))
-        return self.unembedding(h)
+        return self.decode(h + self[idx](h))
 
     def __len__(self) -> int:
         N = len(self.attn_adapters) + len(self.layer_adapters)

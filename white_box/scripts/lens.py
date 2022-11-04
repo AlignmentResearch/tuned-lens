@@ -2,12 +2,14 @@
 
 from argparse import Namespace
 from collections import defaultdict
+from contextlib import nullcontext, redirect_stdout
 from datasets import Dataset, DatasetDict, load_dataset
 from functools import partial
 from itertools import islice
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import (
@@ -15,13 +17,12 @@ from transformers import (
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    get_linear_schedule_with_warmup,
 )
 from argparsers import get_lens_parser
 from white_box import ResidualStats, ResidualStream, TunedLens
 from white_box.data import chunk_and_tokenize, silence_datasets_messages
 from white_box.model_surgery import get_transformer_layers
-from white_box.utils import send_to_device, toggle_stdout
+from white_box.utils import send_to_device
 import json
 import torch as th
 import torch.distributed as dist
@@ -31,7 +32,6 @@ dist.init_process_group("nccl")
 local_rank = dist.get_rank()
 
 
-@toggle_stdout(local_rank == 0)
 def main(args):
     print("Loading model...")
 
@@ -131,11 +131,12 @@ def eval_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLe
     stream_stats = ResidualStats()
 
     # Keys are names of layers
+    baseline_dict = defaultdict(list)
     ce_dict = defaultdict(list)
     kl_dict = defaultdict(list)
     final_losses = []
 
-    for batch in tqdm(dl, desc="Evaluating"):
+    for batch in tqdm(dl, desc="Evaluating", position=local_rank):
         batch = send_to_device(batch, th.device(local_rank))
         output = model(**batch, labels=batch["input_ids"], output_hidden_states=True)
 
@@ -154,6 +155,11 @@ def eval_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLe
             logits = lens(h, idx=i)
             log_probs = logits.log_softmax(dim=-1)
 
+            baseline_dict[name].append(
+                th.nn.functional.cross_entropy(
+                    maybe_shift_preds(lens.decode(h), 1).flatten(0, 1), labels
+                )
+            )
             ce_dict[name].append(
                 th.nn.functional.cross_entropy(
                     maybe_shift_preds(logits, 1).flatten(0, 1), labels
@@ -167,9 +173,14 @@ def eval_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLe
             residual_stats.update(stream.residuals())
             stream_stats.update(stream)
 
+    baseline_means = {k: th.stack(v).mean() for k, v in baseline_dict.items()}
     ce_means = {k: th.stack(v).mean() for k, v in ce_dict.items()}
     kl_means = {k: th.stack(v).mean() for k, v in kl_dict.items()}
     final_loss = th.stack(final_losses).mean()
+
+    for v in baseline_means.values():
+        dist.all_reduce(v)
+        v /= dist.get_world_size()
 
     for v in ce_means.values():
         dist.all_reduce(v)
@@ -184,9 +195,12 @@ def eval_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLe
 
     if local_rank == 0:
         json_path = args.output or (args.lens / "eval.json")
+        print(f"Saving results to '{json_path}'")
+
         with open(json_path, "w") as f:
             json.dump(
                 {
+                    "baseline": {k: v.item() for k, v in baseline_means.items()},
                     "ce": {k: v.item() for k, v in ce_means.items()},
                     "kl": {k: v.item() for k, v in kl_means.items()},
                     "final_loss": final_loss.item(),
@@ -220,11 +234,28 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
         )
         wandb.watch(lens)
 
-    # Skip the unembedding matrix and final layer norm
-    params = [p for p in ddp_lens.parameters() if p.requires_grad]
-    opt = th.optim.Adam(params, lr=args.lr)
+    # It turns out to be pretty important to use SGD with momentum and not Adam. Since
+    # we zero-initialize the probes, we start out with relatively small grad norms, and
+    # Adam's adaptive learning rate bumps up the step size way too much.
+    β = args.momentum
+    opt = th.optim.SGD(
+        # Don't train the unembedding matrix or final layer norm
+        params=[p for p in ddp_lens.parameters() if p.requires_grad],
+        # PyTorch's momentum implementation effectively scales the LR by 1 / (1 - β),
+        # so we undo that here. See https://www.youtube.com/watch?v=k8fTYJPd3_I for
+        # discussion. Interestingly, once we do this, the optimal LR seems to be unity.
+        lr=args.lr * (1 - β),
+        momentum=β,
+        # Empirically Nesterov momentum seems to improve convergence speed.
+        nesterov=True,
+        # Training a lens is only weakly convex, with many near-zero eigenvalues in the
+        # Hessian spectrum. Without weight decay, there's a tendency for less important
+        # parameters to "drift" away from their zero initialization.
+        weight_decay=args.weight_decay,
+    )
+    # Simple linear LR decay schedule
+    scheduler = LambdaLR(opt, lambda t: 1 - t / args.num_steps)
 
-    scheduler = get_linear_schedule_with_warmup(opt, 10, args.num_steps)
     if args.resume:
         assert args.resume.is_dir()
 
@@ -249,15 +280,16 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
 
     print(f"Using {args.tokens_per_step:_} tokens per training step.")
 
-    grad_acc_steps = samples_per_step // (
-        args.per_gpu_batch_size * dist.get_world_size()
-    )
+    # TODO: Make this do the right thing when there's a remainder
+    global_batch_size = args.per_gpu_batch_size * dist.get_world_size()
+    grad_acc_steps = samples_per_step // global_batch_size
+
     metrics = defaultdict(list)
     total_batches = args.num_steps * grad_acc_steps
     print(f"Gradient accumulation steps: {grad_acc_steps}")
 
     pbar = tqdm(islice(dl, total_batches), desc="Training", total=total_batches)
-    for step, batch in enumerate(pbar, start=1):
+    for batch_idx, batch in enumerate(pbar, start=1):
         assert isinstance(batch, dict)
         batch = send_to_device(batch, th.device(local_rank))
         output = model(**batch, output_hidden_states=True)
@@ -303,12 +335,24 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
                 else:
                     raise NotImplementedError
 
+                # Log the loss *before* LASSO regularization
+                metrics[f"loss/{name}"].append(loss.detach())
+
+                # Add sparsity regularizer
+                if args.lasso:
+                    loss += (
+                        args.lasso
+                        * th.cat([p.flatten() for p in lens[i].parameters()])
+                        .abs()
+                        .sum()
+                    )
+
                 scaled_loss = loss / grad_acc_steps
 
             scaled_loss.backward()
-            metrics[f"loss/{name}"].append(loss.detach())
 
-        if step % grad_acc_steps == 0:
+        step, rem = divmod(batch_idx, grad_acc_steps)
+        if rem == 0:
             th.nn.utils.clip_grad_norm_(lens.parameters(), 1.0)
             opt.step()
             opt.zero_grad()
@@ -317,14 +361,26 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
             if local_rank == 0 and args.wandb:
                 import wandb
 
-                log_dict = {k: th.stack(v).mean().item() for k, v in metrics.items()}
-                # Approximate the true gradient norm using Adam's moving average
+                log_dict = {k: th.stack(v).mean() for k, v in metrics.items()}
+
+                # Log statistics about optimizer & probes
                 for i, l in enumerate(lens):
                     name = "input" if i == 0 else f"{i - 1}.ffn"
+                    states = [opt.state[p] for p in l.parameters()]
 
+                    # Approximate the true gradient norm using SGD's moving average
                     log_dict["grad_norm/" + name] = th.cat(
-                        [opt.state[p]["exp_avg"].flatten() for p in l.parameters()]
+                        [
+                            # Undo PyTorch's scaling of the gradient by 1 / (1 - β). We
+                            # also divide by the bias correction term (1 - β ** t).
+                            (1 - β) * s["momentum_buffer"].flatten() / (1 - β**step)
+                            for s in states
+                        ]
                     ).norm()
+
+                    assert isinstance(l, th.nn.Linear)
+                    log_dict["bias_norm/" + name] = l.bias.data.norm()
+                    log_dict["weight_norm/" + name] = l.weight.data.norm()
 
                 metrics.clear()
                 wandb.log(log_dict)
@@ -341,4 +397,7 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
 
 if __name__ == "__main__":
     parser = get_lens_parser()
-    main(parser.parse_args())
+
+    # Only print on rank 0
+    with nullcontext() if local_rank == 0 else redirect_stdout(None):
+        main(parser.parse_args())

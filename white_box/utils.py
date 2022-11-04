@@ -1,10 +1,10 @@
-from contextlib import ContextDecorator, redirect_stdout
 from itertools import islice
 from typing import Any, Callable, Iterable, TypeVar, Union
 import torch as th
 
 
 T = TypeVar("T")
+
 
 # Backported from Python 3.10
 def pairwise(iterable: Iterable[T]) -> Iterable[tuple[T, T]]:
@@ -40,7 +40,8 @@ def pytree_map(
 
     if strict:
         raise TypeError(
-            f"Found leaf '{tree}' of unsupported type '{type(tree).__name__}'- use `strict=False` to ignore"
+            f"Found leaf '{tree}' of unsupported type '{type(tree).__name__}'- use "
+            f"`strict=False` to ignore"
         )
     else:
         return tree
@@ -49,12 +50,3 @@ def pytree_map(
 def send_to_device(tree: TreeType, device: th.device) -> TreeType:
     """Recursively send all tensors in a pytree to a device."""
     return pytree_map(lambda t: t.to(device), tree)
-
-
-def toggle_stdout(enable: bool):
-    """Decorator to temporarily enable or disable stdout."""
-
-    class _redirect_decorator(ContextDecorator, redirect_stdout):
-        pass
-
-    return _redirect_decorator(None) if not enable else lambda x: x

@@ -74,9 +74,15 @@ def get_lens_parser() -> ArgumentParser:
         help="Number of gradient accumulation steps.",
     )
     train_parser.add_argument(
+        "--lasso", type=float, default=0.0, help="LASSO (L1) regularization strength."
+    )
+    train_parser.add_argument(
         "--lens", type=Path, help="Directory containing a lens to warm-start training."
     )
-    train_parser.add_argument("--lr", type=float, default=0.002, help="Learning rate.")
+    train_parser.add_argument("--lr", type=float, default=0.5, help="Learning rate.")
+    train_parser.add_argument(
+        "--momentum", type=float, default=0.9, help="Momentum coefficient for SGD."
+    )
     train_parser.add_argument(
         "--num-steps", type=int, default=100, help="Number of training steps."
     )
@@ -107,7 +113,7 @@ def get_lens_parser() -> ArgumentParser:
     train_parser.add_argument(
         "--tokens-per-step",
         type=int,
-        default=2**18,
+        default=2**17,
         help="Number of tokens per step.",
     )
     train_parser.add_argument(
@@ -117,6 +123,9 @@ def get_lens_parser() -> ArgumentParser:
     )
     train_parser.add_argument(
         "--wandb", type=str, help="Name of run in Weights & Biases."
+    )
+    train_parser.add_argument(
+        "--weight-decay", type=float, default=0.01, help="Weight decay coefficient."
     )
 
     # Evaluation-only arguments
