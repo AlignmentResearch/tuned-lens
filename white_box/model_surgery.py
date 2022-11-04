@@ -10,7 +10,9 @@ def get_value_for_key(obj: Any, key: str) -> Any:
 
 
 def set_value_for_key_(obj: Any, key: str, value: Any) -> None:
-    """Set a value in-place using `__getitem__` if `key` is numeric and `getattr` otherwise."""
+    """
+    Set value in-place using `__getitem__` if `key` is numeric and `getattr` otherwise.
+    """
     if key.isdigit():
         obj[int(key)] = value
     else:
@@ -89,9 +91,6 @@ def get_transformer_layers(model: th.nn.Module) -> tuple[str, th.nn.ModuleList]:
     )
 
 
-T = TypeVar("T", bound=th.nn.Module)
-
-
 @contextmanager
 def delete_layers(model: T, indices: list[int]) -> Generator[T, None, None]:
     """Temporarily delete the layers at `indices` from `model` while in the context."""
@@ -105,9 +104,6 @@ def delete_layers(model: T, indices: list[int]) -> Generator[T, None, None]:
         yield model
     finally:
         set_key_path_(model, list_path, layer_list)
-
-
-T = TypeVar("T", bound=th.nn.Module)
 
 
 @contextmanager
@@ -136,3 +132,20 @@ def permute_layers_(model: th.nn.Module, indices: list[int]):
     list_path, layer_list = get_transformer_layers(model)
     permuted_list = th.nn.ModuleList([layer_list[i] for i in indices])
     set_key_path_(model, list_path, permuted_list)
+
+
+@contextmanager
+def replace_layers(
+    model: T, indices: list[int], replacements: list[th.nn.Module]
+) -> Generator[T, None, None]:
+    """Replace the layers at `indices` with `replacements` while in the context."""
+    list_path, layer_list = get_transformer_layers(model)
+    modified_list = th.nn.ModuleList(layer_list)
+    for i, replacement in zip(indices, replacements):
+        modified_list[i] = replacement
+
+    set_key_path_(model, list_path, modified_list)
+    try:
+        yield model
+    finally:
+        set_key_path_(model, list_path, layer_list)

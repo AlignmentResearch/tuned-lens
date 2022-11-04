@@ -6,8 +6,13 @@ from contextlib import nullcontext, redirect_stdout
 from datasets import Dataset, DatasetDict, load_dataset
 from functools import partial
 from itertools import islice
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
+from torch.distributed.fsdp import (
+    CPUOffload,
+    FullyShardedDataParallel as FSDP,
+    MixedPrecision,
+)
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
@@ -84,6 +89,7 @@ def main(args):
             auto_wrap_policy=partial(
                 transformer_auto_wrap_policy, transformer_layer_cls={layer_cls}
             ),
+            cpu_offload=CPUOffload(offload_params=True),
             device_id=local_rank,
             mixed_precision=MixedPrecision(
                 param_dtype=th.float16,
@@ -169,6 +175,8 @@ def eval_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLe
                 th.sum(final_probs * (final_log_probs - log_probs), dim=-1).mean()
             )
 
+        # Don't let the processes get too out of sync
+        dist.barrier()
         if args.residual_stats:
             residual_stats.update(stream.residuals())
             stream_stats.update(stream)
@@ -234,13 +242,11 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
         )
         wandb.watch(lens)
 
-    # It turns out to be pretty important to use SGD with momentum and not Adam. Since
-    # we zero-initialize the probes, we start out with relatively small grad norms, and
-    # Adam's adaptive learning rate bumps up the step size way too much.
+    # Don't train the unembedding matrix or final layer norm
+    params = [p for p in ddp_lens.parameters() if p.requires_grad]
+
     β = args.momentum
-    opt = th.optim.SGD(
-        # Don't train the unembedding matrix or final layer norm
-        params=[p for p in ddp_lens.parameters() if p.requires_grad],
+    config = dict(
         # PyTorch's momentum implementation effectively scales the LR by 1 / (1 - β),
         # so we undo that here. See https://www.youtube.com/watch?v=k8fTYJPd3_I for
         # discussion. Interestingly, once we do this, the optimal LR seems to be unity.
@@ -253,9 +259,17 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
         # parameters to "drift" away from their zero initialization.
         weight_decay=args.weight_decay,
     )
+
+    # It turns out to be pretty important to use SGD with momentum and not Adam. Since
+    # we zero-initialize the probes, we start out with relatively small grad norms, and
+    # Adam's adaptive learning rate bumps up the step size way too much.
+    if args.zero:
+        opt = ZeroRedundancyOptimizer(params, optimizer_class=th.optim.SGD, **config)
+    else:
+        opt = th.optim.SGD(params, **config)
+
     # Simple linear LR decay schedule
     scheduler = LambdaLR(opt, lambda t: 1 - t / args.num_steps)
-
     if args.resume:
         assert args.resume.is_dir()
 

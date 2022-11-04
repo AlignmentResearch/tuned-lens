@@ -79,7 +79,7 @@ def get_lens_parser() -> ArgumentParser:
     train_parser.add_argument(
         "--lens", type=Path, help="Directory containing a lens to warm-start training."
     )
-    train_parser.add_argument("--lr", type=float, default=0.5, help="Learning rate.")
+    train_parser.add_argument("--lr", type=float, default=1.0, help="Learning rate.")
     train_parser.add_argument(
         "--momentum", type=float, default=0.9, help="Momentum coefficient for SGD."
     )
@@ -126,6 +126,9 @@ def get_lens_parser() -> ArgumentParser:
     )
     train_parser.add_argument(
         "--weight-decay", type=float, default=0.01, help="Weight decay coefficient."
+    )
+    train_parser.add_argument(
+        "--zero", action="store_true", help="Use ZeroRedundancyOptimizer."
     )
 
     # Evaluation-only arguments
