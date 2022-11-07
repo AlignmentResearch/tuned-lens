@@ -16,7 +16,7 @@ def get_lens_parser() -> ArgumentParser:
     parent_parser.add_argument(
         "--dataset",
         type=str,
-        default=("wikitext", "wikitext-103-v1"),
+        default=("wikitext", "wikitext-2-raw-v1"),
         nargs="+",
         help="Name of dataset to use. Can either be a local .jsonl file or a name "
         "suitable to be passed to the HuggingFace load_dataset function.",

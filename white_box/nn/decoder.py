@@ -49,31 +49,51 @@ class Decoder(th.nn.Module):
         *,
         h0: Optional[th.Tensor] = None,
         lens: Optional[th.nn.Module] = None,
+        max_iter: int = 100,
         num_samples: int = 0,
+        reverse: bool = False,
+        tol: float = 1e-4,
     ) -> th.Tensor:
         """Find one or more hidden states that closely induce the given logits."""
         d_model = cast(int, self.unembedding.in_features)
+        leading_dims = logits.shape[:-1]
 
         # Use Gaussian vector as the initial hidden state
         if h0 is None:
-            leading_dims = logits.shape[:-1]
             if num_samples:
                 leading_dims = (num_samples,) + leading_dims
 
             h0 = logits.new_empty(*leading_dims, d_model)
             h0.normal_()
 
-        h = th.nn.Parameter(h0)
-        opt = th.optim.LBFGS([h], line_search_fn="strong_wolfe")
+        # Sanity check the shape of the initial hidden state. Can silently lead to
+        # incorrect results due to broadcasting if we don't check this.
+        elif h0.shape != (*leading_dims, d_model):
+            raise ValueError(
+                f"Initial hidden state has shape {h0.shape} but should have shape "
+                f"{(*leading_dims, d_model)} given logits shape {logits.shape}."
+            )
 
-        log_probs = logits.log_softmax(dim=-1)
-        probs = log_probs.exp()
+        h = th.nn.Parameter(h0)
+        opt = th.optim.LBFGS(
+            [h],
+            line_search_fn="strong_wolfe",
+            max_iter=max_iter,
+            tolerance_change=tol,
+        )
+
+        log_p = logits.log_softmax(dim=-1)
+        p = log_p.exp()
 
         def closure() -> th.Tensor:
-            preds = self(h + lens(h) if lens else h).log_softmax(-1)
-            loss = th.sum(probs * (log_probs - preds), dim=-1).mean()
-            loss.backward()
-            return loss
+            log_q = self(h + lens(h) if lens else h).log_softmax(-1)
+            if reverse:
+                H_p_q = -th.sum(log_q.exp() * log_p, dim=-1).mean()
+            else:
+                H_p_q = -th.sum(p * log_q, dim=-1).mean()
+
+            H_p_q.backward()
+            return H_p_q
 
         opt.step(closure)  # type: ignore
-        return th.nn.functional.layer_norm(h.data, (d_model,))
+        return h.data
