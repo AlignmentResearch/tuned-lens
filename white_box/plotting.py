@@ -1,3 +1,4 @@
+from .math import geodesic_distance
 from .model_surgery import get_final_layer_norm, get_transformer_layers
 from .residual_stream import ResidualStream, record_residual_stream
 from .nn.tuned_lens import TunedLens
@@ -23,7 +24,7 @@ def plot_logit_lens(
     input_ids: Optional[th.Tensor] = None,
     extra_decoder_layers: int = 0,
     layer_stride: int = 1,
-    metric: Literal["ce", "entropy", "kl"] = "entropy",
+    metric: Literal["ce", "geodesic", "entropy", "kl"] = "entropy",
     residual_means: Optional[ResidualStream] = None,
     sublayers: bool = False,
     start_pos: int = 0,
@@ -65,32 +66,38 @@ def plot_logit_lens(
         hidden_lps = stream.map(decode_fn)
 
     top_tokens = hidden_lps.map(lambda x: x.argmax(-1).squeeze().cpu().tolist())
-    top_strings = top_tokens.map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
+    top_strings = top_tokens.map(
+        tokenizer.convert_ids_to_tokens  # type: ignore[arg-type]
+    )
     top_strings = top_strings.map(
         lambda x: [t.replace(whitespace_token, whitespace_replacement) for t in x]
     )
+
+    max_color = math.log(model.config.vocab_size)
     if metric == "ce":
         raise NotImplementedError
+    elif metric == "entropy":
+        stats = hidden_lps.map(lambda x: -th.sum(x.exp() * x, dim=-1))
+    elif metric == "geodesic":
+        max_color = None
+        stats = hidden_lps.pairwise_map(geodesic_distance)
+        top_strings.embeddings = None
     elif metric == "kl":
         log_probs = outputs.logits.log_softmax(-1)
-        probs = log_probs.exp()
         stats = hidden_lps.map(
-            lambda x: th.sum(probs * (log_probs - x), dim=-1).squeeze().cpu()
+            lambda x: th.sum(log_probs.exp() * (log_probs - x), dim=-1)
         )
-    elif metric == "entropy":
-        stats = hidden_lps.map(lambda x: -th.sum(x.exp() * x, dim=-1).squeeze().cpu())
     else:
         raise ValueError(f"Unknown metric: {metric}")
 
-    uniform_loss = math.log(model.config.vocab_size)
     _plot_stream(
-        stats,
+        stats.map(lambda x: x.squeeze().cpu()),
         top_strings,
         [t.replace(whitespace_token, whitespace_replacement) for t in tokens],
         colorbar_label=f"{metric} (nats)",
         fmt="",
         layer_stride=layer_stride,
-        vmax=uniform_loss,
+        vmax=max_color,
     )
 
     name = "Logit" if tuned_lens is None else "Tuned"
@@ -118,7 +125,9 @@ def plot_residuals(
 
     prob_diffs = stream.map(lambda x: E(ln(x)).softmax(-1)).residuals()
     changed_ids = prob_diffs.map(lambda x: x.abs().argmax(-1))
-    changed_tokens = changed_ids.map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
+    changed_tokens = changed_ids.map(
+        tokenizer.convert_ids_to_tokens  # type: ignore[arg-type]
+    )
     biggest_diffs = prob_diffs.zip_map(lambda x, y: x.gather(-1, y), changed_ids)
 
     _plot_stream(biggest_diffs, changed_tokens, tokens)
@@ -196,7 +205,9 @@ def _run_inference(
     with record_residual_stream(model, sublayers=sublayers) as stream:
         outputs = model(input_ids.to(model_device))
 
-    tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())  # type: ignore[arg-type]
+    tokens = tokenizer.convert_ids_to_tokens(  # type: ignore[arg-type]
+        input_ids.squeeze().tolist()
+    )
 
     if start_pos > 0:
         outputs.logits = outputs.logits[..., start_pos:end_pos, :]
@@ -219,10 +230,8 @@ def _plot_stream(
     text_matrix = np.stack(list(text_stream))[::layer_stride]
     y_labels = color_stream.labels()
 
-    fig, ax = plt.subplots(
-        figsize=(2 * len(x_labels), len(color_stream) // (2 * layer_stride))
-    )
-    ax = sns.heatmap(
+    plt.subplots(figsize=(2 * len(x_labels), len(color_stream) // (2 * layer_stride)))
+    sns.heatmap(
         np.flipud(color_matrix),
         annot=np.flipud(text_matrix),
         cbar_kws={"label": colorbar_label} if colorbar_label else None,

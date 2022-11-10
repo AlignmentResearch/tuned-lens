@@ -1,47 +1,71 @@
-from copy import deepcopy
 from transformers import PreTrainedModel
 from typing import cast, Optional
-from ..model_surgery import get_final_layer_norm
+from white_box.model_surgery import get_final_layer_norm
 import torch as th
 
 
 class Decoder(th.nn.Module):
-    def __init__(
-        self,
-        model: Optional[PreTrainedModel] = None,
-        *,
-        d_model: Optional[int] = None,
-        vocab_size: Optional[int] = None,
-    ):
+    singular_values: th.Tensor
+
+    def __init__(self, model: PreTrainedModel):
         super().__init__()
 
-        # Initializing from scratch without a model
-        if not model:
-            assert d_model and vocab_size
-            self.layer_norm = th.nn.LayerNorm(d_model)
-            self.unembedding = th.nn.Linear(d_model, vocab_size, bias=False)
-
         # Use HuggingFace methods to get decoder layers
-        else:
-            assert not d_model and not vocab_size
-            d_model = model.config.hidden_size
-            vocab_size = model.config.vocab_size
-            assert isinstance(d_model, int) and isinstance(vocab_size, int)
+        raw_unembed = model.get_output_embeddings()
+        if not hasattr(raw_unembed, "weight"):
+            raise ValueError("Failed to extract unembedding matrix.")
 
-            # Currently we convert the decoder to full precision
-            self.unembedding = deepcopy(model.get_output_embeddings()).float()
-            if ln := get_final_layer_norm(model):
-                self.layer_norm = deepcopy(ln).float()
-            else:
-                self.layer_norm = th.nn.Identity()
+        unembed = raw_unembed.weight.data
+        assert isinstance(unembed, th.Tensor)
+        vocab_size, d_model = unembed.shape
+
+        self.unembedding = th.nn.Linear(d_model, vocab_size, device=unembed.device)
+        U = unembed.float()
+
+        raw_ln = get_final_layer_norm(model)
+        assert raw_ln is not None
+
+        self.layer_norm = th.nn.LayerNorm(
+            d_model, elementwise_affine=False, eps=getattr(raw_ln, "eps", 1e-5)
+        )
+
+        # Roll the LN bias into our unembedding Linear
+        gamma, beta = raw_ln.weight.data, raw_ln.bias.data
+        if isinstance(beta, th.Tensor):
+            bias = beta @ U.T
+            bias -= bias.mean()  # Shift invariance of softmax
+            self.unembedding.bias.data = bias
+
+        # Roll the LN diagonal scaling factor into our unembedding matrix
+        if isinstance(gamma, th.Tensor):
+            U = U * gamma
+
+        # Softmax is invariant to constant shifts, so we can canonicalize U
+        # by centering its rows. We can also center the columns because the
+        # input gets centered by LayerNorm.
+        U = U - U.mean(dim=0)
+        U -= U.mean(dim=1, keepdim=True)
+        self.unembedding.weight.data = U
+
+        # Use SVD to compute the pseudo-inverse of U.
+        u, s, v_h = th.linalg.svd(U, full_matrices=False)
+
+        # Invert the singular values greater than a certain threshold,
+        # replacing the rest with zeros, to get the pseudoinverse.
+        # See https://www.johndcook.com/blog/2018/05/05/svd/.
+        min_sigma = th.finfo(s.dtype).eps * max(U.shape) * s.max()
+        s_plus = s.reciprocal().where(s > min_sigma, s.new_zeros(()))
+        self.register_buffer("U_pinv", v_h.T @ th.diag(s_plus) @ u.T)
+
+        # Save the singular values for analysis
+        self.register_buffer("singular_values", s)
 
         # In general we don't want to finetune the decoder
         self.requires_grad_(False)
 
     def forward(self, h: th.Tensor) -> th.Tensor:
-        """Converts hidden states into logits."""
-        h = self.layer_norm(h)
-        return self.unembedding(h)
+        """Convert hidden states into logits."""
+        return self.unembedding(self.layer_norm(h))
 
     def invert(
         self,
@@ -58,13 +82,17 @@ class Decoder(th.nn.Module):
         d_model = cast(int, self.unembedding.in_features)
         leading_dims = logits.shape[:-1]
 
-        # Use Gaussian vector as the initial hidden state
         if h0 is None:
-            if num_samples:
+            # Initialize with the Moore-Penrose pseudoinverse
+            if not num_samples:
+                h0 = logits @ self.U_pinv.mT
+
+            # Use Gaussian vectors as the initial hidden state
+            else:
                 leading_dims = (num_samples,) + leading_dims
 
-            h0 = logits.new_empty(*leading_dims, d_model)
-            h0.normal_()
+                h0 = logits.new_empty(*leading_dims, d_model)
+                h0.normal_()
 
         # Sanity check the shape of the initial hidden state. Can silently lead to
         # incorrect results due to broadcasting if we don't check this.
@@ -86,6 +114,8 @@ class Decoder(th.nn.Module):
         p = log_p.exp()
 
         def closure() -> th.Tensor:
+            opt.zero_grad()
+
             log_q = self(h + lens(h) if lens else h).log_softmax(-1)
             if reverse:
                 H_p_q = -th.sum(log_q.exp() * log_p, dim=-1).mean()
@@ -96,4 +126,4 @@ class Decoder(th.nn.Module):
             return H_p_q
 
         opt.step(closure)  # type: ignore
-        return h.data
+        return th.nn.functional.layer_norm(h.data, (d_model,))
