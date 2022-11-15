@@ -148,7 +148,7 @@ class TunedLens(th.nn.Module):
             b -= b.mean()
 
     def transform(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
-        if len(stream) != len(self):
+        if (len(stream)-1) != len(self):
             raise ValueError(
                 f"Expected {len(self)} layers, but got {len(stream)} layers."
             )
