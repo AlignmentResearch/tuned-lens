@@ -69,15 +69,19 @@ def main(args):
 
     # Can be set either in eval or in training; in eval it's required
     if args.lens:
-        lens = TunedLens.load(args.lens).cuda(local_rank)
+        lens = TunedLens.load(args.lens).half().cuda(local_rank)
     else:
-        lens = TunedLens(
-            model,
-            include_final=args.train_final_lens,
-            orthogonal=args.orthogonal,
-            rank=args.rank,
-            sublayers=args.sublayers,
-        ).cuda(local_rank)
+        lens = (
+            TunedLens(
+                model,
+                include_final=args.train_final_lens,
+                orthogonal=args.orthogonal,
+                rank=args.rank,
+                sublayers=args.sublayers,
+            )
+            .half()
+            .cuda(local_rank)
+        )
 
     if args.fsdp:
         _, layers = get_transformer_layers(model)
@@ -91,6 +95,8 @@ def main(args):
             ),
             cpu_offload=CPUOffload(offload_params=True),
             device_id=local_rank,
+            # This turns out to be important for training speed
+            forward_prefetch=True,
             mixed_precision=MixedPrecision(
                 param_dtype=th.float16,
                 reduce_dtype=th.float16,
@@ -132,8 +138,8 @@ def eval_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLe
     local_rank = dist.get_rank()
     dl = DataLoader(data, batch_size=args.per_gpu_batch_size)  # type: ignore[arg-type]
 
-    # Running mean & variance of the residuals
-    residual_stats = ResidualStats()
+    # Running mean & covariance of the hidden states
+    first_token_stats = ResidualStats()
     stream_stats = ResidualStats()
 
     # Keys are names of layers
@@ -178,8 +184,11 @@ def eval_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLe
         # Don't let the processes get too out of sync
         dist.barrier()
         if args.residual_stats:
-            residual_stats.update(stream.residuals())
-            stream_stats.update(stream)
+            first_tokens = stream.map(lambda x: x[:, 0])
+            rest = stream.map(lambda x: x[:, 1:])
+
+            first_token_stats.update(first_tokens)
+            stream_stats.update(rest)
 
     baseline_means = {k: th.stack(v).mean() for k, v in baseline_dict.items()}
     ce_means = {k: th.stack(v).mean() for k, v in ce_dict.items()}
@@ -201,8 +210,9 @@ def eval_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLe
     dist.all_reduce(final_loss)
     final_loss /= dist.get_world_size()
 
+    output_dir = args.output or args.lens
     if local_rank == 0:
-        json_path = args.output or (args.lens / "eval.json")
+        json_path = output_dir / "eval.json"
         print(f"Saving results to '{json_path}'")
 
         with open(json_path, "w") as f:
@@ -219,20 +229,25 @@ def eval_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLe
 
     if args.residual_stats:
         stream_stats.all_reduce_()
-        residual_stats.all_reduce_()
-
         if local_rank == 0:
-            th.save(stream_stats, args.output / "stream_stats.pt")
-            th.save(residual_stats, args.output / "residual_stats.pt")
+            th.save(first_token_stats, output_dir / "first_token_stats.pt")
+            th.save(stream_stats, output_dir / "stream_stats.pt")
 
 
 def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedLens):
+    lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
+    print(f"Tuned lens memory usage: {lens_size / 2 ** 20:.2f} MB per GPU")
+
     local_rank = dist.get_rank()
     ddp_lens = DDP(lens, device_ids=[local_rank], find_unused_parameters=True)
     dl = DataLoader(
         data.shuffle(seed=args.seed),  # type: ignore[arg-type]
         batch_size=args.per_gpu_batch_size,
     )
+
+    # Running mean & covariance of the hidden states
+    first_token_stats = ResidualStats()
+    stream_stats = ResidualStats()
 
     if args.wandb and local_rank == 0:
         import wandb
@@ -312,6 +327,12 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
         stream = ResidualStream(
             embeddings=output.hidden_states[0], layers=output.hidden_states[1:-1]
         )
+        if args.residual_stats:
+            first_tokens = stream.map(lambda x: x[:, 0])
+            rest = stream.map(lambda x: x[:, 1:])
+
+            first_token_stats.update(first_tokens)
+            stream_stats.update(rest)
 
         shift = args.token_shift
         if args.loss == "ce":
@@ -320,7 +341,7 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
             # Predict the *next* token by default w/ cross entropy
             if shift is None:
                 shift = 1
-        elif args.loss == "kl":
+        elif args.loss in ("kl", "kl-reverse"):
             labels = final_logits.log_softmax(dim=-1)
 
             # Match the *current* token distribution by default
@@ -336,15 +357,24 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
             # bfloat16 has larger dynamic range than float16 and seems to be better for
             # computing log softmax & KL loss
             with th.autocast("cuda", dtype=th.bfloat16):
-                preds = maybe_shift_preds(ddp_lens(h, idx=i), shift)
+                logits = maybe_shift_preds(ddp_lens(h, idx=i), shift)
 
                 if args.loss == "ce":
                     loss = th.nn.functional.cross_entropy(
-                        preds.flatten(0, -2), labels.flatten()
+                        logits.flatten(0, -2), labels.flatten()
                     )
+
+                # KL(P || Q)
                 elif args.loss == "kl":
                     loss = th.sum(
-                        labels.exp() * (labels - preds.log_softmax(-1)), dim=-1
+                        labels.exp() * (labels - logits.log_softmax(-1)), dim=-1
+                    ).mean()
+
+                # KL(Q || P)
+                elif args.loss == "kl-reverse":
+                    log_probs = logits.log_softmax(-1)
+                    loss = th.sum(
+                        log_probs.exp() * (log_probs.log_softmax(-1) - labels), dim=-1
                     ).mean()
                 else:
                     raise NotImplementedError
@@ -354,12 +384,8 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
 
                 # Add sparsity regularizer
                 if args.lasso:
-                    loss += (
-                        args.lasso
-                        * th.cat([p.flatten() for p in lens[i].parameters()])
-                        .abs()
-                        .sum()
-                    )
+                    param_vec = th.nn.utils.parameters_to_vector(lens[i].parameters())
+                    loss += args.lasso * param_vec.abs().sum()
 
                 scaled_loss = loss / grad_acc_steps
 
@@ -378,9 +404,9 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
                 log_dict = {k: th.stack(v).mean() for k, v in metrics.items()}
 
                 # Log statistics about optimizer & probes
-                for i, l in enumerate(lens):
+                for i, probe in enumerate(lens):
                     name = "input" if i == 0 else f"{i - 1}.ffn"
-                    states = [opt.state[p] for p in l.parameters()]
+                    states = [opt.state[p] for p in probe.parameters()]
 
                     # Approximate the true gradient norm using SGD's moving average
                     log_dict["grad_norm/" + name] = th.cat(
@@ -392,9 +418,9 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
                         ]
                     ).norm()
 
-                    assert isinstance(l, th.nn.Linear)
-                    log_dict["bias_norm/" + name] = l.bias.data.norm()
-                    log_dict["weight_norm/" + name] = l.weight.data.norm()
+                    assert isinstance(probe, th.nn.Linear)
+                    log_dict["bias_norm/" + name] = probe.bias.data.norm()
+                    log_dict["weight_norm/" + name] = probe.weight.data.norm()
 
                 metrics.clear()
                 wandb.log(log_dict)
@@ -407,6 +433,13 @@ def train_loop(args: Namespace, model: th.nn.Module, data: Dataset, lens: TunedL
         print(f"Saving lens to {args.output}")
         lens.save(args.output)
         th.save(opt.state_dict(), args.output / "optimizer.pt")
+
+    if args.residual_stats:
+        first_token_stats.all_reduce_()
+        stream_stats.all_reduce_()
+        if local_rank == 0:
+            th.save(first_token_stats, args.output / "first_token_stats.pt")
+            th.save(stream_stats, args.output / "stream_stats.pt")
 
 
 if __name__ == "__main__":

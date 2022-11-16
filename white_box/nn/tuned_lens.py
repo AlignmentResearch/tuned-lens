@@ -114,7 +114,9 @@ class TunedLens(th.nn.Module):
             yield from self.layer_adapters
 
     @classmethod
-    def load(cls, path: Union[str, Path], ckpt: str = "params.pt") -> "TunedLens":
+    def load(
+        cls, path: Union[str, Path], ckpt: str = "params.pt", **kwargs
+    ) -> "TunedLens":
         """Load a TunedLens from a file."""
         path = Path(path)
 
@@ -124,7 +126,7 @@ class TunedLens(th.nn.Module):
             config.setdefault("include_final", True)  # Backwards compatibility
 
         # Load parameters
-        state = th.load(path / ckpt)
+        state = th.load(path / ckpt, **kwargs)
 
         model = cls(**config)
         model.load_state_dict(state, strict=False)
@@ -148,7 +150,7 @@ class TunedLens(th.nn.Module):
             b -= b.mean()
 
     def transform(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
-        if len(stream) != len(self):
+        if len(self) not in (len(stream) - 1, len(stream)):
             raise ValueError(
                 f"Expected {len(self)} layers, but got {len(stream)} layers."
             )

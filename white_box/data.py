@@ -44,6 +44,36 @@ def chunk_and_tokenize(
     )
 
 
+def compute_nats_to_bpb_ratio(raw: T, tokenized: T) -> float:
+    """Compute the ratio of nats to bits per byte for a given tokenizer.
+
+    This is used to convert the perplexity of a model to bits per byte.
+
+    Args:
+        raw: The raw, unprocessed dataset.
+        tokenized: The tokenized dataset.
+
+    Returns:
+        The ratio of nats to bits per byte.
+    """
+    raw_lengths = raw.map(
+        lambda x: {"length": [len(txt) for txt in x["text"]]},
+        batched=True,
+        remove_columns=get_columns_all_equal(raw),
+    )
+
+    tokenized_lengths = tokenized.map(
+        lambda x: {"length": [len(ids) for ids in x["input_ids"]]},
+        batched=True,
+        remove_columns=get_columns_all_equal(tokenized),
+    )
+
+    raw_length = sum(raw_lengths["length"])
+    tokenized_length = sum(tokenized_lengths["length"])
+
+    return raw_length / tokenized_length
+
+
 def _tokenize_fn(x: dict, tokenizer: PreTrainedTokenizerBase, text_key: str):
     """Annoyingly, we need to use a separate function so it can be hashed correctly."""
     sep = tokenizer.eos_token or "<|endoftext|>"

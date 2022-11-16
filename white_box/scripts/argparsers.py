@@ -40,6 +40,11 @@ def get_lens_parser() -> ArgumentParser:
         help="Number of samples to try to fit on a GPU at once.",
     )
     parent_parser.add_argument(
+        "--residual-stats",
+        action="store_true",
+        help="Save means and covariance matrices for states in the residual stream.",
+    )
+    parent_parser.add_argument(
         "--split", type=str, default="validation", help="Split of the dataset to use."
     )
     parent_parser.add_argument(
@@ -140,11 +145,6 @@ def get_lens_parser() -> ArgumentParser:
         "--output",
         type=Path,
         help="JSON file to save the eval results to.",
-    )
-    eval_parser.add_argument(
-        "--residual-stats",
-        action="store_true",
-        help="Save means and covariance matrices for states in the residual stream.",
     )
 
     return parser

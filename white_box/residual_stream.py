@@ -95,9 +95,7 @@ class ResidualStream:
             raise ValueError("Can't map pairwise without input embeddings")
 
         states = list(self)
-        return self.new_from_list(
-            [fn(s1.to(s2.device), s2) for s1, s2 in zip(states[:-1], states[1:])]
-        )
+        return self.new_from_list(list(starmap(fn, zip(states[:-1], states[1:]))))
 
     def zip_map(self, fn: Callable, *others: "ResidualStream") -> "ResidualStream":
         """Map over corresponding states, returning a new `ResidualStream`."""
@@ -245,7 +243,7 @@ def record_residual_stream(
             if not layer_norms:
                 if sublayers:
                     raise ValueError(
-                        f"No layer norms found in layer {i}; try specifying `norm_class`"
+                        f"No LNs found in layer {i}; try specifying `norm_class`"
                     )
                 else:
                     continue
