@@ -78,40 +78,40 @@ class TunedLens(th.nn.Module):
             assert not rank
             lens = th.nn.utils.parametrizations.orthogonal(lens)
 
-        self.add_module("input_adapter", lens if include_input else None)
-        self.attn_adapters = th.nn.ModuleList(
+        self.add_module("input_probe", lens if include_input else None)
+        self.attn_probes = th.nn.ModuleList(
             [deepcopy(lens) for _ in range(num_layers)] if sublayers else []
         )
         if not include_final:
             num_layers -= 1
 
-        self.layer_adapters = th.nn.ModuleList(
+        self.layer_probes = th.nn.ModuleList(
             [deepcopy(lens) for _ in range(num_layers)]
         )
 
     def __getitem__(self, item: int) -> th.nn.Module:
-        """Get the adapter module at the given index."""
-        if isinstance(self.input_adapter, th.nn.Module):
+        """Get the probe module at the given index."""
+        if isinstance(self.input_probe, th.nn.Module):
             if item == 0:
-                return self.input_adapter
+                return self.input_probe
             else:
                 item -= 1
 
-        if len(self.attn_adapters):
+        if len(self.attn_probes):
             idx, is_layer = divmod(item, 2)
-            return self.layer_adapters[idx] if is_layer else self.attn_adapters[idx]
+            return self.layer_probes[idx] if is_layer else self.attn_probes[idx]
         else:
-            return self.layer_adapters[item]
+            return self.layer_probes[item]
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
-        if isinstance(self.input_adapter, th.nn.Module):
-            yield self.input_adapter
+        if isinstance(self.input_probe, th.nn.Module):
+            yield self.input_probe
 
-        if self.attn_adapters:
-            # Interleave attention adapters with layer adapters
-            yield from chain.from_iterable(zip(self.attn_adapters, self.layer_adapters))
+        if self.attn_probes:
+            # Interleave attention probes with layer probes
+            yield from chain.from_iterable(zip(self.attn_probes, self.layer_probes))
         else:
-            yield from self.layer_adapters
+            yield from self.layer_probes
 
     @classmethod
     def load(
@@ -128,8 +128,15 @@ class TunedLens(th.nn.Module):
         # Load parameters
         state = th.load(path / ckpt, **kwargs)
 
+        # Backwards compatibility
+        keys = list(state.keys())
+        for key in keys:
+            if "adapter" in key:
+                new_key = key.replace("adapter", "probe")
+                state[new_key] = state.pop(key)
+
         model = cls(**config)
-        model.load_state_dict(state, strict=False)
+        model.load_state_dict(state)
         return model
 
     def save(self, path: Union[Path, str], ckpt: str = "params.pt") -> None:
@@ -150,9 +157,10 @@ class TunedLens(th.nn.Module):
             b -= b.mean()
 
     def transform(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
-        if len(self) not in (len(stream) - 1, len(stream)):
+        expected_len = len(self) + (not self.config["include_final"])
+        if len(stream) != expected_len:
             raise ValueError(
-                f"Expected {len(self)} layers, but got {len(stream)} layers."
+                f"Expected {expected_len} layers, but got {len(stream)} layers."
             )
 
         return stream.new_from_list(list(self.map(stream, logits=logits)))
@@ -177,14 +185,14 @@ class TunedLens(th.nn.Module):
         if any(p.requires_grad for p in self.parameters(recurse=False)):
             raise RuntimeError("Make sure to freeze the decoder")
 
-        for adapter, item in zip(self, hiddens):
+        for probe, item in zip(self, hiddens):
             if isinstance(item, th.Tensor):
-                h = item + adapter(item)
+                h = item + probe(item)
                 yield self.decode(h) if logits else h
 
             elif isinstance(item, tuple):
                 name, h = item
-                h = h + adapter(h)
+                h = h + probe(h)
                 yield name, self.decode(h) if logits else h
             else:
                 raise TypeError(f"Unexpected type {type(item)}")
@@ -202,8 +210,8 @@ class TunedLens(th.nn.Module):
         return self.decode(h + self[idx](h))
 
     def __len__(self) -> int:
-        N = len(self.attn_adapters) + len(self.layer_adapters)
-        if self.input_adapter:
+        N = len(self.attn_probes) + len(self.layer_probes)
+        if self.input_probe:
             N += 1
 
         return N
