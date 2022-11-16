@@ -22,14 +22,14 @@ def test_logit_stats_correctness():
     assert kl_divergence(x, x2) < 1e-3
 
 
-@pytest.mark.parametrize(
-    "config",
-    [
-        ("cpu", th.float32),
-        ("cuda", th.float16),
-        ("cuda", th.float32),
-    ],
-)
+CONFIGS: list[tuple[str, th.dtype]] = [("cpu", th.float32)]
+if th.cuda.is_available():
+    # Don't require CUDA for tests
+    CONFIGS.append(("cuda", th.float16))
+    CONFIGS.append(("cuda", th.float32))
+
+
+@pytest.mark.parametrize("config", CONFIGS)
 def test_residual_stats_correctness(config):
     """Test that the `ResidualStats` mean and covariance are correct."""
     device, dtype = config
