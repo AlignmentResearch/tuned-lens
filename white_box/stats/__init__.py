@@ -1,3 +1,4 @@
+from .dimensionality import effective_rank
 from .distance import (
     gaussian_wasserstein_l2,
     gaussian_wasserstein_l2_origin,

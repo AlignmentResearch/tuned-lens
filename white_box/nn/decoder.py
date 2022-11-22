@@ -28,6 +28,7 @@ class InversionOutput:
     preimage: th.Tensor
     kl: th.Tensor
     loss: th.Tensor
+    grad_norm: th.Tensor
     hessian: Optional[th.Tensor]
 
     nfev: int
@@ -101,12 +102,31 @@ class Decoder(th.nn.Module):
 
         return self.unembedding(self.layer_norm(h))
 
+    def metric_tensor(
+        self, h: th.Tensor, lens: Optional[th.nn.Module] = None
+    ) -> th.Tensor:
+        """Evaluate the pullback of the Fisher information metric at the point `h`."""
+        # The Fisher-Rao metric tensor is the Hessian of the KL divergence
+        import functorch as fth
+
+        hess_fn = fth.hessian(
+            lambda h_p, h_q: kl_divergence(self(h_p, lens=lens), self(h_q, lens=lens)),
+            argnums=1,
+        )
+        if len(h.shape) == 2:
+            hess_fn = fth.vmap(hess_fn)
+
+        hess = hess_fn(h, h)
+        assert isinstance(hess, th.Tensor)
+        return hess
+
     def back_translate(
         self, h: th.Tensor, lens: Optional[th.nn.Module] = None
     ) -> th.Tensor:
         """Project hidden states into logits and then back into hidden states."""
         scale = h.norm(dim=-1, keepdim=True) / h.shape[-1] ** 0.5
-        return self.invert(self(h, lens=lens).preimage) * scale
+        logits = self(h, lens=lens)
+        return self.invert(logits, h0=th.randn_like(h)).preimage * scale
 
     def invert(
         self,
@@ -147,16 +167,13 @@ class Decoder(th.nn.Module):
             tolerance_change=tol,
         )
         log_p = logits.log_softmax(dim=-1)
+        p = log_p.exp()
+        if weight is not None:
+            p *= weight
 
         def compute_loss(h: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
             log_q = self(h + lens(h) if lens else h).log_softmax(-1)
-            q = log_q.exp()
-            if weight is not None:
-                q *= weight
-
-            H_q = -th.sum(q * log_q, dim=-1)
-            H_q_p = -th.sum(q * log_p, dim=-1)
-            kl = H_q_p.mean() - H_q.mean()
+            kl = th.sum(p * (log_p - log_q), dim=-1).mean()
             loss = kl.clone()
 
             for aux_loss in aux_losses:
@@ -169,10 +186,7 @@ class Decoder(th.nn.Module):
 
                 # This is a KL-divergence objective
                 elif aux_loss.target_logits is not None:
-                    loss += scale * kl_divergence(
-                        aux_loss.target_logits,
-                        logits,
-                    )
+                    loss += scale * kl_divergence(logits, aux_loss.target_logits)
                 else:
                     raise ValueError("Auxiliary loss has no target.")
 
@@ -200,10 +214,14 @@ class Decoder(th.nn.Module):
         opt.step(closure)  # type: ignore
 
         with th.no_grad():
+            final_grad = h_star.grad
+            assert final_grad is not None
+
             output = InversionOutput(
                 preimage=self.layer_norm(h_star.data),
                 kl=kl.detach(),
                 loss=loss.detach(),
+                grad_norm=final_grad.norm().detach(),
                 hessian=None,
                 nfev=nfev,
             )
