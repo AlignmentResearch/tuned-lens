@@ -66,27 +66,27 @@ class TunedLens(th.nn.Module):
         self.unembedding.requires_grad_(False)
 
         if rank:
-            lens = LowRankLinear(d_model, d_model, rank, bias=bias)
+            probe = LowRankLinear(d_model, d_model, rank, bias=bias)
         else:
-            lens = th.nn.Linear(d_model, d_model, bias=bias)
+            probe = th.nn.Linear(d_model, d_model, bias=bias)
             if identity_init:
-                lens.weight.data.zero_()
-                lens.bias.data.zero_()
+                probe.weight.data.zero_()
+                probe.bias.data.zero_()
 
         # Enforce orthogonality with matrix exponential parametrization
         if orthogonal:
             assert not rank
-            lens = th.nn.utils.parametrizations.orthogonal(lens)
+            probe = th.nn.utils.parametrizations.orthogonal(probe)
 
-        self.add_module("input_probe", lens if include_input else None)
+        self.add_module("input_probe", probe if include_input else None)
         self.attn_probes = th.nn.ModuleList(
-            [deepcopy(lens) for _ in range(num_layers)] if sublayers else []
+            [deepcopy(probe) for _ in range(num_layers)] if sublayers else []
         )
         if not include_final:
             num_layers -= 1
 
         self.layer_probes = th.nn.ModuleList(
-            [deepcopy(lens) for _ in range(num_layers)]
+            [deepcopy(probe) for _ in range(num_layers)]
         )
 
     def __getitem__(self, item: int) -> th.nn.Module:

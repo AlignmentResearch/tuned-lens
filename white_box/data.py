@@ -4,6 +4,7 @@ from multiprocessing import cpu_count
 from transformers import PreTrainedTokenizerBase
 from typing import TypeVar, Union
 import logging
+import math
 
 
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
@@ -45,7 +46,7 @@ def chunk_and_tokenize(
 
 
 def compute_nats_to_bpb_ratio(raw: T, tokenized: T) -> float:
-    """Compute the ratio of nats to bits per byte for a given tokenizer.
+    """Compute ratio of nats per token to bits per byte for a given tokenizer.
 
     This is used to convert the perplexity of a model to bits per byte.
 
@@ -56,22 +57,24 @@ def compute_nats_to_bpb_ratio(raw: T, tokenized: T) -> float:
     Returns:
         The ratio of nats to bits per byte.
     """
-    raw_lengths = raw.map(
-        lambda x: {"length": [len(txt) for txt in x["text"]]},
+    byte_counts = raw.map(
+        lambda x: {"length": [len(txt.encode("utf-8")) for txt in x["text"]]},
         batched=True,
+        num_proc=cpu_count() // 2,
         remove_columns=get_columns_all_equal(raw),
     )
 
-    tokenized_lengths = tokenized.map(
+    token_counts = tokenized.map(
         lambda x: {"length": [len(ids) for ids in x["input_ids"]]},
         batched=True,
+        num_proc=cpu_count() // 2,
         remove_columns=get_columns_all_equal(tokenized),
     )
+    total_bytes = sum(byte_counts["length"])  # type: ignore[operator]
+    total_tokens = sum(token_counts["length"])  # type: ignore[operator]
 
-    raw_length = sum(raw_lengths["length"])
-    tokenized_length = sum(tokenized_lengths["length"])
-
-    return raw_length / tokenized_length
+    # See https://arxiv.org/pdf/2101.00027.pdf, section 3.1
+    return (total_tokens / total_bytes) / math.log(2)
 
 
 def _tokenize_fn(x: dict, tokenizer: PreTrainedTokenizerBase, text_key: str):
