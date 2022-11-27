@@ -82,6 +82,9 @@ def get_lens_parser() -> ArgumentParser:
 
     # Training-only arguments
     train_parser.add_argument(
+        "--dropout", type=float, default=0.0, help="Dropout prob for lens inputs."
+    )
+    train_parser.add_argument(
         "--lasso", type=float, default=0.0, help="LASSO (L1) regularization strength."
     )
     train_parser.add_argument(
@@ -99,6 +102,13 @@ def get_lens_parser() -> ArgumentParser:
         type=float,
         default=1.0,
         help="The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this factor.",
+    )
+    train_parser.add_argument(
+        "--mlp-hidden-sizes",
+        type=int,
+        nargs="+",
+        default=[],
+        help="Hidden sizes of the MLPs used in the probes.",
     )
     train_parser.add_argument(
         "--momentum",
@@ -133,6 +143,13 @@ def get_lens_parser() -> ArgumentParser:
         "--resume", type=Path, help="File to resume training from."
     )
     train_parser.add_argument(
+        "--shared-mlp-hidden-sizes",
+        type=int,
+        nargs="+",
+        default=[],
+        help="Hidden sizes of the MLP shared by all probes.",
+    )
+    train_parser.add_argument(
         "--sublayers",
         action="store_true",
         help="Train tuned lenses for attention blocks.",
@@ -150,6 +167,9 @@ def get_lens_parser() -> ArgumentParser:
     )
     train_parser.add_argument(
         "--wandb", type=str, help="Name of run in Weights & Biases."
+    )
+    train_parser.add_argument(
+        "--warmup-steps", type=int, default=0, help="Number of warmup steps."
     )
     train_parser.add_argument(
         "--weight-decay", type=float, default=0.01, help="Weight decay coefficient."

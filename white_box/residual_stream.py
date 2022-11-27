@@ -3,9 +3,9 @@ from dataclasses import dataclass, field
 from itertools import starmap, zip_longest
 
 from .model_surgery import get_transformer_layers
-from torch.distributed import all_reduce, get_world_size
 from typing import Callable, Generator, Optional, overload, Type, Union
 import torch as th
+import torch.distributed as dist
 
 
 @dataclass
@@ -26,10 +26,13 @@ class ResidualStream:
         return first.zip_map(lambda *tensors: th.stack(tensors), *rest)
 
     def all_reduce_(self):
-        """All-reduce all states."""
+        """All-reduce all states across workers if needed."""
+        if not dist.is_initialized():
+            return
+
         for state in self:
-            all_reduce(state)
-            state /= get_world_size()
+            dist.all_reduce(state)
+            state /= dist.get_world_size()
 
     def clear(self) -> None:
         """Clear all residual states."""

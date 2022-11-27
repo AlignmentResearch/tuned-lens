@@ -13,6 +13,21 @@ def maybe_all_cat(x: th.Tensor) -> th.Tensor:
     return buffer
 
 
+def maybe_all_reduce(x: th.Tensor, op: str = "sum") -> th.Tensor:
+    if not dist.is_initialized():
+        return x
+
+    if op == "sum":
+        dist.all_reduce(x, op=dist.ReduceOp.SUM)
+    elif op == "mean":
+        dist.all_reduce(x, op=dist.ReduceOp.SUM)
+        x /= dist.get_world_size()
+    else:
+        raise ValueError(f"Unknown reduction op '{op}'")
+
+    return x
+
+
 def maybe_shift_labels(x: th.Tensor, shift: int):
     if shift > 0:
         return x[:, shift:]

@@ -4,11 +4,16 @@ from datasets import Dataset
 from itertools import islice
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from transformers import get_linear_schedule_with_warmup
 from white_box import ResidualStats, ResidualStream, TunedLens
-from white_box.utils import maybe_shift_labels, maybe_shift_preds, send_to_device
+from white_box.utils import (
+    maybe_all_reduce,
+    maybe_shift_labels,
+    maybe_shift_preds,
+    send_to_device,
+)
 import torch as th
 import torch.distributed as dist
 
@@ -23,8 +28,13 @@ def train_loop(
     lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
     print(f"Tuned lens memory usage: {lens_size / 2 ** 20:.2f} MB per GPU")
 
-    local_rank = dist.get_rank()
-    ddp_lens = DDP(lens, device_ids=[local_rank], find_unused_parameters=True)
+    local_rank = dist.get_rank() if dist.is_initialized() else 0
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+    if world_size > 1:
+        ddp_lens = DDP(lens, device_ids=[local_rank], find_unused_parameters=True)
+    else:
+        ddp_lens = lens
+
     dl = DataLoader(
         data.shuffle(seed=args.seed),  # type: ignore[arg-type]
         batch_size=args.per_gpu_batch_size,
@@ -55,9 +65,6 @@ def train_loop(
             momentum=β,
             # Empirically Nesterov momentum seems to improve convergence speed.
             nesterov=True,
-            # Training a lens is only weakly convex, with near-zero eigenvalues in the
-            # Hessian spectrum. Without weight decay, unimportant parameters tend to
-            # "drift" away from their zero initialization.
             weight_decay=args.weight_decay,
         )
         opt_class = th.optim.SGD
@@ -73,16 +80,15 @@ def train_loop(
     else:
         raise ValueError(f"Unknown optimizer '{args.optimizer}'")
 
-    # It turns out to be pretty important to use SGD with momentum and not Adam. Since
-    # we zero-initialize the probes, we start out with relatively small grad norms, and
-    # Adam's adaptive learning rate bumps up the step size way too much.
     if args.zero:
         opt = ZeroRedundancyOptimizer(params, optimizer_class=opt_class, **config)
     else:
         opt = opt_class(params, **config)  # type: ignore[call-arg]
 
     # Simple linear LR decay schedule
-    scheduler = LambdaLR(opt, lambda t: 1 - t / args.num_steps)
+    scheduler = get_linear_schedule_with_warmup(
+        opt, args.warmup_steps, args.num_steps - args.warmup_steps
+    )
     if args.resume:
         assert args.resume.is_dir()
 
@@ -108,7 +114,7 @@ def train_loop(
     print(f"Using {args.tokens_per_step:_} tokens per training step.")
 
     # TODO: Make this do the right thing when there's a remainder
-    global_batch_size = args.per_gpu_batch_size * dist.get_world_size()
+    global_batch_size = args.per_gpu_batch_size * world_size
     grad_acc_steps = samples_per_step // global_batch_size
 
     metrics = defaultdict(list)
@@ -179,9 +185,8 @@ def train_loop(
 
                 # Log the loss *before* LASSO regularization
                 logging_loss = loss.detach()
-                dist.all_reduce(logging_loss)
+                maybe_all_reduce(logging_loss, "mean")
                 if local_rank == 0:
-                    logging_loss /= dist.get_world_size()
                     metrics[f"loss/{name}"].append(logging_loss)
 
                 # Add sparsity regularizer
@@ -227,15 +232,15 @@ def train_loop(
                             [s["exp_avg"].flatten() / corr for s in states]
                         ).norm()
 
-                    assert isinstance(probe, th.nn.Linear)
-                    log_dict["bias_norm/" + name] = probe.bias.data.norm()
-                    log_dict["weight_norm/" + name] = probe.weight.data.norm()
+                    if isinstance(probe, th.nn.Linear):
+                        log_dict["bias_norm/" + name] = probe.bias.data.norm()
+                        log_dict["weight_norm/" + name] = probe.weight.data.norm()
 
                 metrics.clear()
                 wandb.log(log_dict)
 
         # Make the problem strictly convex with projected gradient descent,
-        # centering the affine transform and normalizing the scale
+        # centering the affine transform at each step
         lens.normalize_()
 
     if local_rank == 0:

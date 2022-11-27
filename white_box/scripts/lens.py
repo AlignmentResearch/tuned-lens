@@ -20,7 +20,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
-from argparsers import get_lens_parser
+from white_box.scripts import get_lens_parser
 from white_box import ResidualStats, ResidualStream, TunedLens
 from white_box.data import (
     chunk_and_tokenize,
@@ -37,15 +37,13 @@ from white_box.utils import (
 )
 from white_box.scripts import train_loop
 import json
+import os
 import torch as th
 import torch.distributed as dist
 
 
-dist.init_process_group("nccl")
-local_rank = dist.get_rank()
-
-
 def main(args):
+    local_rank = dist.get_rank() if dist.is_initialized() else 0
     print("Loading model...")
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer or args.model_name)
@@ -64,7 +62,8 @@ def main(args):
     processed = chunk_and_tokenize(dataset, tokenizer, text_key=args.text_column)
     nats_to_bpb = compute_nats_to_bpb_ratio(dataset, processed)
     assert isinstance(processed, Dataset)
-    processed = processed.shard(dist.get_world_size(), local_rank)
+    if dist.is_initialized():
+        processed = processed.shard(dist.get_world_size(), local_rank)
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
@@ -79,19 +78,23 @@ def main(args):
 
     # Can be set either in eval or in training; in eval it's required
     if args.lens:
-        lens = TunedLens.load(args.lens).half().cuda(local_rank)
+        lens = TunedLens.load(args.lens, map_location="cpu")
     else:
-        lens = (
-            TunedLens(
-                model,
-                include_final=args.train_final_lens,
-                orthogonal=args.orthogonal,
-                rank=args.rank,
-                sublayers=args.sublayers,
-            )
-            .to(dtype=th.float16 if args.lens_dtype == "float16" else th.float32)
-            .cuda(local_rank)
+        lens = TunedLens(
+            model,
+            dropout=args.dropout,
+            include_final=args.train_final_lens,
+            mlp_hidden_sizes=args.mlp_hidden_sizes,
+            orthogonal=args.orthogonal,
+            rank=args.rank,
+            shared_mlp_hidden_sizes=args.shared_mlp_hidden_sizes,
+            sublayers=args.sublayers,
+        ).to(
+            dtype=th.float16 if args.lens_dtype == "float16" else th.float32,
         )
+
+    lens = lens.to(device=th.device("cuda", local_rank))
+    print(f"Using lens with config: {json.dumps(lens.config, indent=2)}")
 
     if args.fsdp:
         _, layers = get_transformer_layers(model)
@@ -133,11 +136,12 @@ def eval_loop(
     lens: TunedLens,
     nats_to_bpb: float,
 ):
-    local_rank = dist.get_rank()
+    local_rank = dist.get_rank() if dist.is_initialized() else 0
     dl = DataLoader(
         data.shuffle(seed=args.seed),  # type: ignore[arg-type],
         batch_size=args.per_gpu_batch_size,
     )
+    lens.eval()
 
     # Running mean & covariance of the hidden states
     first_token_stats = ResidualStats()
@@ -176,7 +180,7 @@ def eval_loop(
 
             baseline_dict[name].append(
                 th.nn.functional.cross_entropy(
-                    maybe_shift_preds(lens.decode(h), 1).flatten(0, 1),
+                    maybe_shift_preds(lens.to_logits(h), 1).flatten(0, 1),
                     labels,
                     reduction="none",
                 )
@@ -203,7 +207,7 @@ def eval_loop(
         k: maybe_all_cat(th.cat(v)) * nats_to_bpb for k, v in baseline_dict.items()
     }
     ces = {k: maybe_all_cat(th.cat(v)) * nats_to_bpb for k, v in ce_dict.items()}
-    kls = {k: maybe_all_cat(th.cat(v)) for k, v in kl_dict.items()}
+    kls = {k: maybe_all_cat(th.cat(v)) * nats_to_bpb for k, v in kl_dict.items()}
     final_loss = maybe_all_cat(th.stack(final_losses)) * nats_to_bpb
 
     output_dir = args.output or args.lens
@@ -237,6 +241,11 @@ def eval_loop(
 if __name__ == "__main__":
     parser = get_lens_parser()
 
+    # Support both distributed and non-distributed training
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is not None:
+        dist.init_process_group("nccl")
+
     # Only print on rank 0
-    with nullcontext() if local_rank == 0 else redirect_stdout(None):
+    with nullcontext() if not local_rank else redirect_stdout(None):
         main(parser.parse_args())

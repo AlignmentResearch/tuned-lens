@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from torch.autograd.functional import hessian
 from torch.distributions import Distribution
 from transformers import PreTrainedModel
-from typing import cast, Optional, Sequence
+from typing import cast, Callable, Optional, Sequence
 from white_box.model_surgery import get_final_layer_norm
 from white_box.stats import kl_divergence
 import torch as th
@@ -61,7 +61,7 @@ class Decoder(th.nn.Module):
         )
 
         # Roll the LN bias into our unembedding Linear
-        gamma, beta = raw_ln.weight.data, raw_ln.bias.data
+        gamma, beta = raw_ln.weight.data.float(), raw_ln.bias.data.float()
         if isinstance(beta, th.Tensor):
             bias = beta @ U.T
             bias -= bias.mean()  # Shift invariance of softmax
@@ -95,24 +95,23 @@ class Decoder(th.nn.Module):
         # In general we don't want to finetune the decoder
         self.requires_grad_(False)
 
-    def forward(self, h: th.Tensor, lens: Optional[th.nn.Module] = None) -> th.Tensor:
+    def forward(self, h: th.Tensor, transform: Callable = lambda x: x) -> th.Tensor:
         """Convert hidden states into logits."""
-        if lens is not None:
-            h = h + lens(h)
-
-        return self.unembedding(self.layer_norm(h))
+        return self.unembedding(self.layer_norm(transform(h)))
 
     def metric_tensor(
-        self, h: th.Tensor, lens: Optional[th.nn.Module] = None
+        self, h: th.Tensor, transform: Callable = lambda x: x
     ) -> th.Tensor:
         """Evaluate the pullback of the Fisher information metric at the point `h`."""
         # The Fisher-Rao metric tensor is the Hessian of the KL divergence
         import functorch as fth
 
-        hess_fn = fth.hessian(
-            lambda h_p, h_q: kl_divergence(self(h_p, lens=lens), self(h_q, lens=lens)),
-            argnums=1,
-        )
+        def kl_fn(h_p: th.Tensor, h_q: th.Tensor) -> th.Tensor:
+            p = self(h_p, transform=transform)
+            q = self(h_q, transform=transform)
+            return kl_divergence(p, q)
+
+        hess_fn = fth.hessian(kl_fn, argnums=1)
         if len(h.shape) == 2:
             hess_fn = fth.vmap(hess_fn)
 
@@ -121,11 +120,11 @@ class Decoder(th.nn.Module):
         return hess
 
     def back_translate(
-        self, h: th.Tensor, lens: Optional[th.nn.Module] = None
+        self, h: th.Tensor, transform: Callable = lambda x: x
     ) -> th.Tensor:
         """Project hidden states into logits and then back into hidden states."""
         scale = h.norm(dim=-1, keepdim=True) / h.shape[-1] ** 0.5
-        logits = self(h, lens=lens)
+        logits = self(h, transform=transform)
         return self.invert(logits, h0=th.randn_like(h)).preimage * scale
 
     def invert(
@@ -135,7 +134,7 @@ class Decoder(th.nn.Module):
         aux_losses: Sequence[AuxiliaryLoss] = (),
         compute_hessian: bool = False,
         h0: Optional[th.Tensor] = None,
-        lens: Optional[th.nn.Module] = None,
+        transform: Callable = lambda x: x,
         max_iter: int = 1000,
         prior_weight: float = 0.0,
         prior: Optional[Distribution] = None,
@@ -172,8 +171,8 @@ class Decoder(th.nn.Module):
             p *= weight
 
         def compute_loss(h: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
-            log_q = self(h + lens(h) if lens else h).log_softmax(-1)
-            kl = th.sum(p * (log_p - log_q), dim=-1).mean()
+            log_q = self(transform(h)).log_softmax(-1)
+            kl = th.sum(p * (log_p - log_q), dim=-1).nanmean()
             loss = kl.clone()
 
             for aux_loss in aux_losses:
@@ -202,26 +201,36 @@ class Decoder(th.nn.Module):
         nfev = 0
         loss, kl = log_p.new_tensor(th.inf), log_p.new_tensor(th.inf)
 
-        def closure() -> th.Tensor:
+        def closure():
             nonlocal nfev, loss, kl
             nfev += 1
 
             opt.zero_grad()
             loss, kl = compute_loss(h_star)
-            loss.backward()
-            return loss
+            if loss.isfinite():
+                loss.backward()
+                return loss
+            else:
+                return 0.0
 
+        grad_norm = log_p.new_tensor(th.inf)
         opt.step(closure)  # type: ignore
+        while nfev < max_iter:
+            opt.step(closure)  # type: ignore
 
-        with th.no_grad():
             final_grad = h_star.grad
             assert final_grad is not None
 
+            grad_norm = final_grad.norm()
+            if grad_norm < tol or loss < tol:
+                break
+
+        with th.no_grad():
             output = InversionOutput(
                 preimage=self.layer_norm(h_star.data),
                 kl=kl.detach(),
                 loss=loss.detach(),
-                grad_norm=final_grad.norm().detach(),
+                grad_norm=grad_norm,
                 hessian=None,
                 nfev=nfev,
             )
