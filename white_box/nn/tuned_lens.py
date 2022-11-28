@@ -4,9 +4,11 @@ from pathlib import Path
 
 from ..model_surgery import get_final_layer_norm
 from ..residual_stream import ResidualStream
+from ..utils import pairwise
 from . import LowRankLinear
 from transformers import PreTrainedModel
-from typing import Generator, Iterable, Optional, Union, overload
+from typing import Generator, Iterable, Optional, Sequence, Union, overload
+import inspect
 import json
 import torch as th
 
@@ -19,11 +21,12 @@ class TunedLens(th.nn.Module):
         model: Optional[PreTrainedModel] = None,
         *,
         bias: bool = True,
+        dropout: float = 0.0,
         identity_init: bool = True,
         include_input: bool = True,
-        include_final: bool = False,
-        orthogonal: bool = False,
+        mlp_hidden_sizes: Sequence[int] = (),
         rank: Optional[int] = None,
+        shared_mlp_hidden_sizes: Sequence[int] = (),
         sublayers: bool = True,
         # Automatically set for HuggingFace models
         d_model: Optional[int] = None,
@@ -65,28 +68,44 @@ class TunedLens(th.nn.Module):
         self.layer_norm.requires_grad_(False)
         self.unembedding.requires_grad_(False)
 
-        if rank:
-            lens = LowRankLinear(d_model, d_model, rank, bias=bias)
+        def create_mlp(sizes: Sequence[int]) -> th.nn.Sequential:
+            sizes = [d_model, *mlp_hidden_sizes, d_model]
+            mlp = th.nn.Sequential()
+            if dropout:
+                mlp.append(th.nn.Dropout(dropout))
+
+            for i, j in pairwise(sizes):
+                layer = th.nn.Linear(i, j, bias=bias)
+                layer.bias.data.zero_()
+                mlp.extend([layer, th.nn.GELU()])
+
+            mlp.pop(-1)
+            mlp[-1].weight.data.zero_()
+            return mlp
+
+        if mlp_hidden_sizes:
+            probe = create_mlp(mlp_hidden_sizes)
+        elif rank:
+            probe = LowRankLinear(d_model, d_model, rank, bias=bias)
         else:
-            lens = th.nn.Linear(d_model, d_model, bias=bias)
+            probe = th.nn.Linear(d_model, d_model, bias=bias)
             if identity_init:
-                lens.weight.data.zero_()
-                lens.bias.data.zero_()
+                probe.weight.data.zero_()
+                probe.bias.data.zero_()
 
-        # Enforce orthogonality with matrix exponential parametrization
-        if orthogonal:
-            assert not rank
-            lens = th.nn.utils.parametrizations.orthogonal(lens)
-
-        self.add_module("input_probe", lens if include_input else None)
+        self.add_module("input_probe", probe if include_input else None)
         self.attn_probes = th.nn.ModuleList(
-            [deepcopy(lens) for _ in range(num_layers)] if sublayers else []
+            [deepcopy(probe) for _ in range(num_layers)] if sublayers else []
         )
-        if not include_final:
-            num_layers -= 1
+        # Don't include the final layer
+        num_layers -= 1
 
         self.layer_probes = th.nn.ModuleList(
-            [deepcopy(lens) for _ in range(num_layers)]
+            [deepcopy(probe) for _ in range(num_layers)]
+        )
+        self.add_module(
+            "shared_mlp",
+            create_mlp(shared_mlp_hidden_sizes) if shared_mlp_hidden_sizes else None,
         )
 
     def __getitem__(self, item: int) -> th.nn.Module:
@@ -123,17 +142,16 @@ class TunedLens(th.nn.Module):
         # Load config
         with open(path / "config.json", "r") as f:
             config = json.load(f)
-            config.setdefault("include_final", True)  # Backwards compatibility
 
         # Load parameters
         state = th.load(path / ckpt, **kwargs)
 
-        # Backwards compatibility
-        keys = list(state.keys())
-        for key in keys:
-            if "adapter" in key:
-                new_key = key.replace("adapter", "probe")
-                state[new_key] = state.pop(key)
+        # Drop unrecognized config keys
+        recognized = set(inspect.getfullargspec(cls).kwonlyargs)
+        for key in config:
+            if key not in recognized:
+                print(f"TunedLens.load: ignoring config key '{key}'")
+                del config[key]
 
         model = cls(**config)
         model.load_state_dict(state)
@@ -149,6 +167,9 @@ class TunedLens(th.nn.Module):
 
     def normalize_(self):
         """Canonicalize the transforms by centering their weights and biases."""
+        if self.config["mlp_hidden_sizes"]:
+            return
+
         for linear in self:
             assert isinstance(linear, th.nn.Linear)
 
@@ -157,13 +178,23 @@ class TunedLens(th.nn.Module):
             b -= b.mean()
 
     def transform(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
-        expected_len = len(self) + (not self.config["include_final"])
+        # We don't transform the final layer hidden state
+        expected_len = len(self) + 1
         if len(stream) != expected_len:
             raise ValueError(
                 f"Expected {expected_len} layers, but got {len(stream)} layers."
             )
 
         return stream.new_from_list(list(self.map(stream, logits=logits)))
+
+    def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
+        """Transform hidden state from layer `idx`."""
+        h = h + self[idx](h)
+        if isinstance(self.shared_mlp, th.nn.Module):
+            h = th.nn.functional.layer_norm(h, (h.shape[-1],))
+            h = h + self.shared_mlp(h)
+
+        return h
 
     @overload
     def map(
@@ -185,19 +216,19 @@ class TunedLens(th.nn.Module):
         if any(p.requires_grad for p in self.parameters(recurse=False)):
             raise RuntimeError("Make sure to freeze the decoder")
 
-        for probe, item in zip(self, hiddens):
+        for i, item in enumerate(hiddens):
             if isinstance(item, th.Tensor):
-                h = item + probe(item)
-                yield self.decode(h) if logits else h
+                h = item + self.transform_hidden(item, i)
+                yield self.to_logits(h) if logits else h
 
             elif isinstance(item, tuple):
                 name, h = item
-                h = h + probe(h)
-                yield name, self.decode(h) if logits else h
+                h = h + self.transform_hidden(h, i)
+                yield name, self.to_logits(h) if logits else h
             else:
                 raise TypeError(f"Unexpected type {type(item)}")
 
-    def decode(self, h: th.Tensor) -> th.Tensor:
+    def to_logits(self, h: th.Tensor) -> th.Tensor:
         """Decode a hidden state into logits."""
         return self.unembedding(self.layer_norm(h))
 
@@ -207,7 +238,8 @@ class TunedLens(th.nn.Module):
         if any(p.requires_grad for p in self.parameters(recurse=False)):
             raise RuntimeError("Make sure to freeze the decoder")
 
-        return self.decode(h + self[idx](h))
+        h = self.transform_hidden(h, idx)
+        return self.to_logits(h)
 
     def __len__(self) -> int:
         N = len(self.attn_probes) + len(self.layer_probes)

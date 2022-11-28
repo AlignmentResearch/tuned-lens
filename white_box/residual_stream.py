@@ -3,9 +3,9 @@ from dataclasses import dataclass, field
 from itertools import starmap, zip_longest
 
 from .model_surgery import get_transformer_layers
-from torch.distributed import all_reduce, get_world_size
 from typing import Callable, Generator, Optional, overload, Type, Union
 import torch as th
+import torch.distributed as dist
 
 
 @dataclass
@@ -26,10 +26,13 @@ class ResidualStream:
         return first.zip_map(lambda *tensors: th.stack(tensors), *rest)
 
     def all_reduce_(self):
-        """All-reduce all states."""
+        """All-reduce all states across workers if needed."""
+        if not dist.is_initialized():
+            return
+
         for state in self:
-            all_reduce(state)
-            state /= get_world_size()
+            dist.all_reduce(state)
+            state /= dist.get_world_size()
 
     def clear(self) -> None:
         """Clear all residual states."""
@@ -180,7 +183,7 @@ def record_residual_stream(
     norm_class: Type[th.nn.Module] = th.nn.LayerNorm,
     post_norm: bool = False,
     retain_grads: bool = False,
-    sublayers: Optional[bool] = None,
+    sublayers: bool = False,
 ) -> Generator[ResidualStream, None, None]:
     """Record every state of the residual stream in a transformer forward pass.
 
@@ -197,8 +200,7 @@ def record_residual_stream(
         norm_class: The class of normalization layer to record.
         post_norm: Whether the transformer uses LayerNorm after residual connections.
         retain_grads: Whether to retain gradients for the recorded states.
-        sublayers: Whether to record attention and layer outputs separately. If `None`,
-            this will be inferred from the number of layer norms in the model.
+        sublayers: Whether to record attention and layer outputs separately.
     """
     hooks = []
     residual_stream = ResidualStream()
@@ -238,7 +240,7 @@ def record_residual_stream(
         hooks.append(layer.register_forward_hook(store_layer))
 
         # For sublayers=True, we need to hook into one of the layer norms in this layer
-        if sublayers is not False:
+        if sublayers:
             layer_norms = [m for m in layer.modules() if isinstance(m, norm_class)]
             if not layer_norms:
                 if sublayers:

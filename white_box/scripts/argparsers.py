@@ -45,6 +45,15 @@ def get_lens_parser() -> ArgumentParser:
         help="Save means and covariance matrices for states in the residual stream.",
     )
     parent_parser.add_argument(
+        "--revision",
+        type=str,
+        default="main",
+        help="Git revision to use for pretrained models.",
+    )
+    parent_parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for data shuffling."
+    )
+    parent_parser.add_argument(
         "--split", type=str, default="validation", help="Split of the dataset to use."
     )
     parent_parser.add_argument(
@@ -73,10 +82,7 @@ def get_lens_parser() -> ArgumentParser:
 
     # Training-only arguments
     train_parser.add_argument(
-        "--grad-acc-steps",
-        type=int,
-        default=1,
-        help="Number of gradient accumulation steps.",
+        "--dropout", type=float, default=0.0, help="Dropout prob for lens inputs."
     )
     train_parser.add_argument(
         "--lasso", type=float, default=0.0, help="LASSO (L1) regularization strength."
@@ -84,17 +90,41 @@ def get_lens_parser() -> ArgumentParser:
     train_parser.add_argument(
         "--lens", type=Path, help="Directory containing a lens to warm-start training."
     )
-    train_parser.add_argument("--lr", type=float, default=1.0, help="Learning rate.")
     train_parser.add_argument(
-        "--momentum", type=float, default=0.9, help="Momentum coefficient for SGD."
+        "--lens-dtype",
+        type=str,
+        default="float32",
+        choices=("float16", "float32"),
+        help="dtype of lens weights.",
+    )
+    train_parser.add_argument(
+        "--lr-scale",
+        type=float,
+        default=1.0,
+        help="The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this factor.",
+    )
+    train_parser.add_argument(
+        "--mlp-hidden-sizes",
+        type=int,
+        nargs="+",
+        default=[],
+        help="Hidden sizes of the MLPs used in the probes.",
+    )
+    train_parser.add_argument(
+        "--momentum",
+        type=float,
+        default=0.9,
+        help="Momentum coefficient for SGD, or beta1 for Adam.",
     )
     train_parser.add_argument(
         "--num-steps", type=int, default=100, help="Number of training steps."
     )
     train_parser.add_argument(
-        "--orthogonal",
-        action="store_true",
-        help="Parametrize the tuned lenses as rotation matrices.",
+        "--optimizer",
+        type=str,
+        default="sgd",
+        choices=("adam", "sgd"),
+        help="The type of optimizer to use.",
     )
     train_parser.add_argument(
         "-o",
@@ -108,26 +138,32 @@ def get_lens_parser() -> ArgumentParser:
         "--resume", type=Path, help="File to resume training from."
     )
     train_parser.add_argument(
+        "--shared-mlp-hidden-sizes",
+        type=int,
+        nargs="+",
+        default=[],
+        help="Hidden sizes of the MLP shared by all probes.",
+    )
+    train_parser.add_argument(
         "--sublayers",
         action="store_true",
         help="Train tuned lenses for attention blocks.",
     )
     train_parser.add_argument(
-        "--seed", type=int, default=42, help="Random seed for training."
-    )
-    train_parser.add_argument(
         "--tokens-per-step",
         type=int,
-        default=2**17,
+        default=2**18,
         help="Number of tokens per step.",
     )
     train_parser.add_argument(
-        "--train-final-lens",
-        action="store_true",
-        help="Train a lens for the final layer even though it's superfluous.",
+        "--wandb", type=str, help="Name of run in Weights & Biases."
     )
     train_parser.add_argument(
-        "--wandb", type=str, help="Name of run in Weights & Biases."
+        "--warmup-steps",
+        type=int,
+        default=None,
+        help="Number of warmup steps. Defaults to min(0.1 * num_steps, 1000) for Adam"
+        " and 0 for SGD.",
     )
     train_parser.add_argument(
         "--weight-decay", type=float, default=0.01, help="Weight decay coefficient."
@@ -139,6 +175,17 @@ def get_lens_parser() -> ArgumentParser:
     # Evaluation-only arguments
     eval_parser.add_argument(
         "lens", type=Path, help="Directory containing the tuned lens to evaluate."
+    )
+    eval_parser.add_argument(
+        "--logit-stats",
+        action="store_true",
+        help="Save sufficient statistics for the MLE Dirichlet describing the logits.",
+    )
+    eval_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Number of batches to evaluate on. If None, will use the entire dataset.",
     )
     eval_parser.add_argument(
         "-o",

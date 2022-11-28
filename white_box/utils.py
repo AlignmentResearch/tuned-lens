@@ -1,6 +1,49 @@
 from itertools import islice
 from typing import Any, Callable, Iterable, TypeVar, Union
 import torch as th
+import torch.distributed as dist
+
+
+def maybe_all_cat(x: th.Tensor) -> th.Tensor:
+    if not dist.is_initialized():
+        return x
+
+    buffer = x.new_empty([dist.get_world_size() * x.shape[0], *x.shape[1:]])
+    dist.all_gather_into_tensor(buffer, x)
+    return buffer
+
+
+def maybe_all_reduce(x: th.Tensor, op: str = "sum") -> th.Tensor:
+    if not dist.is_initialized():
+        return x
+
+    if op == "sum":
+        dist.all_reduce(x, op=dist.ReduceOp.SUM)
+    elif op == "mean":
+        dist.all_reduce(x, op=dist.ReduceOp.SUM)
+        x /= dist.get_world_size()
+    else:
+        raise ValueError(f"Unknown reduction op '{op}'")
+
+    return x
+
+
+def maybe_shift_labels(x: th.Tensor, shift: int):
+    if shift > 0:
+        return x[:, shift:]
+    if shift < 0:
+        return x[:, :shift]
+
+    return x
+
+
+def maybe_shift_preds(x: th.Tensor, shift: int):
+    if shift > 0:
+        return x[:, :-shift]
+    if shift < 0:
+        return x[:, -shift:]
+
+    return x
 
 
 T = TypeVar("T")

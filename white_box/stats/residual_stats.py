@@ -53,9 +53,6 @@ class ResidualStats:
         # TODO: Should we do something smarter than nan_to_num here?
         # Like skip the update entirely if there are nonfinite values?
         delta_M2 = delta.zip_map(lambda d, d2: d.T @ d2, delta2)
-        if any(delta_M2.map(lambda x: x.isfinite().logical_not().any())):
-            print("omg")
-
         self._M2 = self._M2.zip_map(lambda acc, d: acc + d.nan_to_num(), delta_M2)
         self._mean_norm = stream.zip_map(
             lambda x, mu: mu + th.sum(x.norm(dim=-1) - mu) / self.n, self._mean_norm
