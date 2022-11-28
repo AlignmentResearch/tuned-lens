@@ -1,5 +1,6 @@
 from torch.distributions import Dirichlet
 from typing import Optional
+from ..utils import maybe_all_reduce
 import torch as th
 
 
@@ -19,19 +20,26 @@ class LogitStats:
         self.n = 0
         self.sufficient_stats = None
 
+    def all_reduce_(self):
+        """All-reduce the stats across all processes."""
+        if self.sufficient_stats is not None:
+            maybe_all_reduce(self.sufficient_stats, op="mean")
+
     @th.no_grad()
-    def update(self, logits: th.Tensor):
+    def update(self, logits: th.Tensor, assume_normalized: bool = False):
         K = logits.shape[-1]
         logits = logits.reshape(-1, K).float()
-        N = logits.shape[0]
+        if not assume_normalized:
+            logits = logits.log_softmax(dim=-1)
 
+        N = logits.shape[0]
         if self.sufficient_stats is None:
             self.sufficient_stats = logits.new_zeros(K)
         elif self.sufficient_stats.shape[-1] != K:
             raise ValueError(f"Expected {self.sufficient_stats.shape[-1]} but got {K}")
 
         # Online mean update for the sufficient statistics
-        delta = logits.log_softmax(-1).mean(0) - self.sufficient_stats
+        delta = logits.mean(0) - self.sufficient_stats
         self.n += N
         self.sufficient_stats += delta * N / self.n
 

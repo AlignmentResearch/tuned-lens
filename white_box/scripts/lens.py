@@ -21,7 +21,7 @@ from transformers import (
     PreTrainedTokenizerBase,
 )
 from white_box.scripts import get_lens_parser
-from white_box import ResidualStats, ResidualStream, TunedLens
+from white_box import record_residual_stream, LogitStats, ResidualStats, TunedLens
 from white_box.data import (
     chunk_and_tokenize,
     compute_nats_to_bpb_ratio,
@@ -83,9 +83,7 @@ def main(args):
         lens = TunedLens(
             model,
             dropout=args.dropout,
-            include_final=args.train_final_lens,
             mlp_hidden_sizes=args.mlp_hidden_sizes,
-            orthogonal=args.orthogonal,
             rank=args.rank,
             shared_mlp_hidden_sizes=args.shared_mlp_hidden_sizes,
             sublayers=args.sublayers,
@@ -146,6 +144,7 @@ def eval_loop(
     # Running mean & covariance of the hidden states
     first_token_stats = ResidualStats()
     stream_stats = ResidualStats()
+    logit_stats = LogitStats()
 
     # Keys are names of layers
     baseline_dict = defaultdict(list)
@@ -161,7 +160,8 @@ def eval_loop(
 
     for batch in tqdm(dl, desc="Evaluating", position=local_rank, total=total):
         batch = send_to_device(batch, th.device(local_rank))
-        output = model(**batch, labels=batch["input_ids"], output_hidden_states=True)
+        with record_residual_stream(model, sublayers=args.sublayers) as stream:
+            output = model(**batch, labels=batch["input_ids"])
 
         final_log_probs = output.logits.log_softmax(dim=-1)
         final_probs = final_log_probs.exp()
@@ -169,14 +169,11 @@ def eval_loop(
         final_losses.append(output.loss)
         labels = maybe_shift_labels(batch["input_ids"], 1).flatten()
 
-        stream = ResidualStream(
-            embeddings=output.hidden_states[0], layers=output.hidden_states[1:-1]
-        )
-
         # Do this sequentially to save VRAM
-        for i, (name, h) in enumerate(stream.items()):
+        for i, (name, h) in zip(range(len(lens)), stream.items()):
             logits = lens(h, idx=i)
             log_probs = logits.log_softmax(dim=-1)
+            logit_stats.update(log_probs, assume_normalized=True)
 
             baseline_dict[name].append(
                 th.nn.functional.cross_entropy(
@@ -212,6 +209,9 @@ def eval_loop(
 
     output_dir = args.output or args.lens
     if local_rank == 0:
+        logit_stats.all_reduce_()
+        th.save(logit_stats, output_dir / "logit_stats.pt")
+
         results = {
             "baseline": baselines,
             "ce": ces,
@@ -245,6 +245,7 @@ if __name__ == "__main__":
     local_rank = os.environ.get("LOCAL_RANK")
     if local_rank is not None:
         dist.init_process_group("nccl")
+        local_rank = int(local_rank)
 
     # Only print on rank 0
     with nullcontext() if not local_rank else redirect_stdout(None):

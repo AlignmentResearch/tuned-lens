@@ -8,6 +8,7 @@ from ..utils import pairwise
 from . import LowRankLinear
 from transformers import PreTrainedModel
 from typing import Generator, Iterable, Optional, Sequence, Union, overload
+import inspect
 import json
 import torch as th
 
@@ -23,9 +24,7 @@ class TunedLens(th.nn.Module):
         dropout: float = 0.0,
         identity_init: bool = True,
         include_input: bool = True,
-        include_final: bool = False,
         mlp_hidden_sizes: Sequence[int] = (),
-        orthogonal: bool = False,
         rank: Optional[int] = None,
         shared_mlp_hidden_sizes: Sequence[int] = (),
         sublayers: bool = True,
@@ -98,8 +97,8 @@ class TunedLens(th.nn.Module):
         self.attn_probes = th.nn.ModuleList(
             [deepcopy(probe) for _ in range(num_layers)] if sublayers else []
         )
-        if not include_final:
-            num_layers -= 1
+        # Don't include the final layer
+        num_layers -= 1
 
         self.layer_probes = th.nn.ModuleList(
             [deepcopy(probe) for _ in range(num_layers)]
@@ -143,17 +142,16 @@ class TunedLens(th.nn.Module):
         # Load config
         with open(path / "config.json", "r") as f:
             config = json.load(f)
-            config.setdefault("include_final", True)  # Backwards compatibility
 
         # Load parameters
         state = th.load(path / ckpt, **kwargs)
 
-        # Backwards compatibility
-        keys = list(state.keys())
-        for key in keys:
-            if "adapter" in key:
-                new_key = key.replace("adapter", "probe")
-                state[new_key] = state.pop(key)
+        # Drop unrecognized config keys
+        recognized = set(inspect.getfullargspec(cls).kwonlyargs)
+        for key in config:
+            if key not in recognized:
+                print(f"TunedLens.load: ignoring config key '{key}'")
+                del config[key]
 
         model = cls(**config)
         model.load_state_dict(state)
@@ -180,7 +178,8 @@ class TunedLens(th.nn.Module):
             b -= b.mean()
 
     def transform(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
-        expected_len = len(self) + (not self.config["include_final"])
+        # We don't transform the final layer hidden state
+        expected_len = len(self) + 1
         if len(stream) != expected_len:
             raise ValueError(
                 f"Expected {expected_len} layers, but got {len(stream)} layers."

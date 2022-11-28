@@ -127,11 +127,6 @@ def get_lens_parser() -> ArgumentParser:
         help="The type of optimizer to use.",
     )
     train_parser.add_argument(
-        "--orthogonal",
-        action="store_true",
-        help="Parametrize the tuned lenses as rotation matrices.",
-    )
-    train_parser.add_argument(
         "-o",
         "--output",
         type=Path,
@@ -161,15 +156,14 @@ def get_lens_parser() -> ArgumentParser:
         help="Number of tokens per step.",
     )
     train_parser.add_argument(
-        "--train-final-lens",
-        action="store_true",
-        help="Train a lens for the final layer even though it's superfluous.",
-    )
-    train_parser.add_argument(
         "--wandb", type=str, help="Name of run in Weights & Biases."
     )
     train_parser.add_argument(
-        "--warmup-steps", type=int, default=0, help="Number of warmup steps."
+        "--warmup-steps",
+        type=int,
+        default=None,
+        help="Number of warmup steps. Defaults to min(0.1 * num_steps, 1000) for Adam"
+        " and 0 for SGD.",
     )
     train_parser.add_argument(
         "--weight-decay", type=float, default=0.01, help="Weight decay coefficient."
@@ -181,6 +175,11 @@ def get_lens_parser() -> ArgumentParser:
     # Evaluation-only arguments
     eval_parser.add_argument(
         "lens", type=Path, help="Directory containing the tuned lens to evaluate."
+    )
+    eval_parser.add_argument(
+        "--logit-stats",
+        action="store_true",
+        help="Save sufficient statistics for the MLE Dirichlet describing the logits.",
     )
     eval_parser.add_argument(
         "--limit",

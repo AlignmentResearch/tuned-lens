@@ -85,7 +85,14 @@ def train_loop(
     else:
         opt = opt_class(params, **config)  # type: ignore[call-arg]
 
-    # Simple linear LR decay schedule
+    if args.warmup_steps is None:
+        # Adam generally performs poorly without an LR warmup
+        if args.optimizer == "adam":
+            args.warmup_steps = min(1000, args.num_steps // 10)
+            print(f"Using {args.warmup_steps} LR warmup steps for Adam")
+        else:
+            args.warmup_steps = 0
+
     scheduler = get_linear_schedule_with_warmup(
         opt, args.warmup_steps, args.num_steps - args.warmup_steps
     )
@@ -93,14 +100,7 @@ def train_loop(
         assert args.resume.is_dir()
 
         print(f"Loading checkpoint from {args.resume}")
-        opt_path = args.resume / "optimizer.pt"
         ddp_lens.load_state_dict(th.load(args.resume))
-
-        if opt_path.exists():
-            print(f"Loading optimizer state from {opt_path}")
-            opt.load_state_dict(th.load(opt_path))
-        else:
-            print("No optimizer state found. Starting optimizer from scratch.")
 
     # chunk_and_tokenize ensures the samples are all the same length
     tokens_per_sample = len(data[0]["input_ids"])
@@ -246,7 +246,6 @@ def train_loop(
     if local_rank == 0:
         print(f"Saving lens to {args.output}")
         lens.save(args.output)
-        th.save(opt.state_dict(), args.output / "optimizer.pt")
 
     if args.residual_stats:
         first_token_stats.all_reduce_()
