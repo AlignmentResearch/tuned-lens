@@ -220,6 +220,8 @@ class TunedLens(th.nn.Module):
             raise RuntimeError("Make sure to freeze the decoder")
 
         for i, item in enumerate(hiddens):
+            if i == len(hiddens) - 1:
+                break
             if isinstance(item, th.Tensor):
                 h = item + self.transform_hidden(item, i)
                 yield self.to_logits(h) if logits else h
