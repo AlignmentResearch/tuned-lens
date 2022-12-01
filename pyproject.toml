@@ -23,5 +23,8 @@ dev = [
     "pytest",
 ]
 
+[project.scripts]
+white-box = "white_box.__main__:run"
+
 [tool.setuptools]
 packages = ["white_box"]

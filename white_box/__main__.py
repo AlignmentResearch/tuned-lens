@@ -2,8 +2,8 @@ from argparse import ArgumentParser
 from .scripts.argparsers import get_lens_parser
 
 
-if __name__ == "__main__":
-    parser = ArgumentParser(description="Run the white-box lensing code.")
+def run():
+    parser = ArgumentParser(add_help=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     lens_parser = get_lens_parser()
@@ -17,3 +17,7 @@ if __name__ == "__main__":
         main(args)
     else:
         raise ValueError(f"Unknown command '{args.command}'")
+
+
+if __name__ == "__main__":
+    run()

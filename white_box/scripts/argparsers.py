@@ -6,7 +6,8 @@ def get_lens_parser() -> ArgumentParser:
     """Return the parser for the `lens` subcommand."""
 
     parser = ArgumentParser(
-        description="Train or evaluate a set of tuned lenses for a language model."
+        description="Train or evaluate a set of tuned lenses for a language model.",
+        add_help=False,
     )
     # Arguments shared by train and eval; see https://stackoverflow.com/a/56595689.
     parent_parser = ArgumentParser(add_help=False)
@@ -166,7 +167,7 @@ def get_lens_parser() -> ArgumentParser:
         " and 0 for SGD.",
     )
     train_parser.add_argument(
-        "--weight-decay", type=float, default=0.01, help="Weight decay coefficient."
+        "--weight-decay", type=float, default=0.0, help="Weight decay coefficient."
     )
     train_parser.add_argument(
         "--zero", action="store_true", help="Use ZeroRedundancyOptimizer."
