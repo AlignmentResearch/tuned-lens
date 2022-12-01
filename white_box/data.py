@@ -4,6 +4,7 @@ from multiprocessing import cpu_count
 from transformers import PreTrainedTokenizerBase
 from typing import TypeVar, Union
 import logging
+import math
 
 
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
@@ -42,6 +43,38 @@ def chunk_and_tokenize(
         # elements of the dataset to a model
         columns=["input_ids", "attention_mask"],
     )
+
+
+def compute_nats_to_bpb_ratio(raw: T, tokenized: T) -> float:
+    """Compute ratio of nats per token to bits per byte for a given tokenizer.
+
+    This is used to convert the perplexity of a model to bits per byte.
+
+    Args:
+        raw: The raw, unprocessed dataset.
+        tokenized: The tokenized dataset.
+
+    Returns:
+        The ratio of nats to bits per byte.
+    """
+    byte_counts = raw.map(
+        lambda x: {"length": [len(txt.encode("utf-8")) for txt in x["text"]]},
+        batched=True,
+        num_proc=cpu_count() // 2,
+        remove_columns=get_columns_all_equal(raw),
+    )
+
+    token_counts = tokenized.map(
+        lambda x: {"length": [len(ids) for ids in x["input_ids"]]},
+        batched=True,
+        num_proc=cpu_count() // 2,
+        remove_columns=get_columns_all_equal(tokenized),
+    )
+    total_bytes = sum(byte_counts["length"])  # type: ignore[operator]
+    total_tokens = sum(token_counts["length"])  # type: ignore[operator]
+
+    # See https://arxiv.org/pdf/2101.00027.pdf, section 3.1
+    return (total_tokens / total_bytes) / math.log(2)
 
 
 def _tokenize_fn(x: dict, tokenizer: PreTrainedTokenizerBase, text_key: str):

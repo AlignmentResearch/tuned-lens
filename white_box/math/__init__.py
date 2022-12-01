@@ -1,2 +1,0 @@
-from .geometry import geodesic_distance
-from .wasserstein import gaussian_wasserstein_l2, gaussian_wasserstein_l2_origin

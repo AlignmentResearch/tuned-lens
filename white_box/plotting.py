@@ -1,4 +1,4 @@
-from .math import geodesic_distance
+from .stats import geodesic_distance, js_divergence, js_distance
 from .model_surgery import get_final_layer_norm, get_transformer_layers
 from .residual_stream import ResidualStream, record_residual_stream
 from .nn.tuned_lens import TunedLens
@@ -24,7 +24,7 @@ def plot_logit_lens(
     input_ids: Optional[th.Tensor] = None,
     extra_decoder_layers: int = 0,
     layer_stride: int = 1,
-    metric: Literal["ce", "geodesic", "entropy", "kl"] = "entropy",
+    metric: Literal["ce", "geodesic", "entropy", "js", "kl"] = "entropy",
     residual_means: Optional[ResidualStream] = None,
     sublayers: bool = False,
     start_pos: int = 0,
@@ -35,7 +35,7 @@ def plot_logit_lens(
     whitespace_token: str = "Ġ",
     whitespace_replacement: str = " ",
 ):
-    """Plot the cosine similarities of hidden states with the final state."""
+    """Plot a logit lens table for the given text."""
     model, tokens, outputs, stream = _run_inference(
         model_or_name, input_ids, text, tokenizer, sublayers, start_pos, end_pos
     )
@@ -81,6 +81,10 @@ def plot_logit_lens(
     elif metric == "geodesic":
         max_color = None
         stats = hidden_lps.pairwise_map(geodesic_distance)
+        top_strings.embeddings = None
+    elif metric == "js":
+        max_color = None
+        stats = hidden_lps.pairwise_map(js_divergence)
         top_strings.embeddings = None
     elif metric == "kl":
         log_probs = outputs.logits.log_softmax(-1)
