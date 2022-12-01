@@ -6,7 +6,6 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from white_box import record_residual_stream, LogitStats, ResidualStats, TunedLens
 from white_box.utils import (
-    maybe_shift_labels,
     maybe_shift_preds,
     send_to_device,
 )
@@ -14,7 +13,7 @@ import torch as th
 import torch.distributed as dist
 
 
-@th.autocast("cuda")
+@th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
 def eval_loop(
     args: Namespace,
@@ -57,7 +56,6 @@ def eval_loop(
         # Do this sequentially to save VRAM
         losses = defaultdict(dict)
         for i, (name, h) in zip(range(len(lens)), stream.items()):
-            # baseline_lps = lens.to_logits(h).log_softmax(dim=-1)
             lens_lps = lens(h, idx=i).log_softmax(dim=-1)
             logit_stats.update(lens_lps, assume_normalized=True)
 
