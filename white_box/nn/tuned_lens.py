@@ -7,7 +7,7 @@ from ..residual_stream import ResidualStream
 from ..utils import pairwise
 from . import LowRankLinear
 from transformers import PreTrainedModel
-from typing import Generator, Iterable, Optional, Sequence, Union, overload
+from typing import Generator, Iterable, Optional, Sequence, Union, cast, overload
 import inspect
 import json
 import torch as th
@@ -57,11 +57,9 @@ class TunedLens(th.nn.Module):
                 self.layer_norm = th.nn.Identity()
 
         # Save config for later
-        self.config = {
-            k: v
-            for k, v in locals().items()
-            if not k.startswith("_") and not isinstance(v, th.nn.Module)
-        }
+        config_keys = set(inspect.getfullargspec(TunedLens).kwonlyargs)
+        self.config = {k: v for k, v in locals().items() if k in config_keys}
+        self.dropout = th.nn.Dropout(dropout)
 
         # Try to prevent finetuning the decoder
         assert d_model and num_layers
@@ -71,16 +69,17 @@ class TunedLens(th.nn.Module):
         def create_mlp(sizes: Sequence[int]) -> th.nn.Sequential:
             sizes = [d_model, *mlp_hidden_sizes, d_model]
             mlp = th.nn.Sequential()
-            if dropout:
-                mlp.append(th.nn.Dropout(dropout))
 
             for i, j in pairwise(sizes):
                 layer = th.nn.Linear(i, j, bias=bias)
-                layer.bias.data.zero_()
                 mlp.extend([layer, th.nn.GELU()])
 
-            mlp.pop(-1)
-            mlp[-1].weight.data.zero_()
+            mlp.pop(-1)  # Remove the last GELU
+
+            last = cast(th.nn.Linear, mlp[-1])
+            last.bias.data.zero_()
+            last.weight.data.zero_()
+
             return mlp
 
         if mlp_hidden_sizes:
@@ -147,11 +146,10 @@ class TunedLens(th.nn.Module):
         state = th.load(path / ckpt, **kwargs)
 
         # Drop unrecognized config keys
-        recognized = set(inspect.getfullargspec(cls).kwonlyargs)
-        for key in config:
-            if key not in recognized:
-                print(f"TunedLens.load: ignoring config key '{key}'")
-                del config[key]
+        unrecognized = set(config) - set(inspect.getfullargspec(cls).kwonlyargs)
+        for key in unrecognized:
+            print(f"TunedLens.load: ignoring config key '{key}'")
+            del config[key]
 
         model = cls(**config)
         model.load_state_dict(state)
@@ -189,7 +187,12 @@ class TunedLens(th.nn.Module):
 
     def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Transform hidden state from layer `idx`."""
+
+        # Dropout encourages the probe to use all "copies" of redundant information
+        # in the hidden state; see https://arxiv.org/abs/2204.09722.
+        h = self.dropout(h)
         h = h + self[idx](h)
+
         if isinstance(self.shared_mlp, th.nn.Module):
             h = th.nn.functional.layer_norm(h, (h.shape[-1],))
             h = h + self.shared_mlp(h)

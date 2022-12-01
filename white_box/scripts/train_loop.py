@@ -111,15 +111,27 @@ def train_loop(
             f"by the number of tokens per sample ({tokens_per_sample})."
         )
 
-    print(f"Using {args.tokens_per_step:_} tokens per training step.")
-
-    # TODO: Make this do the right thing when there's a remainder
     global_batch_size = args.per_gpu_batch_size * world_size
-    grad_acc_steps = samples_per_step // global_batch_size
+    grad_acc_steps, rem = divmod(samples_per_step, global_batch_size)
+    if rem:
+        # If the number of samples per step isn't divisible by the global batch size,
+        # use ceil division and let the user know about it.
+        grad_acc_steps += 1
+        adjusted_count = grad_acc_steps * global_batch_size * tokens_per_sample
+        print(
+            f"Note: Increasing grad acc steps from {grad_acc_steps - 1} to "
+            f"{grad_acc_steps} to maintain load balance across {world_size} GPUs."
+        )
+        print(
+            f"Using {adjusted_count:_} tokens per training step "
+            f"({args.tokens_per_step:_} requested)."
+        )
+    else:
+        print(f"Gradient accumulation steps: {grad_acc_steps}")
+        print(f"Using {args.tokens_per_step:_} tokens per training step.")
 
     metrics = defaultdict(list)
     total_batches = args.num_steps * grad_acc_steps
-    print(f"Gradient accumulation steps: {grad_acc_steps}")
 
     pbar = tqdm(islice(dl, total_batches), desc="Training", total=total_batches)
     for batch_idx, batch in enumerate(pbar, start=1):
