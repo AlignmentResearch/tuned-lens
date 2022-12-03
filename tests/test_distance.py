@@ -1,6 +1,40 @@
-from torch.distributions import Categorical, kl_divergence
-from white_box.stats import js_divergence, js_distance
+from torch.distributions import Categorical, Dirichlet, kl_divergence
+from white_box.stats import aitchison, js_divergence, js_distance
 import torch as th
+
+
+def test_aitchison():
+    # Uniform and symmetric Dirichlet prior over the simplex
+    N, K = 100, 50_000
+    prior = Dirichlet(th.ones(K, dtype=th.float64))
+
+    log_x = prior.sample(th.Size([N])).log()
+    log_y = prior.sample(th.Size([N])).log()
+    log_z = prior.sample(th.Size([N])).log()
+    weights = prior.sample(th.Size([N]))
+
+    # Linearity:
+    # <ax + by, z> = a<x, z> + b<y, z>
+    a = th.randn(N, dtype=th.float64).unsqueeze(-1)
+    b = th.randn(N, dtype=th.float64).unsqueeze(-1)
+
+    th.testing.assert_close(
+        # <ax + by, z>
+        aitchison(th.log_softmax(a * log_x + b * log_y, dim=-1), log_z, weight=weights),
+        # a<x, z> + b<y, z>
+        (
+            a * aitchison(log_x, log_z, weight=weights)
+            + b * aitchison(log_y, log_z, weight=weights)
+        ),
+    )
+
+    # Positive definiteness
+    assert th.all(aitchison(log_x, log_x, weight=weights) >= 0)
+
+    # Symmetry
+    th.testing.assert_close(
+        aitchison(log_x, log_y, weight=weights), aitchison(log_y, log_x, weight=weights)
+    )
 
 
 def test_js_divergence():

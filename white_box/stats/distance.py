@@ -1,7 +1,61 @@
-from typing import cast
+from typing import cast, Optional
 import math
 import torch as th
 import torch.distributions as D
+
+
+def aitchison(
+    log_p: th.Tensor,
+    log_q: th.Tensor,
+    *,
+    weight: Optional[th.Tensor] = None,
+    dim: int = -1
+) -> th.Tensor:
+    """Compute the (weighted) Aitchison inner product between two *log* compositions.
+
+    See 'Changing the Reference Measure in the Simplex and Its Weighting Effects' by
+    Egozcue and Pawlowsky-Glahn (2016) for discussion.
+    """
+    # Project to Euclidean space...
+    x = clr(log_p, weight, dim=dim)
+    y = clr(log_q, weight, dim=dim)
+
+    # Then compute the weighted dot product
+    return weighted_mean(x * y, weight, dim=dim)
+
+
+def clr(
+    log_y: th.Tensor, weight: Optional[th.Tensor] = None, dim: int = -1
+) -> th.Tensor:
+    """Apply a (weighted) centered logratio transform to a *log* composition vector.
+
+    This is equivalent to subtracting the geometric mean in log space, and it is one of
+    three main isomorphisms between the simplex and (n-1) dimensional Euclidean space.
+    See https://en.wikipedia.org/wiki/Compositional_data#Linear_transformations for
+    more information.
+
+    Args:
+        log_y: A log composition vector
+        weight: A vector of non-negative weights to use for the geometric mean. If
+            `None`, a uniform reference distribution will be used.
+        dim: The dimension along which to compute the geometric mean.
+
+    Returns:
+        The centered logratio vector.
+    """
+    # The geometric mean is simply the arithmetic mean in log space
+    return log_y - weighted_mean(log_y, weight, dim=dim)
+
+
+def weighted_mean(
+    x: th.Tensor, weight: Optional[th.Tensor] = None, dim: int = -1
+) -> th.Tensor:
+    """Compute a weighted mean if `weight` is not `None`, else the unweighted mean."""
+    if weight is None:
+        return x.mean(dim=dim)
+
+    normalizer = weight.sum(dim=dim, keepdim=True)
+    return x.mul(weight).sum(dim=dim, keepdim=True).div(normalizer)
 
 
 def geodesic_distance(

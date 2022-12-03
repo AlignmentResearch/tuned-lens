@@ -4,6 +4,7 @@ from .stats import kl_divergence
 from .utils import pytree_map
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import product
 from tqdm.auto import trange
 from transformers import PreTrainedModel
 from typing import Callable, Optional, Sequence
@@ -16,8 +17,35 @@ class InterventionResult:
     effect_sizes: th.Tensor
     surprisals: th.Tensor
 
+    def to_pandas(self):
+        """Convert results into a Pandas dataframe suitable for Plotly."""
+        import pandas as pd
 
-@th.autocast("cuda")
+        effect_var, effect_mean = th.var_mean(self.effect_sizes.mean(1), dim=0)
+        surprisal_var, surprisal_mean = th.var_mean(self.surprisals.mean(1), dim=0)
+
+        B, *_, L = self.effect_sizes.shape
+        records = []
+
+        for i, j in product(range(L - 1), range(L)):
+            if j < i:
+                continue
+
+            records.append(
+                {
+                    "stimulus_layer": i,
+                    "response_layer": j,
+                    "effect_size": effect_mean[i, j].item(),
+                    "effect_size_stderr": effect_var[i, j].div(B).sqrt().item(),
+                    "surprisal": surprisal_mean[i, j].item(),
+                    "surprisal_stderr": surprisal_var[i, j].div(B).sqrt().item(),
+                }
+            )
+
+        return pd.DataFrame.from_records(records)
+
+
+@th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
 def apply_intervention(
     model: PreTrainedModel,
@@ -31,20 +59,21 @@ def apply_intervention(
     noise_distributions: Sequence[th.distributions.Distribution] = (),
 ):
     assert token_ids.ndim == 2
-    B, S = token_ids.shape
+    (B, S), L = token_ids.shape, model.config.num_hidden_layers
     if S // B > 128:
         warnings.warn("We recommend a larger batch size for better performance.")
 
     device = model.device
     token_ids = token_ids.to(device)
 
-    # First do a clean forward pass on all the data. We save the
-    # logits, as well as the keys and values to speed up inference
-    # when we do interventions.
+    # First do a clean forward pass on all the data. We save the final layer logits,
+    # as well as the keys and values to speed up inference when we do interventions.
     control = model(token_ids, output_hidden_states=True, use_cache=True)
 
     decoder = decoder or Decoder(model)
     control_hs = control["hidden_states"][1:-1]
+    assert len(control_hs) == L - 1
+
     if intervention:
         treatments = intervention(control_hs)  # type: ignore
     elif noise_distributions:
@@ -56,11 +85,14 @@ def apply_intervention(
         raise ValueError("Must provide either an intervention or noise distributions.")
 
     if lens:
+        assert len(lens) == L
+
+        # Putting the lens in eval mode is important because it may have dropout
+        lens = lens.to(device).eval()
         control_hs = [
             lens.transform_hidden(h, i) for i, h in enumerate(control_hs, start=1)
         ]
 
-    L = model.config.num_hidden_layers
     effect_sizes = th.zeros(B, S, L - 1, L, device=device)
     surprisals = th.zeros(B, S, L - 1, L, device=device)
 
@@ -75,11 +107,11 @@ def apply_intervention(
                     new_tokens, output_hidden_states=True, past_key_values=left_ctx
                 )
 
-            responses = treated["hidden_states"][i + 1 : -1]
+            responses = treated.hidden_states[i + 1 : -1]
             if lens:
                 responses = [
                     lens.transform_hidden(h, i)
-                    for i, h in enumerate(responses, start=1)
+                    for i, h in enumerate(responses, start=i + 1)
                 ]
 
             # Record response from layer i
@@ -88,19 +120,18 @@ def apply_intervention(
             effect_sizes[:, token_idx, i, i] = divergence(
                 control_logits, response_logits_i
             )
+            diff = response_logits_i - control_logits
 
             # Record the response from every layer j > i
             for j, response in enumerate(responses[1:], start=i + 1):
-                if lens:
-                    response = lens.transform_hidden(response, j + 1)
-
                 control_logits = decoder(control_hs[j][:, token_idx])
                 response_logits = decoder(response.squeeze(1))
+
                 effect_sizes[:, token_idx, i, j] = divergence(
                     control_logits, response_logits
                 )
                 surprisals[:, token_idx, i, j] = divergence(
-                    response_logits_i, response_logits
+                    response_logits, control_logits + diff
                 )
 
             # Record the response from the final layer
@@ -110,7 +141,7 @@ def apply_intervention(
                 control_logits, response_logits
             )
             surprisals[:, token_idx, i, -1] = divergence(
-                response_logits_i, response_logits
+                response_logits, control_logits + diff
             )
 
     return InterventionResult(effect_sizes, surprisals)

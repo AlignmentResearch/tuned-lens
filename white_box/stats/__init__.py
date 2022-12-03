@@ -1,5 +1,6 @@
 from .dimensionality import effective_rank
 from .distance import (
+    aitchison,
     gaussian_wasserstein_l2,
     gaussian_wasserstein_l2_origin,
     geodesic_distance,

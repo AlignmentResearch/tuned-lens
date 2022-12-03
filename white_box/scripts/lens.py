@@ -10,6 +10,7 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     PreTrainedModel,
@@ -32,13 +33,21 @@ import torch.distributed as dist
 
 def main(args):
     local_rank = dist.get_rank() if dist.is_initialized() else 0
-    print("Loading model...")
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        revision=args.revision,
-        torch_dtype="auto",
-    )
+    if args.random_model:
+        print(f"Sampling random weights for model '{args.model_name}'...")
+        model = AutoModelForCausalLM.from_config(
+            AutoConfig.from_pretrained(args.model_name, revision=args.revision),
+            torch_dtype=th.float16,
+        )
+    else:
+        print(f"Loading pretrained weights for '{args.model_name}'...")
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            revision=args.revision,
+            torch_dtype="auto",
+        )
+
     model.eval()
     model.requires_grad_(False)
     assert isinstance(model, PreTrainedModel)

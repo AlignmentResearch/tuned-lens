@@ -41,6 +41,11 @@ def get_lens_parser() -> ArgumentParser:
         help="Number of samples to try to fit on a GPU at once.",
     )
     parent_parser.add_argument(
+        "--random-model",
+        action="store_true",
+        help="Use a randomly initialized model instead of pretrained weights.",
+    )
+    parent_parser.add_argument(
         "--residual-stats",
         action="store_true",
         help="Save means and covariance matrices for states in the residual stream.",
