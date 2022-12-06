@@ -3,11 +3,10 @@ from itertools import chain
 from pathlib import Path
 
 from ..model_surgery import get_final_layer_norm
-from ..residual_stream import ResidualStream
 from ..utils import pairwise
 from . import LowRankLinear
 from transformers import PreTrainedModel
-from typing import Generator, Iterable, Optional, Sequence, Union, cast, overload
+from typing import Generator, Optional, Sequence, Union, cast
 import inspect
 import json
 import torch as th
@@ -175,16 +174,6 @@ class TunedLens(th.nn.Module):
             A -= A.mean(dim=0, keepdim=True)
             b -= b.mean()
 
-    def transform(self, stream: ResidualStream, logits: bool = True) -> ResidualStream:
-        # We don't transform the final layer hidden state
-        expected_len = len(self) + 1
-        if len(stream) != expected_len:
-            raise ValueError(
-                f"Expected {expected_len} layers, but got {len(stream)} layers."
-            )
-
-        return stream.new_from_list(list(self.map(stream, logits=logits)))
-
     def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Transform hidden state from layer `idx`."""
 
@@ -198,38 +187,6 @@ class TunedLens(th.nn.Module):
             h = h + self.shared_mlp(h)
 
         return h
-
-    @overload
-    def map(
-        self, hiddens: Iterable[tuple[str, th.Tensor]], logits: bool = True
-    ) -> Iterable[tuple[str, th.Tensor]]:
-        ...
-
-    @overload
-    def map(
-        self,
-        hiddens: Iterable[th.Tensor],
-        logits: bool = True,
-    ) -> Iterable[th.Tensor]:
-        ...
-
-    def map(self, hiddens: Iterable, logits: bool = True) -> Iterable:
-        """Yield the logits for each hidden state in an iterable."""
-        # Sanity check to make sure we don't finetune the decoder
-        if any(p.requires_grad for p in self.parameters(recurse=False)):
-            raise RuntimeError("Make sure to freeze the decoder")
-
-        for i, item in enumerate(hiddens):
-            if isinstance(item, th.Tensor):
-                h = item + self.transform_hidden(item, i)
-                yield self.to_logits(h) if logits else h
-
-            elif isinstance(item, tuple):
-                name, h = item
-                h = h + self.transform_hidden(h, i)
-                yield name, self.to_logits(h) if logits else h
-            else:
-                raise TypeError(f"Unexpected type {type(item)}")
 
     def to_logits(self, h: th.Tensor) -> th.Tensor:
         """Decode a hidden state into logits."""

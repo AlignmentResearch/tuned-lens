@@ -30,6 +30,7 @@ def eval_loop(
 
     # Running mean & covariance of the hidden states
     first_token_stats = ResidualStats()
+    delta_stats = ResidualStats()
     stream_stats = ResidualStats()
     logit_stats = LogitStats()
 
@@ -77,10 +78,12 @@ def eval_loop(
         rest = stream.map(lambda x: x[:, 1:])
 
         first_token_stats.update(first_tokens)
+        delta_stats.update(rest.residuals())
         stream_stats.update(rest)
         th.save(losses, output_dir / f"batch_{pbar.n}.pt")
 
     pbar.close()
     th.save(first_token_stats, output_dir / "first_token_stats.pt")
+    th.save(delta_stats, output_dir / "delta_stats.pt")
     th.save(stream_stats, output_dir / "stream_stats.pt")
     th.save(logit_stats, output_dir / "logit_stats.pt")

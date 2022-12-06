@@ -11,7 +11,7 @@ keywords = ["nlp", "interpretability", "language-models", "explainable-ai"]
 license = {text = "MIT License"}
 dependencies = [
     "datasets",
-    "seaborn",
+    "plotly",
     "torch>=1.12.0",
     "transformers",
 ]

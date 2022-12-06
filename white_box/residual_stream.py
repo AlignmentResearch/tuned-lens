@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from itertools import starmap, zip_longest
 
 from .model_surgery import get_transformer_layers
-from typing import Callable, Generator, Optional, overload, Type, Union
+from typing import Callable, Generator, Iterable, Optional, overload, Type, Union
 import torch as th
 import torch.distributed as dist
 
@@ -100,7 +100,7 @@ class ResidualStream:
         states = list(self)
         return self.new_from_list(list(starmap(fn, zip(states[:-1], states[1:]))))
 
-    def zip_map(self, fn: Callable, *others: "ResidualStream") -> "ResidualStream":
+    def zip_map(self, fn: Callable, *others: "Iterable") -> "ResidualStream":
         """Map over corresponding states, returning a new `ResidualStream`."""
         return self.new_from_list(list(starmap(fn, zip(self, *others))))
 

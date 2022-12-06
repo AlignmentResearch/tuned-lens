@@ -1,5 +1,5 @@
 from torch.distributions import Categorical, Dirichlet, kl_divergence
-from white_box.stats import aitchison, js_divergence, js_distance
+from white_box.stats import aitchison, aitchison_similarity, js_divergence, js_distance
 import torch as th
 
 
@@ -15,12 +15,16 @@ def test_aitchison():
 
     # Linearity:
     # <ax + by, z> = a<x, z> + b<y, z>
-    a = th.randn(N, dtype=th.float64).unsqueeze(-1)
-    b = th.randn(N, dtype=th.float64).unsqueeze(-1)
+    a = th.randn(N, dtype=th.float64)
+    b = th.randn(N, dtype=th.float64)
 
     th.testing.assert_close(
         # <ax + by, z>
-        aitchison(th.log_softmax(a * log_x + b * log_y, dim=-1), log_z, weight=weights),
+        aitchison(
+            th.log_softmax(a[:, None] * log_x + b[:, None] * log_y, dim=-1),
+            log_z,
+            weight=weights,
+        ),
         # a<x, z> + b<y, z>
         (
             a * aitchison(log_x, log_z, weight=weights)
@@ -35,6 +39,12 @@ def test_aitchison():
     th.testing.assert_close(
         aitchison(log_x, log_y, weight=weights), aitchison(log_y, log_x, weight=weights)
     )
+
+    # Cosine similarity properties
+    self_similarities = aitchison_similarity(log_x, log_x, weight=weights)
+    similarities = aitchison_similarity(log_x, log_y, weight=weights)
+    assert th.all(similarities >= -1) and th.all(similarities <= 1)
+    th.testing.assert_close(self_similarities, th.ones_like(self_similarities))
 
 
 def test_js_divergence():
