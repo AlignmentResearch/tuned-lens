@@ -55,22 +55,28 @@ def eval_loop(
         labels = batch["input_ids"][:, 1:]
 
         # Do this sequentially to save VRAM
-        losses = defaultdict(dict)
+        batch_output = defaultdict(dict)
         for i, (name, h) in zip(range(len(lens)), stream.items()):
             lens_lps = lens(h, idx=i).log_softmax(dim=-1)
-            logit_stats.update(lens_lps, assume_normalized=True)
 
-            losses["baseline_ce"][name] = th.nn.functional.cross_entropy(
-                maybe_shift_preds(lens.to_logits(h), 1).flatten(0, 1),
+            baseline_lps = lens.to_logits(h).log_softmax(dim=-1)
+            batch_output["baseline_ce"][name] = th.nn.functional.cross_entropy(
+                maybe_shift_preds(baseline_lps, 1).flatten(0, 1),
                 labels.flatten(),
                 reduction="none",
             )
-            losses["lens_ce"][name] = th.nn.functional.cross_entropy(
+            batch_output["baseline_entropy"][name] = th.sum(
+                -baseline_lps.exp() * baseline_lps, dim=-1
+            )
+            batch_output["lens_ce"][name] = th.nn.functional.cross_entropy(
                 maybe_shift_preds(lens_lps, 1).flatten(0, 1),
                 labels.flatten(),
                 reduction="none",
             )
-            losses["lens_kl"][name] = th.sum(
+            batch_output["lens_entropy"][name] = th.sum(
+                -lens_lps.exp() * lens_lps, dim=-1
+            )
+            batch_output["lens_kl"][name] = th.sum(
                 final_probs * (final_lps - lens_lps), dim=-1
             )
 
@@ -79,8 +85,13 @@ def eval_loop(
 
         first_token_stats.update(first_tokens)
         delta_stats.update(rest.residuals())
+        logit_stats.update(final_lps, assume_normalized=True)
         stream_stats.update(rest)
-        th.save(losses, output_dir / f"batch_{pbar.n}.pt")
+
+        batch_output["baseline_entropy"]["final"] = th.sum(
+            -final_probs * final_lps, dim=-1
+        )
+        th.save(batch_output, output_dir / f"batch_{pbar.n}.pt")
 
     pbar.close()
     th.save(first_token_stats, output_dir / "first_token_stats.pt")

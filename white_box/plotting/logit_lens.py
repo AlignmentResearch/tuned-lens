@@ -1,12 +1,11 @@
-from .model_surgery import get_final_layer_norm, get_transformer_layers
-from .nn.tuned_lens import TunedLens
-from .residual_stream import ResidualStream, record_residual_stream
-from .stats import geodesic_distance, js_divergence
+from ..model_surgery import get_final_layer_norm, get_transformer_layers
+from ..nn.tuned_lens import TunedLens
+from ..residual_stream import ResidualStream, record_residual_stream
+from ..stats import geodesic_distance, js_divergence
 from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
     PreTrainedModel,
-    PreTrainedTokenizerBase,
+    PreTrainedTokenizer,
+    PreTrainedTokenizerFast,
 )
 from typing import cast, Literal, Optional, Sequence, Union
 import math
@@ -15,11 +14,14 @@ import plotly.graph_objects as go
 import torch as th
 
 
+Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
+
+
 @th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
 def plot_logit_lens(
-    model_or_name: Union[PreTrainedModel, str],
-    tokenizer: PreTrainedTokenizerBase,
+    model: PreTrainedModel,
+    tokenizer: Tokenizer,
     *,
     input_ids: Optional[th.Tensor] = None,
     add_last_tuned_lens_layer: bool = False,
@@ -43,8 +45,8 @@ def plot_logit_lens(
         raise ValueError("topk must be greater than 0")
 
     """Plot a logit lens table for the given text."""
-    model, tokens, outputs, stream = _run_inference(
-        model_or_name, tokenizer, input_ids, text, sublayers, start_pos, end_pos
+    tokens, outputs, stream = _run_inference(
+        model, tokenizer, input_ids, text, sublayers, start_pos, end_pos
     )
 
     if tuned_lens is not None:
@@ -154,7 +156,7 @@ def _get_rank(
 
 def _get_topk_probs(
     hidden_lps: ResidualStream,
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: Tokenizer,
     k: int,
     topk_diff: bool,
 ):
@@ -265,42 +267,26 @@ plot_tuned_lens = plot_logit_lens
 
 
 def _run_inference(
-    model_or_name: Union[PreTrainedModel, str],
-    tokenizer: PreTrainedTokenizerBase,
-    input_ids: Optional[th.Tensor] = None,
-    text: Optional[str] = None,
-    sublayers: bool = False,
-    start_pos: int = 0,
-    end_pos: Optional[int] = None,
+    model: PreTrainedModel,
+    tokenizer: Tokenizer,
+    input_ids: Optional[th.Tensor],
+    text: Optional[str],
+    sublayers: bool,
+    start_pos: int,
+    end_pos: Optional[int],
 ) -> tuple:
-    if isinstance(model_or_name, PreTrainedModel):
-        model = model_or_name
-    elif isinstance(model_or_name, str):
-        model = AutoModelForCausalLM.from_pretrained(model_or_name)
-    else:
-        raise ValueError("model_or_name must be a model or a model name")
-
-    # We always need a tokenizer, even if we're provided with input_ids,
-    # because we need to decode the IDs to get labels for the heatmap
-    if tokenizer is None:
-        tokenizer = AutoTokenizer.from_pretrained(model.name_or_path)
-
     if text is not None:
         input_ids = cast(th.Tensor, tokenizer.encode(text, return_tensors="pt"))
     elif input_ids is None:
         raise ValueError("Either text or input_ids must be provided")
 
-    model_device = next(model.parameters()).device
     with record_residual_stream(model, sublayers=sublayers) as stream:
-        outputs = model(input_ids.to(model_device))
+        outputs = model(input_ids.to(model.device))
 
-    tokens = tokenizer.convert_ids_to_tokens(  # type: ignore[arg-type]
-        input_ids.squeeze().tolist()
-    )
-
+    tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())
     if start_pos > 0:
         outputs.logits = outputs.logits[..., start_pos:end_pos, :]
         stream = stream.map(lambda x: x[..., start_pos:end_pos, :])
         tokens = tokens[start_pos:end_pos]
 
-    return model, tokens, outputs, stream
+    return tokens, outputs, stream

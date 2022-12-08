@@ -183,11 +183,6 @@ def get_lens_parser() -> ArgumentParser:
         "lens", type=Path, help="Directory containing the tuned lens to evaluate."
     )
     eval_parser.add_argument(
-        "--logit-stats",
-        action="store_true",
-        help="Save sufficient statistics for the MLE Dirichlet describing the logits.",
-    )
-    eval_parser.add_argument(
         "--limit",
         type=int,
         default=None,

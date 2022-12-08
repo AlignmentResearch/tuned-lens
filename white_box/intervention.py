@@ -1,13 +1,12 @@
 from .model_surgery import get_transformer_layers
 from .nn import Decoder, TunedLens
-from .stats import aitchison_similarity, kl_divergence
+from .stats import aitchison_similarity, kl_divergence, sample_neighbors
 from .utils import pytree_map
 from contextlib import contextmanager
 from dataclasses import dataclass
-from itertools import product
 from tqdm.auto import trange
 from transformers import PreTrainedModel
-from typing import Callable, Optional, Sequence, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 import torch as th
 import warnings
 
@@ -19,18 +18,17 @@ if TYPE_CHECKING:
 
 @dataclass
 class InterventionResult:
-    doses: th.Tensor
     effect_alignments: th.Tensor
     effect_sizes: th.Tensor
     surprisals: th.Tensor
 
-    most_changed_ids: th.Tensor
-    most_changed_diffs: th.Tensor
+    loss_diffs: th.Tensor
+    stimulus_norms: th.Tensor
 
     def line(self) -> "go.Figure":
         import plotly.graph_objects as go
 
-        _, S, L = self.doses.shape
+        _, S, L = self.stimulus_norms.shape
         _, means = th.var_mean(self.effect_alignments[..., -1], dim=0)
 
         fig = go.Figure(
@@ -70,13 +68,13 @@ class InterventionResult:
     def scatter(self) -> "go.Figure":
         import plotly.graph_objects as go
 
-        *_, L = self.doses.shape
+        *_, L = self.stimulus_norms.shape
 
         cmax = self.effect_sizes.quantile(0.95).item()
         fig = go.Figure(
             [
                 go.Scatter(
-                    x=self.doses[..., layer].flatten().cpu(),
+                    x=self.stimulus_norms[..., layer].flatten().cpu(),
                     y=self.effect_alignments[..., layer, -1].flatten().cpu(),
                     marker=dict(
                         cmin=0,
@@ -116,117 +114,115 @@ class InterventionResult:
         fig.update_yaxes(range=[-0.4, 1], title="Aitchison similarity")
         return fig
 
-    def to_pandas(self) -> "pd.DataFrame":
+    def to_pandas(self, agg: bool = False) -> "pd.DataFrame":
         """Convert results into a Pandas dataframe suitable for Plotly."""
         import pandas as pd
 
-        alignment_var, alignment_mean = th.var_mean(
-            self.effect_alignments.mean(1), dim=0
-        )
-        effect_var, effect_mean = th.var_mean(self.effect_sizes.mean(1), dim=0)
-        surprisal_var, surprisal_mean = th.var_mean(self.surprisals.mean(1), dim=0)
-
-        B, *_, L = self.effect_sizes.shape
-        records = []
-
-        for i, j in product(range(L - 1), range(L)):
-            if j < i:
-                continue
-
-            records.append(
+        B, S, L, _ = self.effect_sizes.shape
+        if not agg:
+            a, b, c = th.meshgrid(
+                th.arange(B), th.arange(S), th.arange(L), indexing="ij"
+            )
+            return pd.DataFrame(
                 {
-                    "stimulus_layer": i,
-                    "response_layer": j,
-                    "alignment": alignment_mean[i, j].item(),
-                    "alignment_stderr": alignment_var[i, j].div(B).sqrt().item(),
-                    "effect_size": effect_mean[i, j].item(),
-                    "effect_size_stderr": effect_var[i, j].div(B).sqrt().item(),
-                    "surprisal": surprisal_mean[i, j].item(),
-                    "surprisal_stderr": surprisal_var[i, j].div(B).sqrt().item(),
+                    "sample_index": a.flatten(),
+                    "token_index": b.flatten(),
+                    "stimulus_layer": c.flatten(),
+                    "sr_alignment": self.effect_alignments[..., -1].flatten().cpu(),
+                    "stimulus_norm": self.stimulus_norms.flatten().cpu(),
+                    "stimulus_size": th.linalg.diagonal(self.effect_sizes)
+                    .flatten()
+                    .cpu(),
+                    "effect_size": self.effect_sizes[..., -1].flatten().cpu(),
+                    "loss_diff": self.loss_diffs.flatten().cpu(),
+                    "surprisal": self.surprisals[..., -1].flatten().cpu(),
                 }
             )
 
-        return pd.DataFrame.from_records(records)
+        alignment_var, alignment_mean = th.var_mean(
+            self.effect_alignments[..., -1], dim=(0, 1)
+        )
+        effect_var, effect_mean = th.var_mean(self.effect_sizes[..., -1], dim=(0, 1))
+        surprisal_var, surprisal_mean = th.var_mean(
+            self.surprisals[..., -1], dim=(0, 1)
+        )
+        return pd.DataFrame(
+            {
+                "stimulus_layer": th.arange(L),
+                "sr_alignment": alignment_mean.cpu(),
+                "sr_alignment_stderr": alignment_var.div(B * S).sqrt().cpu(),
+                "effect_size": effect_mean.cpu(),
+                "effect_size_stderr": effect_var.div(B * S).sqrt().cpu(),
+                "surprisal": surprisal_mean.cpu(),
+                "surprisal_stderr": surprisal_var.div(B * S).sqrt().cpu(),
+            }
+        )
 
 
 @th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
-def apply_intervention(
+def estimate_effects(
     model: PreTrainedModel,
     token_ids: th.Tensor,
-    intervention: Optional[Callable[[list[th.Tensor]], list[th.Tensor]]] = None,
     *,
-    aitchison_weights: Optional[th.Tensor] = None,
     decoder: Optional[Decoder] = None,
     divergence: Callable[[th.Tensor, th.Tensor], th.Tensor] = kl_divergence,
-    dose_range: tuple[float, float] = (1.0, 1.0),
     lens: Optional[TunedLens] = None,
-    noise_distributions: Sequence[th.distributions.Distribution] = (),
     seed: int = 42,
+    tau: float = th.inf,
 ):
+    """Estimate the expected causal effect of random resampling on model outputs."""
     assert token_ids.ndim == 2
     (B, S), L = token_ids.shape, model.config.num_hidden_layers
     if S // B > 128:
         warnings.warn("We recommend a larger batch size for better performance.")
 
-    # This is sort of a hack to get around the fact that torch.distributions doesn't
-    # support custom Generator objects. We'll just use the global RNG for now.
-    initial_seed = th.initial_seed()
-    th.manual_seed(seed)
-
     device = model.device
     token_ids = token_ids.to(device)
+
+    rng = th.Generator(device=device)
+    rng.manual_seed(seed)
 
     # First do a clean forward pass on all the data. We save the final layer logits,
     # as well as the keys and values to speed up inference when we do interventions.
     control = model(token_ids, output_hidden_states=True, use_cache=True)
+    c_inputs = control["hidden_states"][:-1]  # Drop final layer
+    c_resids = [h_ - h for h, h_ in zip(c_inputs[:-1], c_inputs[1:])]
 
     decoder = decoder or Decoder(model)
-    control_hs = control["hidden_states"][1:-1]
-    assert len(control_hs) == L - 1
-
-    # Randomly sample doses for each (token, layer) combination. This means we can't
-    # directly compare responses across tokens and layers for a particular sample,
-    # but we mostly don't care about that anyway. With random doses, we can compute a
-    # low-variance estimate of the effect size for *any* dose on the specified interval
-    # by interpolating between nearby datapoints.
-    dose_min, dose_max = dose_range
-    assert 0 <= dose_min <= dose_max
-    doses = th.empty(B, S, L - 1, device=device).uniform_(dose_min, dose_max)
-
-    if intervention:
-        treatments = intervention(control_hs)  # type: ignore
-    elif noise_distributions:
-        treatments = [
-            h + d.sample(h.shape[:-1]) * dose[..., None]
-            for h, dose, d in zip(control_hs, doses.unbind(-1), noise_distributions)
-        ]
-    else:
-        raise ValueError("Must provide either an intervention or noise distributions.")
+    c_outputs = c_inputs[1:]  # Drop input embeddings
+    assert len(c_outputs) == L - 1
 
     if lens:
         assert len(lens) == L
 
         # Putting the lens in eval mode is important because it may have dropout
         lens = lens.to(device).eval()
-        control_hs = [
-            lens.transform_hidden(h, i) for i, h in enumerate(control_hs, start=1)
+        c_outputs = [
+            lens.transform_hidden(h, i) for i, h in enumerate(c_outputs, start=1)
         ]
 
     effect_alignments = th.zeros(B, S, L - 1, L, device=device)
     effect_sizes = th.zeros(B, S, L - 1, L, device=device)
     surprisals = th.zeros(B, S, L - 1, L, device=device)
 
-    most_changed_diffs = th.zeros(B, S, L - 1, device=device)
-    most_changed_ids = th.zeros(B, S, L - 1, dtype=th.long, device=device)
+    loss_diffs = th.zeros(B, S, L - 1, device=device)
+    stimulus_norms = th.zeros(B, S, L - 1, device=device)
 
     for token_idx in trange(1, S, desc="Applying", unit="token"):
         left_ctx = pytree_map(lambda x: x[..., :token_idx, :], control.past_key_values)
         new_tokens = token_ids[:, token_idx, None]
 
         # Sequentially intervene on each layer
-        for i, treatment in enumerate(treatments):
-            with layer_intervention(model, [i], lambda _: treatment[:, token_idx]):
+        for i, (c_in, c_res, c_out) in enumerate(zip(c_inputs, c_resids, c_outputs)):
+            c_logits = decoder(c_out[:, token_idx])
+            indices = sample_neighbors(c_logits, tau, generator=rng)
+            treated_out = c_in[:, token_idx] + c_res[indices, token_idx]
+            stimulus_norms[:, token_idx, i] = th.norm(
+                treated_out - c_out[:, token_idx], dim=-1
+            )
+
+            with layer_intervention(model, [i], lambda _: treated_out):
                 treated = model(
                     new_tokens, output_hidden_states=True, past_key_values=left_ctx
                 )
@@ -238,64 +234,56 @@ def apply_intervention(
                     for i, h in enumerate(responses, start=i + 1)
                 ]
 
+            weights = control.logits[:, token_idx].softmax(-1)
+
             # Record response from layer i
-            control_logits = decoder(control_hs[i][:, token_idx])
             response_logits_i = decoder(responses[0].squeeze(1))
             effect_alignments[:, token_idx, i, i] = 1
-            effect_sizes[:, token_idx, i, i] = divergence(
-                control_logits, response_logits_i
-            )
+            effect_sizes[:, token_idx, i, i] = divergence(c_logits, response_logits_i)
             # Aitchison difference between the response and control logits
-            diff_i = th.log_softmax(response_logits_i - control_logits, dim=-1)
+            diff_i = th.log_softmax(response_logits_i - c_logits, dim=-1)
 
             # Record the response from every layer j > i
             for j, response in enumerate(responses[1:], start=i + 1):
-                control_logits = decoder(control_hs[j][:, token_idx])
+                c_logits = decoder(c_inputs[j][:, token_idx])
                 response_logits = decoder(response.squeeze(1))
 
                 # Aitchison difference
-                diff_j = th.log_softmax(response_logits - control_logits, dim=-1)
-                alignments = aitchison_similarity(
-                    diff_i, diff_j, weight=aitchison_weights
-                )
+                diff_j = th.log_softmax(response_logits - c_logits, dim=-1)
+                alignments = aitchison_similarity(diff_i, diff_j, weight=weights)
                 effect_alignments[:, token_idx, i, j] = alignments
-                effect_sizes[:, token_idx, i, j] = divergence(
-                    control_logits, response_logits
-                )
+                effect_sizes[:, token_idx, i, j] = divergence(c_logits, response_logits)
                 surprisals[:, token_idx, i, j] = divergence(
-                    response_logits, control_logits + diff_i
+                    response_logits, c_logits + diff_i
                 )
 
             # Record the response from the final layer
-            control_logits = control.logits[:, token_idx]
+            c_logits = control.logits[:, token_idx]
             response_logits = treated.logits.squeeze(1)
-            effect_sizes[:, token_idx, i, -1] = divergence(
-                control_logits, response_logits
-            )
+            effect_sizes[:, token_idx, i, -1] = divergence(c_logits, response_logits)
             surprisals[:, token_idx, i, -1] = divergence(
-                response_logits, control_logits + diff_i
+                response_logits, response_logits_i
             )
-
-            # Record the most changed token
-            prob_diffs = response_logits.softmax(-1) - control_logits.softmax(-1)
-            most_changed = prob_diffs.abs().argmax(-1)
-            largest_diff = prob_diffs.gather(-1, most_changed[..., None])
-            most_changed_ids[:, token_idx, i] = most_changed
-            most_changed_diffs[:, token_idx, i] = largest_diff.squeeze(-1)
+            if token_idx < S - 1:
+                treated_loss = th.nn.functional.cross_entropy(
+                    response_logits, token_ids[:, token_idx + 1], reduction="none"
+                )
+                control_loss = th.nn.functional.cross_entropy(
+                    c_logits, token_ids[:, token_idx + 1], reduction="none"
+                )
+                loss_diffs[:, token_idx, i] = treated_loss - control_loss
 
             # Aitchison difference
-            diff_j = th.log_softmax(response_logits - control_logits, dim=-1)
-            alignments = aitchison_similarity(diff_i, diff_j, weight=aitchison_weights)
+            diff_j = th.log_softmax(response_logits - c_logits, dim=-1)
+            alignments = aitchison_similarity(diff_i, diff_j, weight=weights)
             effect_alignments[:, token_idx, i, -1] = alignments
 
-    th.manual_seed(initial_seed)
     return InterventionResult(
-        doses,
         effect_alignments,
         effect_sizes,
         surprisals,
-        most_changed_ids,
-        most_changed_diffs,
+        loss_diffs,
+        stimulus_norms,
     )
 
 
