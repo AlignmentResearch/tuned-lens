@@ -47,8 +47,13 @@ def train_loop(
     if args.wandb and local_rank == 0:
         import wandb
 
+        *_, name = args.model_name.split("/")
         wandb.init(
-            name=args.wandb, project=args.model_name.split("/")[-1], config=vars(args)
+            config=vars(args),
+            entity="eleutherai",
+            group=name,
+            name=args.wandb,
+            project="tuned-lens",
         )
         wandb.watch(lens)
 
@@ -231,7 +236,7 @@ def train_loop(
 
                     # Approximate the true grad norm using the optimizer's moving avg
                     corr = 1 - β**step
-                    if args.optimizer == "sgd":
+                    if args.optimizer == "sgd" and not args.zero:
                         log_dict["grad_norm/" + name] = th.cat(
                             [
                                 # Undo PyTorch's scaling of the gradient by 1 / (1 - β)
@@ -239,7 +244,7 @@ def train_loop(
                                 for s in states
                             ]
                         ).norm()
-                    elif args.optimizer == "adam":
+                    elif args.optimizer == "adam" and not args.zero:
                         log_dict["grad_norm/" + name] = th.cat(
                             [s["exp_avg"].flatten() / corr for s in states]
                         ).norm()
