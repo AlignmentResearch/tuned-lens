@@ -88,6 +88,9 @@ def get_lens_parser() -> ArgumentParser:
 
     # Training-only arguments
     train_parser.add_argument(
+        "--constant", action="store_true", help="Train only the bias term."
+    )
+    train_parser.add_argument(
         "--dropout", type=float, default=0.0, help="Dropout prob for lens inputs."
     )
     train_parser.add_argument(
@@ -114,7 +117,7 @@ def get_lens_parser() -> ArgumentParser:
         type=int,
         nargs="+",
         default=[],
-        help="Hidden sizes of the MLPs used in the probes.",
+        help="Hidden sizes o1f the MLPs used in the probes.",
     )
     train_parser.add_argument(
         "--momentum",
@@ -123,7 +126,7 @@ def get_lens_parser() -> ArgumentParser:
         help="Momentum coefficient for SGD, or beta1 for Adam.",
     )
     train_parser.add_argument(
-        "--num-steps", type=int, default=100, help="Number of training steps."
+        "--num-steps", type=int, default=250, help="Number of training steps."
     )
     train_parser.add_argument(
         "--optimizer",

@@ -48,7 +48,7 @@ def eval_loop(
     for batch in pbar:
         batch = send_to_device(batch, th.device(local_rank))
         with record_residual_stream(model) as stream:
-            output = model(**batch, labels=batch["input_ids"])
+            output = model(**batch)
 
         final_lps = output.logits.log_softmax(dim=-1)
         final_probs = final_lps.exp()
@@ -88,6 +88,11 @@ def eval_loop(
         logit_stats.update(final_lps, assume_normalized=True)
         stream_stats.update(rest)
 
+        batch_output["baseline_ce"]["final"] = th.nn.functional.cross_entropy(
+            maybe_shift_preds(final_lps, 1).flatten(0, 1),
+            labels.flatten(),
+            reduction="none",
+        )
         batch_output["baseline_entropy"]["final"] = th.sum(
             -final_probs * final_lps, dim=-1
         )

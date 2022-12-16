@@ -106,12 +106,13 @@ class Decoder(th.nn.Module):
         self.unembedding = th.nn.Linear(d_model, vocab_size, device=unembed.device)
 
         # Roll the LN bias into our unembedding Linear
-        gamma, beta = raw_ln.weight.data.float(), raw_ln.bias.data.float()
+        gamma, beta = raw_ln.weight.data.float(), raw_ln.bias.data
         U = unembed.float()
         if isinstance(beta, th.Tensor):
-            bias = beta @ U.T
+            bias = beta.float() @ U.T
             bias -= bias.mean()  # Shift invariance of softmax
-            self.unembedding.bias.data = bias
+            self.unembedding.bias.data = bias.to(beta.dtype)
+            assert self.unembedding.bias.data.isfinite().all()
 
         # Roll the LN diagonal scaling factor into our unembedding matrix
         if isinstance(gamma, th.Tensor):
@@ -122,7 +123,8 @@ class Decoder(th.nn.Module):
         # input gets centered by LayerNorm.
         U = U - U.mean(dim=0)
         U -= U.mean(dim=1, keepdim=True)
-        self.unembedding.weight.data = U
+        self.unembedding.weight.data = U.to(unembed.dtype)
+        assert self.unembedding.weight.data.isfinite().all()
 
         # Use SVD to compute the pseudo-inverse of U.
         u, s, v_h = th.linalg.svd(U, full_matrices=False)

@@ -28,6 +28,10 @@ def train_loop(
     lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
     print(f"Tuned lens memory usage: {lens_size / 2 ** 20:.2f} MB per GPU")
 
+    if args.constant:
+        for probe in lens:
+            probe.weight.requires_grad_(False)
+
     local_rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     if world_size > 1:
@@ -93,7 +97,7 @@ def train_loop(
     if args.warmup_steps is None:
         # Adam generally performs poorly without an LR warmup
         if args.optimizer == "adam":
-            args.warmup_steps = min(1000, args.num_steps // 10)
+            args.warmup_steps = min(1000, args.num_steps // 5)
             print(f"Using {args.warmup_steps} LR warmup steps for Adam")
         else:
             args.warmup_steps = 0

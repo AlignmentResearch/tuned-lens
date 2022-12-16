@@ -142,6 +142,17 @@ def pytree_stack(trees: Sequence, dim: int = 0) -> AnyTree:
             raise
 
 
+def revcumsum(x: Sequence[th.Tensor]) -> list[th.Tensor]:
+    """Reverse cumulative sum of a sequence of tensors."""
+    if not len(x):
+        return []
+
+    running_total = th.zeros_like(x[0])
+    sums = [running_total.add_(r).clone() for r in reversed(x)]
+    sums.reverse()
+    return sums
+
+
 def send_to_device(tree: TreeType, device: th.device) -> TreeType:
     """Recursively send all tensors in a pytree to a device."""
     return pytree_map(lambda t: t.to(device), tree)

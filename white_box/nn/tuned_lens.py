@@ -65,8 +65,8 @@ class TunedLens(th.nn.Module):
         self.layer_norm.requires_grad_(False)
         self.unembedding.requires_grad_(False)
 
-        def create_mlp(sizes: Sequence[int]) -> th.nn.Sequential:
-            sizes = [d_model, *mlp_hidden_sizes, d_model]
+        def create_mlp(hidden_sizes: Sequence[int]) -> th.nn.Sequential:
+            sizes = [d_model, *hidden_sizes, d_model]
             mlp = th.nn.Sequential()
 
             for i, j in pairwise(sizes):
@@ -79,6 +79,7 @@ class TunedLens(th.nn.Module):
             last.bias.data.zero_()
             last.weight.data.zero_()
 
+            assert len(mlp) == 2 * len(hidden_sizes) + 1
             return mlp
 
         if mlp_hidden_sizes:
