@@ -15,6 +15,7 @@ def chunk_and_tokenize(
     tokenizer: PreTrainedTokenizerBase,
     *,
     format: str = "torch",
+    num_proc: int = cpu_count() // 2,
     text_key: str = "text",
 ) -> T:
     """Perform GPT-style chunking and tokenization on a dataset.
@@ -27,6 +28,7 @@ def chunk_and_tokenize(
         data: The dataset to chunk and tokenize.
         tokenizer: The tokenizer to use.
         format: The format to return the dataset in, passed to `Dataset.with_format`.
+        num_proc: The number of processes to use for tokenization.
         text_key: The key in the dataset to use as the text to tokenize.
 
     Returns:
@@ -35,13 +37,13 @@ def chunk_and_tokenize(
     return data.map(
         partial(_tokenize_fn, tokenizer=tokenizer, text_key=text_key),
         batched=True,
-        num_proc=cpu_count() // 2,
+        num_proc=num_proc,
         remove_columns=get_columns_all_equal(data),
     ).with_format(
         format,
         # Remove the "overflow_to_sample_mapping" column so we can directly pass
         # elements of the dataset to a model
-        columns=["input_ids", "attention_mask"],
+        columns=["input_ids"],
     )
 
 
@@ -79,18 +81,37 @@ def compute_nats_to_bpb_ratio(raw: T, tokenized: T) -> float:
 
 def _tokenize_fn(x: dict, tokenizer: PreTrainedTokenizerBase, text_key: str):
     """Annoyingly, we need to use a separate function so it can be hashed correctly."""
+    chunk_size = min(tokenizer.model_max_length, 2048)
     sep = tokenizer.eos_token or "<|endoftext|>"
+    output = tokenizer(
+        # Concatenate all the samples together, separated by the EOS token.
+        sep.join(x[text_key]),
+        max_length=chunk_size,
+        return_overflowing_tokens=True,
+        truncation=True,
+    )
+
+    # Workaround for weird inconsistency of behavior in OPT tokenizer
+    if overflow := output.pop("overflowing_tokens", None):
+        tokens = output["input_ids"]
+        tokens += overflow
+
+        # Drop tokens that don't fit into a chunk
+        limit = len(tokens) - len(tokens) % chunk_size
+
+        # Manually group tokens into a list of chunks of length `chunk_size`
+        return {
+            "input_ids": [
+                tokens[i : i + chunk_size] for i in range(0, limit, chunk_size)
+            ]
+        }
+
+    # Normal case
     return {
         # We know that the last sample will almost always be less than the max
         # number of tokens, and we don't want to pad, so we just drop it.
         k: v[:-1]
-        for k, v in tokenizer(
-            # Concatenate all the samples together, separated by the EOS token.
-            sep.join(x[text_key]),
-            max_length=min(tokenizer.model_max_length, 2048),
-            return_overflowing_tokens=True,
-            truncation=True,
-        ).items()
+        for k, v in output.items()
     }
 
 

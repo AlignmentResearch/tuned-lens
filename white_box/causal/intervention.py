@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from tqdm.auto import trange
 from transformers import PreTrainedModel
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Callable, Literal, Optional, TYPE_CHECKING
 import torch as th
 import warnings
 
@@ -21,6 +21,7 @@ class InterventionResult:
     loss_diffs: th.Tensor
     response_sizes: th.Tensor
     stimulus_alignments: th.Tensor
+    stimulus_angles: th.Tensor
     stimulus_sizes: th.Tensor
     stimulus_norms: th.Tensor
     surprisals: th.Tensor
@@ -150,8 +151,8 @@ def estimate_effects(
     decoder: Optional[Decoder] = None,
     divergence: Callable[[th.Tensor, th.Tensor], th.Tensor] = kl_divergence,
     lens: Optional[TunedLens] = None,
-    logit_space: bool = False,
     mean_ablate: bool = False,
+    mode: Literal["gaussian", "resample", "resample-logit"] = "resample",
     seed: int = 42,
     tau: float = th.inf,
 ):
@@ -201,6 +202,7 @@ def estimate_effects(
         response_sizes=th.zeros(B, S, L - 1, device=device),
         stimulus_alignments=th.zeros(B, S, L - 1, device=device),
         stimulus_sizes=th.zeros(B, S, L - 1, device=device),
+        stimulus_angles=th.zeros(B, S, L - 1, device=device),
         stimulus_norms=th.zeros(B, S, L - 1, device=device),
         surprisals=th.zeros(B, S, L - 1, device=device),
     )
@@ -214,7 +216,12 @@ def estimate_effects(
             c_in, c_res, c_out = map(lambda x: x[:, token_idx], ctrl)
             c_logits_i = decoder(transform(c_out, i, token_idx))
 
-            if logit_space:
+            if mode == "gaussian":
+                treated_out = c_out + th.randn_like(c_out)
+            elif mode == "resample":
+                indices = sample_neighbors(c_logits_i, tau, generator=rng)
+                treated_out = c_in + c_res[indices]
+            elif mode == "resample-logit":
                 with th.autocast("cuda", enabled=False):
                     treated_out = decoder.invert(
                         target_logits[:, token_idx].float(),
@@ -223,8 +230,7 @@ def estimate_effects(
                         transform=lambda x: transform(x, i, token_idx),
                     ).preimage
             else:
-                indices = sample_neighbors(c_logits_i, tau, generator=rng)
-                treated_out = c_in + c_res[indices]
+                raise ValueError(f"Unknown mode: {mode}")
 
             with layer_intervention(model, [i], lambda _: treated_out):
                 treated = model(
@@ -237,6 +243,9 @@ def estimate_effects(
             result.stimulus_sizes[:, token_idx, i] = divergence(
                 c_logits_i, treated_logits_i
             )
+            result.stimulus_angles[
+                :, token_idx, i
+            ] = th.nn.functional.cosine_similarity(treated_out, c_out, dim=-1).acos()
             result.stimulus_norms[:, token_idx, i] = th.norm(
                 treated_out - c_out, dim=-1
             )

@@ -14,10 +14,12 @@ class LogitStats:
     """
 
     n: int
+    marginal_probs: Optional[th.Tensor]
     sufficient_stats: Optional[th.Tensor]
 
     def __init__(self):
         self.n = 0
+        self.marginal_probs = None
         self.sufficient_stats = None
 
     def all_reduce_(self):
@@ -33,14 +35,20 @@ class LogitStats:
             logits = logits.log_softmax(dim=-1)
 
         N = logits.shape[0]
+        if self.marginal_probs is None:
+            self.marginal_probs = logits.new_zeros(K)
         if self.sufficient_stats is None:
             self.sufficient_stats = logits.new_zeros(K)
         elif self.sufficient_stats.shape[-1] != K:
             raise ValueError(f"Expected {self.sufficient_stats.shape[-1]} but got {K}")
 
+        # Online mean update for the marginal probabilities
+        delta = logits.exp().mean(0) - self.marginal_probs
+        self.n += N
+        self.marginal_probs += delta * N / self.n
+
         # Online mean update for the sufficient statistics
         delta = logits.mean(0) - self.sufficient_stats
-        self.n += N
         self.sufficient_stats += delta * N / self.n
 
     def mle(self, max_iter: int = 100, tol: float = 1e-4) -> Dirichlet:

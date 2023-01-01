@@ -10,6 +10,7 @@ from typing import Generator, Optional, Sequence, Union, cast
 import inspect
 import json
 import torch as th
+import torch.nn.functional as F
 
 
 class TunedLens(th.nn.Module):
@@ -23,9 +24,11 @@ class TunedLens(th.nn.Module):
         dropout: float = 0.0,
         identity_init: bool = True,
         include_input: bool = True,
+        layer_norm: bool = False,
         mlp_hidden_sizes: Sequence[int] = (),
         rank: Optional[int] = None,
         shared_mlp_hidden_sizes: Sequence[int] = (),
+        share_weights: bool = False,
         sublayers: bool = True,
         # Automatically set for HuggingFace models
         d_model: Optional[int] = None,
@@ -92,15 +95,16 @@ class TunedLens(th.nn.Module):
                 probe.weight.data.zero_()
                 probe.bias.data.zero_()
 
+        maybe_copy = deepcopy if not share_weights else lambda x: x
         self.add_module("input_probe", probe if include_input else None)
         self.attn_probes = th.nn.ModuleList(
-            [deepcopy(probe) for _ in range(num_layers)] if sublayers else []
+            [maybe_copy(probe) for _ in range(num_layers)] if sublayers else []
         )
         # Don't include the final layer
         num_layers -= 1
 
         self.layer_probes = th.nn.ModuleList(
-            [deepcopy(probe) for _ in range(num_layers)]
+            [maybe_copy(probe) for _ in range(num_layers)]
         )
         self.add_module(
             "shared_mlp",
@@ -144,6 +148,7 @@ class TunedLens(th.nn.Module):
 
         # Load parameters
         state = th.load(path / ckpt, **kwargs)
+        state.setdefault("layer_norm", False)  # Backwards compatibility
 
         # Drop unrecognized config keys
         unrecognized = set(config) - set(inspect.getfullargspec(cls).kwonlyargs)
@@ -181,10 +186,11 @@ class TunedLens(th.nn.Module):
         # Dropout encourages the probe to use all "copies" of redundant information
         # in the hidden state; see https://arxiv.org/abs/2204.09722.
         h = self.dropout(h)
-        h = h + self[idx](h)
+        h_ = F.layer_norm(h, (h.shape[-1],)) if self.config["layer_norm"] else h
+        h = h + self[idx](h_)
 
         if isinstance(self.shared_mlp, th.nn.Module):
-            h = th.nn.functional.layer_norm(h, (h.shape[-1],))
+            h = F.layer_norm(h, (h.shape[-1],))
             h = h + self.shared_mlp(h)
 
         return h

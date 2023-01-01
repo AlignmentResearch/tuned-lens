@@ -130,6 +130,9 @@ def pytree_stack(trees: Sequence, dim: int = 0) -> AnyTree:
     structure. All pytrees are expected to have the same structure; undefined behavior
     will occur if this is not the case.
     """
+    if not len(trees):
+        raise ValueError("Cannot stack empty sequence of pytrees")
+
     transposed_iter = zip(*(pytree_flatten(tree) for tree in trees))
     leaf_iter = (th.stack(seq, dim) for seq in transposed_iter)
     try:

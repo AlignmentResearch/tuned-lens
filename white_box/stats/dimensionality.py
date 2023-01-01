@@ -1,7 +1,7 @@
 import torch as th
 
 
-def effective_rank(A: th.Tensor) -> th.Tensor:
+def effective_rank(A: th.Tensor, num_rogue_dims: int = 0) -> th.Tensor:
     """Return the perplexity (exponentiated entropy) of the singular values of A.
 
     Intuitively, the effective rank of a matrix measures how uniformly distributed its
@@ -18,7 +18,10 @@ def effective_rank(A: th.Tensor) -> th.Tensor:
     max_rank = min(m, n)
 
     sigma = th.linalg.svdvals(A)
-    probs = sigma / sigma.sum(dim=-1)
+    if num_rogue_dims:
+        sigma = sigma[num_rogue_dims:]
+
+    probs = sigma / sigma.sum(dim=-1, keepdim=True)
     entropy = -th.sum(probs * th.log(probs), dim=-1)
 
     # Sometimes due to numerical issues the exponentiated entropy can come out

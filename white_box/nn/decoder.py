@@ -33,7 +33,6 @@ class InversionOutput:
     nfev: int
 
     hessian: Optional[th.Tensor]
-    iterates: list[tuple[th.Tensor, th.Tensor]]
 
 
 class Decoder(th.nn.Module):
@@ -93,8 +92,10 @@ class Decoder(th.nn.Module):
         assert raw_ln is not None
 
         raw_unembed = model.get_output_embeddings()
-        if not hasattr(raw_unembed, "weight"):
-            raise ValueError("Failed to extract unembedding matrix.")
+        if not isinstance(raw_unembed, th.nn.Linear):
+            # With nn.Linear we know that the unembedding matrix is .weight;
+            # we don't want to guess incorrectly for other module classes.
+            raise ValueError("Currently we only support nn.Linear unembeddings.")
 
         unembed = raw_unembed.weight.data
         assert isinstance(unembed, th.Tensor)
@@ -179,9 +180,8 @@ class Decoder(th.nn.Module):
         optimizer: Literal["lbfgs", "sgd"] = "lbfgs",
         prior_weight: float = 0.0,
         prior: Optional[Distribution] = None,
-        return_iterates: bool = False,
         step_size: float = 1.0,
-        tol: float = 1e-4,
+        tol: float = 1e-3,
         transform: Callable = lambda x: x,
         weight: Optional[th.Tensor] = None,
     ) -> InversionOutput:
@@ -205,8 +205,6 @@ class Decoder(th.nn.Module):
                 unembedding matrix.
             optimizer: Optimization algorithm to use. Currently, only "lbfgs" and "sgd"
                 are supported.
-            return_iterates: Whether to return all intermediate solutions of the
-                inversion algorithm prior to convergence, along with their loss values.
             weight: Optional tensor of shape `[..., vocab_size]` containing weights
                 for each vocabulary item. If `None`, all classes are weighted equally.
         """
@@ -272,7 +270,6 @@ class Decoder(th.nn.Module):
 
             return loss, kl
 
-        iterates: list[tuple[th.Tensor, th.Tensor]] = []
         nfev = 0  # Number of function evals, like in scipy.optimize.minimize
         loss, kl = log_p.new_tensor(th.inf), log_p.new_tensor(th.inf)
 
@@ -282,8 +279,6 @@ class Decoder(th.nn.Module):
 
             opt.zero_grad()
             loss, kl = compute_loss(h_star)
-            if return_iterates:
-                iterates.append((loss.detach().clone(), h_star.data.clone()))
 
             if not loss.isfinite():
                 raise RuntimeError("Inversion objective is not finite.")
@@ -292,7 +287,6 @@ class Decoder(th.nn.Module):
             return loss
 
         grad_norm = log_p.new_tensor(th.inf)
-        opt.step(closure)  # type: ignore
         while nfev < max_iter:
             opt.step(closure)  # type: ignore
 
@@ -308,7 +302,6 @@ class Decoder(th.nn.Module):
                 preimage=self.layer_norm(h_star.data),
                 grad_norm=grad_norm,
                 hessian=None,
-                iterates=iterates,
                 kl=kl.detach(),
                 loss=loss.detach(),
                 nfev=nfev,

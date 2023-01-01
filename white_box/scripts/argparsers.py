@@ -60,6 +60,9 @@ def get_lens_parser() -> ArgumentParser:
         "--seed", type=int, default=42, help="Random seed for data shuffling."
     )
     parent_parser.add_argument(
+        "--slow-tokenizer", action="store_true", help="Use a slow tokenizer."
+    )
+    parent_parser.add_argument(
         "--split", type=str, default="validation", help="Split of the dataset to use."
     )
     parent_parser.add_argument(
@@ -95,6 +98,11 @@ def get_lens_parser() -> ArgumentParser:
     )
     train_parser.add_argument(
         "--lasso", type=float, default=0.0, help="LASSO (L1) regularization strength."
+    )
+    train_parser.add_argument(
+        "--layer-norm",
+        action="store_true",
+        help="Apply layer norm to the tuned lens input.",
     )
     train_parser.add_argument(
         "--lens", type=Path, help="Directory containing a lens to warm-start training."
@@ -154,6 +162,11 @@ def get_lens_parser() -> ArgumentParser:
         help="Hidden sizes of the MLP shared by all probes.",
     )
     train_parser.add_argument(
+        "--share-weights",
+        action="store_true",
+        help="Share weights between probes for different layers.",
+    )
+    train_parser.add_argument(
         "--sublayers",
         action="store_true",
         help="Train tuned lenses for attention blocks.",
@@ -196,6 +209,11 @@ def get_lens_parser() -> ArgumentParser:
         "--output",
         type=Path,
         help="JSON file to save the eval results to.",
+    )
+    eval_parser.add_argument(
+        "--transfer",
+        action="store_true",
+        help="Evaluate how well probes transfer to other layers.",
     )
 
     return parser

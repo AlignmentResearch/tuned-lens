@@ -44,6 +44,7 @@ def main(args):
         print(f"Loading pretrained weights for '{args.model_name}'...")
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name,
+            low_cpu_mem_usage=True,
             revision=args.revision,
             torch_dtype="auto",
         )
@@ -61,9 +62,11 @@ def main(args):
         lens = TunedLens(
             model,
             dropout=args.dropout,
+            layer_norm=args.layer_norm,
             mlp_hidden_sizes=args.mlp_hidden_sizes,
             rank=args.rank,
             shared_mlp_hidden_sizes=args.shared_mlp_hidden_sizes,
+            share_weights=args.share_weights,
             sublayers=args.sublayers,
         ).to(
             dtype=th.float16 if args.lens_dtype == "float16" else th.float32,
@@ -96,7 +99,9 @@ def main(args):
         model.to(local_rank)
 
     # Load tokenizer & data
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer or args.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.tokenizer or args.model_name, use_fast=not args.slow_tokenizer
+    )
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
     silence_datasets_messages()
 
@@ -120,7 +125,7 @@ def main(args):
     if args.command == "train":
         train_loop(args, model, processed, lens, float(nats_to_bpb))
     elif args.command == "eval":
-        eval_loop(args, model, processed, lens)
+        eval_loop(args, model, processed, lens, float(nats_to_bpb))
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

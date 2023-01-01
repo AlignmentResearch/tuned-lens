@@ -35,7 +35,9 @@ def train_loop(
     local_rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     if world_size > 1:
-        ddp_lens = DDP(lens, device_ids=[local_rank], find_unused_parameters=True)
+        ddp_lens = DDP(
+            lens, device_ids=[local_rank], find_unused_parameters=not args.share_weights
+        )
     else:
         ddp_lens = lens
 

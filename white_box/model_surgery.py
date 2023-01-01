@@ -56,10 +56,12 @@ def get_final_layer_norm(
     model: PreTrainedModel, norm_class: Type[th.nn.Module] = th.nn.LayerNorm
 ) -> Optional[th.nn.Module]:
     """Use heuristics to find the final layer norm in a model, if it exists."""
+    base = model.base_model
+    if decoder := getattr(base, "decoder", None):
+        base = decoder
+
     top_level_lns = [
-        module
-        for module in model.base_model.children()
-        if isinstance(module, norm_class)
+        module for module in base.children() if isinstance(module, norm_class)
     ]
     return top_level_lns[-1] if top_level_lns else None
 
