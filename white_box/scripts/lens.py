@@ -24,7 +24,7 @@ from white_box.data import (
     silence_datasets_messages,
 )
 from white_box.model_surgery import get_transformer_layers
-from white_box.scripts import eval_loop, train_loop
+from white_box.scripts import eval_loop, extract_bases, train_loop
 import json
 import os
 import torch as th
@@ -126,6 +126,8 @@ def main(args):
         train_loop(args, model, processed, lens, float(nats_to_bpb))
     elif args.command == "eval":
         eval_loop(args, model, processed, lens, float(nats_to_bpb))
+    elif args.command == "extract-bases":
+        extract_bases(args, model, processed, lens)
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

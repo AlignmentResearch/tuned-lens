@@ -2,6 +2,7 @@ from ..model_surgery import get_transformer_layers
 from ..nn import Decoder, TunedLens
 from ..stats import aitchison_similarity, kl_divergence, sample_neighbors
 from ..utils import pytree_map, revcumsum
+from .utils import derange
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from tqdm.auto import trange
@@ -196,7 +197,7 @@ def estimate_effects(
         assert len(lens) == L
         lens = lens.to(device).eval()
 
-    target_logits = control.logits[th.randperm(B, device=device, generator=rng)]
+    target_logits = derange(control.logits, generator=rng)
     result = InterventionResult(
         loss_diffs=th.zeros(B, S, L - 1, device=device),
         response_sizes=th.zeros(B, S, L - 1, device=device),

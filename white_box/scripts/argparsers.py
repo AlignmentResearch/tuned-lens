@@ -88,6 +88,7 @@ def get_lens_parser() -> ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     train_parser = subparsers.add_parser("train", parents=[parent_parser])
     eval_parser = subparsers.add_parser("eval", parents=[parent_parser])
+    basis_parser = subparsers.add_parser("extract-bases", parents=[parent_parser])
 
     # Training-only arguments
     train_parser.add_argument(
@@ -214,6 +215,17 @@ def get_lens_parser() -> ArgumentParser:
         "--transfer",
         action="store_true",
         help="Evaluate how well probes transfer to other layers.",
+    )
+
+    # Basis extraction-only arguments
+    basis_parser.add_argument(
+        "lens", type=Path, help="Directory containing the tuned lens to use."
+    )
+    basis_parser.add_argument(
+        "-o", "--output", type=Path, help="File to save the basis to."
+    )
+    basis_parser.add_argument(
+        "--k", type=int, default=25, help="Number of basis vectors to extract."
     )
 
     return parser

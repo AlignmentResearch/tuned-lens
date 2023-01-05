@@ -7,7 +7,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup
-from white_box import ResidualStats, ResidualStream, TunedLens
+from white_box import ResidualStream, TunedLens
 from white_box.utils import (
     maybe_all_reduce,
     maybe_shift_labels,
@@ -45,11 +45,6 @@ def train_loop(
         data.shuffle(seed=args.seed),  # type: ignore[arg-type]
         batch_size=args.per_gpu_batch_size,
     )
-
-    # Running mean & covariance of the hidden states
-    first_token_stats = ResidualStats()
-    stream_stats = ResidualStats()
-
     if args.wandb and local_rank == 0:
         import wandb
 
@@ -154,12 +149,6 @@ def train_loop(
         stream = ResidualStream(
             embeddings=output.hidden_states[0], layers=output.hidden_states[1:-1]
         )
-        if args.residual_stats:
-            first_tokens = stream.map(lambda x: x[:, 0])
-            rest = stream.map(lambda x: x[:, 1:])
-
-            first_token_stats.update(first_tokens)
-            stream_stats.update(rest)
 
         shift = args.token_shift
         if args.loss == "ce":
@@ -168,7 +157,7 @@ def train_loop(
             # Predict the *next* token by default w/ cross entropy
             if shift is None:
                 shift = 1
-        elif args.loss in ("kl", "kl-reverse"):
+        elif args.loss == "kl":
             labels = final_logits.log_softmax(dim=-1)
 
             # Match the *current* token distribution by default
@@ -190,18 +179,9 @@ def train_loop(
                     loss = th.nn.functional.cross_entropy(
                         logits.flatten(0, -2), labels.flatten()
                     )
-
-                # KL(P || Q)
                 elif args.loss == "kl":
                     loss = th.sum(
                         labels.exp() * (labels - logits.log_softmax(-1)), dim=-1
-                    ).mean()
-
-                # KL(Q || P)
-                elif args.loss == "kl-reverse":
-                    log_probs = logits.log_softmax(-1)
-                    loss = th.sum(
-                        log_probs.exp() * (log_probs.log_softmax(-1) - labels), dim=-1
                     ).mean()
                 else:
                     raise NotImplementedError
@@ -269,10 +249,3 @@ def train_loop(
     if local_rank == 0:
         print(f"Saving lens to {args.output}")
         lens.save(args.output)
-
-    if args.residual_stats:
-        first_token_stats.all_reduce_()
-        stream_stats.all_reduce_()
-        if local_rank == 0:
-            th.save(first_token_stats, args.output / "first_token_stats.pt")
-            th.save(stream_stats, args.output / "stream_stats.pt")

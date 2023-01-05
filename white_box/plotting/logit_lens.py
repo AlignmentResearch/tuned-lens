@@ -1,7 +1,7 @@
 from ..model_surgery import get_final_layer_norm, get_transformer_layers
 from ..nn.tuned_lens import TunedLens
 from ..residual_stream import ResidualStream, record_residual_stream
-from ..stats import geodesic_distance, js_divergence
+from ..stats import js_divergence
 from transformers import (
     PreTrainedModel,
     PreTrainedTokenizer,
@@ -24,11 +24,10 @@ def plot_logit_lens(
     tokenizer: Tokenizer,
     *,
     input_ids: Optional[th.Tensor] = None,
-    add_last_tuned_lens_layer: bool = False,
     end_pos: Optional[int] = None,
     extra_decoder_layers: int = 0,
     layer_stride: int = 1,
-    metric: Literal["ce", "geodesic", "entropy", "js", "kl"] = "entropy",
+    metric: Literal["ce", "entropy", "js", "kl"] = "entropy",
     newline_replacement: str = "\\n",
     newline_token: str = "Ċ",
     rank: int = 0,
@@ -54,8 +53,7 @@ def plot_logit_lens(
             lambda h, i: tuned_lens(h, i).log_softmax(dim=-1),
             range(len(stream) - 1),
         )
-        if add_last_tuned_lens_layer:
-            hidden_lps.layers.append(outputs.logits.log_softmax(dim=-1))
+        hidden_lps.layers.append(outputs.logits.log_softmax(dim=-1))
     else:
         E = model.get_output_embeddings()
         ln_f = get_final_layer_norm(model.base_model)
@@ -105,10 +103,6 @@ def plot_logit_lens(
             raise NotImplementedError
         elif metric == "entropy":
             stats = hidden_lps.map(lambda x: -th.sum(x.exp() * x, dim=-1))
-        elif metric == "geodesic":
-            max_color = None
-            stats = hidden_lps.pairwise_map(geodesic_distance)
-            top_strings.embeddings = None
         elif metric == "js":
             max_color = None
             stats = hidden_lps.pairwise_map(js_divergence)
@@ -135,7 +129,11 @@ def plot_logit_lens(
         vmax=max_color,
         k=topk,
         title=("Tuned Lens" if tuned_lens is not None else "Logit Lens")
-        + (": Top Token" if rank < 1 else f": Rank {rank}"),
+        + (
+            f" ({model.name_or_path})"
+            if rank < 1
+            else f": Rank {rank} ({model.name_or_path})"
+        ),
         colorscale="rdbu_r" if rank < 1 else "blues",
         rank=rank,
     )
@@ -228,11 +226,11 @@ def _plot_stream(
     fig.add_trace(
         go.Heatmap(
             colorscale=colorscale,
-            customdata=top_k_strings_and_probs,
+            customdata=top_k_strings_and_probs[::layer_stride],
             text=top_1_strings,
             texttemplate="%{text}",
             x=x_labels,
-            y=color_stream.labels(),
+            y=color_stream.labels()[::layer_stride],
             z=color_matrix,
             hoverlabel=dict(bgcolor="rgb(42, 42, 50)"),
             hovertemplate="<br>".join(

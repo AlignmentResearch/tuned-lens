@@ -16,6 +16,9 @@ import torch.nn.functional as F
 class TunedLens(th.nn.Module):
     """Stores all parameters necessary to decode hidden states into logits."""
 
+    layer_norm: th.nn.LayerNorm
+    unembedding: th.nn.Linear
+
     def __init__(
         self,
         model: Optional[PreTrainedModel] = None,

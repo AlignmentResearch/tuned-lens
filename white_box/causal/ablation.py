@@ -1,5 +1,6 @@
 from ..model_surgery import get_transformer_layers
 from ..utils import revcumsum
+from .utils import derange
 from contextlib import contextmanager
 from typing import Callable, Literal, Optional, Sequence
 import torch as th
@@ -52,8 +53,7 @@ def ablate_layer(
             target_sample = None
 
         if method == "resample":
-            indices = th.randperm(batch_size, device=x.device)
-            ablated = x + residuals[indices]
+            ablated = x + derange(residuals)
         elif method == "mean":
             ablated = x + residuals.mean(0, keepdim=True)
         else:
