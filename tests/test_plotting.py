@@ -32,7 +32,6 @@ def test_plot_logit_lens():
         input_ids=input_ids,
         tokenizer=tokenizer,
         tuned_lens=pythia_125M_lens,
-        add_last_tuned_lens_layer=True,
     )
 
     # Plot w/ short text
@@ -43,7 +42,6 @@ def test_plot_logit_lens():
         input_ids=short_input_ids,
         tokenizer=tokenizer,
         tuned_lens=pythia_125M_lens,
-        add_last_tuned_lens_layer=True,
     )
 
     # Plot topk prob diff w/ last layer, should have N/A for the bottom row
@@ -52,7 +50,6 @@ def test_plot_logit_lens():
         input_ids=input_ids,
         tokenizer=tokenizer,
         tuned_lens=pythia_125M_lens,
-        add_last_tuned_lens_layer=True,
         topk_diff=True,
     )
     # Plot topk prob diff w/o last layer
@@ -86,7 +83,6 @@ def test_plot_logit_lens():
         input_ids=input_ids,
         tokenizer=tokenizer,
         tuned_lens=pythia_125M_lens,
-        add_last_tuned_lens_layer=True,
         topk=30,
     )  # Breaks at 18 for notebook, but good for browser
     # Plot w/ topk equals small
@@ -95,6 +91,5 @@ def test_plot_logit_lens():
         input_ids=input_ids,
         tokenizer=tokenizer,
         tuned_lens=pythia_125M_lens,
-        add_last_tuned_lens_layer=True,
         topk=1,
     )

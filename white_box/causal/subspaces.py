@@ -4,9 +4,10 @@ from ..utils import maybe_all_reduce
 from .utils import derange
 from contextlib import contextmanager
 from tqdm.auto import trange
-from typing import Iterable, Literal, NamedTuple, Union, Sequence
+from typing import Iterable, Literal, NamedTuple, Optional, Union, Sequence
 import torch as th
 import torch.distributed as dist
+import torch.nn.functional as F
 
 
 @contextmanager
@@ -51,11 +52,11 @@ class CausalBasis(NamedTuple):
 
 def extract_causal_bases(
     model: Union[Decoder, TunedLens],
-    inputs: Sequence[th.Tensor],
+    hiddens: Sequence[th.Tensor],
     k: int,
     *,
+    labels: Optional[th.Tensor] = None,
     max_iter: int = 100,
-    min_energy: float = 0.0,
     mode: Literal["mean", "resample", "zero"] = "mean",
 ) -> Iterable[CausalBasis]:
     """Extract causal bases for probes at each layer of a model.
@@ -63,19 +64,17 @@ def extract_causal_bases(
     Args:
         model: A model to compute causal bases for. This can be a `Decoder` or a
             `TunedLens` instance.
-        inputs: A sequence of hidden states from the model.
+        hiddens: A sequence of hidden states from the model.
         k: The number of basis vectors to compute for each layer.
         max_iter: The maximum number of iterations to run L-BFGS for each vector.
-        min_energy: The minimum energy a basis vector needs in order to be included.
     """
     model.requires_grad_(False)
 
-    log_p = None
-    device = inputs[0].device
-    dtype = inputs[0].dtype
-    d = inputs[0].shape[-1]
+    device = hiddens[0].device
+    dtype = hiddens[0].dtype
+    d = hiddens[0].shape[-1]
 
-    hiddens = [h.detach() for h in inputs]
+    hiddens = [h.detach() for h in hiddens]
     num_layers = len(hiddens) - 1
 
     assert k <= d
@@ -91,19 +90,26 @@ def extract_causal_bases(
     for i in range(num_layers):
         U = model.unembedding.weight.data.T
 
-        # Initialize basis vectors with left singular vectors of U
         if isinstance(model, Decoder):
             log_p = model(hiddens[i]).log_softmax(-1)
-            u, *_ = th.linalg.svd(U, full_matrices=False)
 
         elif isinstance(model, TunedLens):
             log_p = model(hiddens[i], i).log_softmax(-1)
-            u, *_ = th.linalg.svd(
-                (eye + model[i].weight.data.T) @ U, full_matrices=False
-            )
+            U = (eye + model[i].weight.data.T) @ U
         else:
             raise NotImplementedError()
 
+        # Compute the baseline loss up front so that we can subtract it
+        # from the post-ablation losses to get the loss increment
+        if labels is not None:
+            base_loss = F.cross_entropy(
+                log_p[:, :-1].flatten(0, -2), labels[:, 1:].flatten()
+            )
+        else:
+            base_loss = 0.0
+
+        # Initialize basis vectors with left singular vectors of U
+        u, *_ = th.linalg.svd(U, full_matrices=False)
         basis = CausalBasis(th.zeros(k, device=device), u[:, :k].float())
 
         # Inner loop iterates over directions
@@ -130,36 +136,48 @@ def extract_causal_bases(
             basis.vectors[:, j] = project(basis.vectors[:, j])
             v = th.nn.Parameter(basis.vectors[:, j])
 
+            nfev = 0
+            energy_delta = th.tensor(0.0, device=device)
+            last_energy = th.tensor(0.0, device=device)
+
             opt = th.optim.LBFGS(
                 [v],
                 line_search_fn="strong_wolfe",
                 max_iter=max_iter,
-                tolerance_change=1e-4,
             )
-            last_energy = th.tensor(0.0, device=device)
 
             def closure():
-                nonlocal last_energy
+                nonlocal energy_delta, nfev, last_energy
+                nfev += 1
 
                 opt.zero_grad()
                 v_ = project(v)
                 h_ = remove_subspace(hiddens[i], v_, mode=mode, orthonormal=True)
 
                 if isinstance(model, Decoder):
-                    log_q = model(h_).log_softmax(dim=-1)
+                    logits = model(h_)
                 elif isinstance(model, TunedLens):
-                    log_q = model(h_, i).log_softmax(dim=-1)
+                    logits = model(h_, i)
                 else:
                     raise TypeError(f"Unknown lens type {type(model)}")
 
-                loss = -th.sum(p * (log_p - log_q), dim=-1).mean()
-                loss.backward()
+                if labels is not None:
+                    loss = -F.cross_entropy(
+                        logits[:, :-1].flatten(0, 1), labels[:, 1:].flatten()
+                    )
+                else:
+                    log_q = logits.log_softmax(-1)
+                    loss = -th.sum(p * (log_p - log_q), dim=-1).mean()
 
+                loss.backward()
                 maybe_all_reduce(loss, "mean")
                 maybe_all_reduce(v.grad, "mean")  # type: ignore[arg-type]
 
                 assert v.grad is not None
-                last_energy = -loss.detach()
+                new_energy = -loss.detach() - base_loss
+                energy_delta = new_energy - last_energy
+                last_energy = new_energy
+
                 if pbar:
                     pbar.set_postfix(energy=last_energy.item())
 
@@ -170,25 +188,19 @@ def extract_causal_bases(
 
                 return loss
 
-            opt.step(closure)  # type: ignore[arg-type]
+            while nfev < max_iter:
+                opt.step(closure)  # type: ignore
+                v.data = project(v.data)
+
+                if abs(energy_delta / last_energy) < 1e-4:
+                    break
 
             basis.vectors[:, j] = project(v.data)
             basis.energies[j] = last_energy
 
-            # If the energy is too low, stop looking for more basis vectors
-            if last_energy < min_energy:
-                basis = CausalBasis(basis.energies[: j + 1], basis.vectors[:, : j + 1])
-                if pbar:
-                    pbar.update(k - j)
-                    pbar.write(
-                        "Hit minimum energy threshold; skipping remaining vectors"
-                    )
-                break
-
             if pbar:
                 pbar.update()
 
-        # Sanity check the energies for monotonicity
         indices = basis.energies.argsort(descending=True)
         yield CausalBasis(basis.energies[indices], basis.vectors[:, indices])
 

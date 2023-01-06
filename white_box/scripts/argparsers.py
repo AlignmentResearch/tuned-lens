@@ -88,7 +88,9 @@ def get_lens_parser() -> ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     train_parser = subparsers.add_parser("train", parents=[parent_parser])
     eval_parser = subparsers.add_parser("eval", parents=[parent_parser])
-    basis_parser = subparsers.add_parser("extract-bases", parents=[parent_parser])
+
+    eval_basis_parser = subparsers.add_parser("eval-bases", parents=[parent_parser])
+    extract_parser = subparsers.add_parser("extract-bases", parents=[parent_parser])
 
     # Training-only arguments
     train_parser.add_argument(
@@ -217,14 +219,37 @@ def get_lens_parser() -> ArgumentParser:
         help="Evaluate how well probes transfer to other layers.",
     )
 
-    # Basis extraction-only arguments
-    basis_parser.add_argument(
-        "lens", type=Path, help="Directory containing the tuned lens to use."
+    # Basis evaluation-only arguments
+    eval_basis_parser.add_argument(
+        "bases", type=Path, help="Directory containing the causal bases to evaluate."
     )
-    basis_parser.add_argument(
+    eval_basis_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Number of batches to evaluate on. If None, will use the entire dataset.",
+    )
+    eval_basis_parser.add_argument(
+        "--mode", type=str, choices=("mean", "resample", "zero"), default="mean"
+    )
+    eval_basis_parser.add_argument(
+        "-o", "--output", type=Path, help="Folder to save the results to."
+    )
+
+    # Basis extraction-only arguments
+    extract_parser.add_argument(
+        "lens", type=Path, help="Directory containing the tuned lens to use.", nargs="?"
+    )
+    extract_parser.add_argument(
+        "--optimizer", type=str, choices=("lbfgs", "pgd"), default="lbfgs"
+    )
+    extract_parser.add_argument(
+        "--mode", type=str, choices=("mean", "resample", "zero"), default="mean"
+    )
+    extract_parser.add_argument(
         "-o", "--output", type=Path, help="File to save the basis to."
     )
-    basis_parser.add_argument(
+    extract_parser.add_argument(
         "--k", type=int, default=25, help="Number of basis vectors to extract."
     )
 

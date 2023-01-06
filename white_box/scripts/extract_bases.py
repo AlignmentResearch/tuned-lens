@@ -1,7 +1,9 @@
 from argparse import Namespace
 from datasets import Dataset
-from white_box import TunedLens
+from transformers import PreTrainedModel
+from typing import Optional
 from white_box.causal import extract_causal_bases
+from white_box.nn import Decoder, TunedLens
 from white_box.utils import send_to_device
 import torch as th
 import torch.distributed as dist
@@ -9,9 +11,9 @@ import torch.distributed as dist
 
 def extract_bases(
     args: Namespace,
-    model: th.nn.Module,
+    model: PreTrainedModel,
     data: Dataset,
-    lens: TunedLens,
+    lens: Optional[TunedLens],
 ):
     local_rank = dist.get_rank() if dist.is_initialized() else 0
     args.output.mkdir(parents=True, exist_ok=True)
@@ -24,9 +26,11 @@ def extract_bases(
 
     basis_iter = extract_causal_bases(
         # Unfortunately I can't get this to work in half precision
-        lens.float(),
+        lens.float() if lens else Decoder(model).float(),
         [x.float() for x in outputs.hidden_states[:-1]],
         k=args.k,
+        labels=batch["input_ids"],
+        mode=args.mode,
     )
     for i, basis in enumerate(basis_iter):
         if local_rank == 0:

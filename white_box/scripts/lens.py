@@ -24,7 +24,7 @@ from white_box.data import (
     silence_datasets_messages,
 )
 from white_box.model_surgery import get_transformer_layers
-from white_box.scripts import eval_loop, extract_bases, train_loop
+from white_box.scripts import eval_loop, eval_bases, extract_bases, train_loop
 import json
 import os
 import torch as th
@@ -56,8 +56,10 @@ def main(args):
     th.cuda.set_device(local_rank)
 
     # Can be set either in eval or in training; in eval it's required
-    if args.lens:
+    if getattr(args, "lens", None):
         lens = TunedLens.load(args.lens, map_location="cpu")
+    elif args.command in ("eval-bases", "extract-bases"):
+        lens = None
     else:
         lens = TunedLens(
             model,
@@ -72,8 +74,11 @@ def main(args):
             dtype=th.float16 if args.lens_dtype == "float16" else th.float32,
         )
 
-    lens = lens.to(device=th.device("cuda", local_rank))
-    print(f"Using lens with config: {json.dumps(lens.config, indent=2)}")
+    if lens:
+        lens = lens.to(device=th.device("cuda", local_rank))
+        print(f"Using lens with config: {json.dumps(lens.config, indent=2)}")
+    else:
+        print("No tuned lens provided, using logit lens.")
 
     if args.fsdp:
         _, layers = get_transformer_layers(model)
@@ -126,6 +131,8 @@ def main(args):
         train_loop(args, model, processed, lens, float(nats_to_bpb))
     elif args.command == "eval":
         eval_loop(args, model, processed, lens, float(nats_to_bpb))
+    elif args.command == "eval-bases":
+        eval_bases(args, model, processed)
     elif args.command == "extract-bases":
         extract_bases(args, model, processed, lens)
     else:
