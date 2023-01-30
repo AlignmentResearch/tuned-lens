@@ -2,10 +2,10 @@ from copy import deepcopy
 from itertools import chain
 from pathlib import Path
 
+from . import LowRankLinear
+from ._model_specific import BloomBlock, _BloomBlockWrapper, instantiate_layer
 from ..model_surgery import get_final_layer_norm, get_transformer_layers
 from ..utils import pairwise
-from . import LowRankLinear
-from transformers.models.bloom.modeling_bloom import BloomBlock
 from transformers import PreTrainedModel
 from typing import Generator, Optional, Sequence, Union, cast
 import inspect
@@ -135,14 +135,14 @@ class TunedLens(th.nn.Module):
                 probe.weight.data.zero_()
                 probe.bias.data.zero_()
 
-        self.add_module("input_probe", probe if include_input else None)
-        self.attn_probes = th.nn.ModuleList(
+        self.add_module("input_adapter", probe if include_input else None)
+        self.attn_adapters = th.nn.ModuleList(
             [deepcopy(probe) for _ in range(num_layers)] if sublayers else []
         )
         # Don't include the final layer
         num_layers -= 1
 
-        self.layer_probes = th.nn.ModuleList(
+        self.layer_adapters = th.nn.ModuleList(
             [deepcopy(probe) for _ in range(num_layers)]
         )
         self.add_module(
@@ -152,27 +152,27 @@ class TunedLens(th.nn.Module):
 
     def __getitem__(self, item: int) -> th.nn.Module:
         """Get the probe module at the given index."""
-        if isinstance(self.input_probe, th.nn.Module):
+        if isinstance(self.input_adapter, th.nn.Module):
             if item == 0:
-                return self.input_probe
+                return self.input_adapter
             else:
                 item -= 1
 
-        if len(self.attn_probes):
+        if len(self.attn_adapters):
             idx, is_layer = divmod(item, 2)
-            return self.layer_probes[idx] if is_layer else self.attn_probes[idx]
+            return self.layer_adapters[idx] if is_layer else self.attn_adapters[idx]
         else:
-            return self.layer_probes[item]
+            return self.layer_adapters[item]
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
-        if isinstance(self.input_probe, th.nn.Module):
-            yield self.input_probe
+        if isinstance(self.input_adapter, th.nn.Module):
+            yield self.input_adapter
 
-        if self.attn_probes:
+        if self.attn_adapters:
             # Interleave attention probes with layer probes
-            yield from chain.from_iterable(zip(self.attn_probes, self.layer_probes))
+            yield from chain.from_iterable(zip(self.attn_adapters, self.layer_adapters))
         else:
-            yield from self.layer_probes
+            yield from self.layer_adapters
 
     @classmethod
     def load(
@@ -187,7 +187,13 @@ class TunedLens(th.nn.Module):
 
         # Load parameters
         state = th.load(path / ckpt, **kwargs)
-        state.setdefault("layer_norm", False)  # Backwards compatibility
+
+        # Backwards compatibility
+        keys = list(state.keys())
+        for key in keys:
+            if "probe" in key:
+                new_key = key.replace("probe", "adapter")
+                state[new_key] = state.pop(key)
 
         # Drop unrecognized config keys
         unrecognized = set(config) - set(inspect.getfullargspec(cls).kwonlyargs)
@@ -210,40 +216,14 @@ class TunedLens(th.nn.Module):
             config_cls = CONFIG_MAPPING[model_type]
             model_config = config_cls.from_dict(model_conf_dict)
 
-            blocks = []
-            for i in range(num_extras):
-                layer_idx = model_config.num_hidden_layers - i - 1
-
-                if model_type == "bloom":
-                    from transformers.models.bloom.modeling_bloom import BloomBlock
-
-                    block = _BloomBlockWrapper(
-                        BloomBlock(model_config)  # type: ignore[arg-type]
+            lens.extra_layers = th.nn.Sequential(
+                *[
+                    instantiate_layer(
+                        model_config, model_config.num_hidden_layers - i - 1, model_type
                     )
-                elif model_type == "gpt_neo":
-                    from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoBlock
-
-                    block = GPTNeoBlock(model_config, layer_idx)
-                elif model_type == "gpt_neox":
-                    from transformers.models.gpt_neox.modeling_gpt_neox import (
-                        GPTNeoXLayer,
-                    )
-
-                    block = GPTNeoXLayer(model_config)  # type: ignore[arg-type]
-                elif model_type == "gpt2":
-                    from transformers.models.gpt2.modeling_gpt2 import GPT2Block
-
-                    block = GPT2Block(model_config, layer_idx)  # type: ignore[arg-type]
-                elif model_type == "opt":
-                    from transformers.models.opt.modeling_opt import OPTDecoderLayer
-
-                    block = OPTDecoderLayer(model_config)  # type: ignore[arg-type]
-                else:
-                    raise ValueError(f"Unknown model type '{model_type}'")
-
-                blocks.append(block)
-
-            lens.extra_layers = th.nn.Sequential(*blocks)
+                    for i in range(num_extras)
+                ]
+            )
 
         lens.load_state_dict(state)
         return lens
@@ -312,35 +292,8 @@ class TunedLens(th.nn.Module):
         return self.to_logits(h)
 
     def __len__(self) -> int:
-        N = len(self.attn_probes) + len(self.layer_probes)
-        if self.input_probe:
+        N = len(self.attn_adapters) + len(self.layer_adapters)
+        if self.input_adapter:
             N += 1
 
         return N
-
-
-# Very annoying that we have to do this. See https://bit.ly/3XSQ7W6 for context on
-# what we're doing here.
-class _BloomBlockWrapper(th.nn.Module):
-    def __init__(self, block: BloomBlock):
-        super().__init__()
-        self.block = block
-
-    def forward(self, x: th.Tensor) -> th.Tensor:
-        from transformers.models.bloom.modeling_bloom import (
-            BloomModel,
-            build_alibi_tensor,
-        )
-
-        batch_size, seq_len, _ = x.shape
-        dummy_mask = x.new_ones([batch_size, seq_len])
-
-        # Causal mask isn't created inside the block itself, so we have to do it here.
-        # Weirdly _prepare_attn_mask doesn't depend on `self` at all but is still an
-        # instance method for some reason, so we pass `None` as the first argument.
-        causal_mask = BloomModel._prepare_attn_mask(
-            None, dummy_mask, (batch_size, seq_len), 0  # type: ignore[arg-type]
-        )
-        alibi = build_alibi_tensor(dummy_mask, self.block.num_heads, x.dtype)
-        h, *_ = self.block(x, alibi, causal_mask)
-        return h
