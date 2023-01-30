@@ -3,6 +3,7 @@
 from contextlib import nullcontext, redirect_stdout
 from datasets import Dataset, DatasetDict, load_dataset
 from functools import partial
+from hashlib import md5
 from torch.distributed.fsdp import (
     CPUOffload,
     FullyShardedDataParallel as FSDP,
@@ -24,15 +25,30 @@ from white_box.data import (
     silence_datasets_messages,
 )
 from white_box.model_surgery import get_transformer_layers
-from white_box.scripts import eval_loop, eval_bases, extract_bases, train_loop
+from white_box.scripts import (
+    downstream_loop,
+    eval_loop,
+    eval_bases,
+    extract_bases,
+    train_loop,
+)
 import json
 import os
+import pickle
 import torch as th
 import torch.distributed as dist
+import shutil
 
 
 def main(args):
     local_rank = dist.get_rank() if dist.is_initialized() else 0
+
+    # Deterministically choose a temporary cache directory shared
+    # by all ranks using MD5 hash of the command line arguments
+    if args.no_cache:
+        cache_dir = f"/tmp/{md5(pickle.dumps(args)).hexdigest()}"
+    else:
+        cache_dir = None
 
     if args.random_model:
         print(f"Sampling random weights for model '{args.model_name}'...")
@@ -44,10 +60,18 @@ def main(args):
         print(f"Loading pretrained weights for '{args.model_name}'...")
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name,
+            cache_dir=cache_dir,
             low_cpu_mem_usage=True,
             revision=args.revision,
             torch_dtype="auto",
         )
+
+    # Make sure all ranks have loaded the model, then delete the cache
+    if cache_dir:
+        if dist.is_initialized():
+            dist.barrier()
+        if local_rank == 0:
+            shutil.rmtree(cache_dir)
 
     model.eval()
     model.requires_grad_(False)
@@ -58,17 +82,18 @@ def main(args):
     # Can be set either in eval or in training; in eval it's required
     if getattr(args, "lens", None):
         lens = TunedLens.load(args.lens, map_location="cpu")
-    elif args.command in ("eval-bases", "extract-bases"):
+    elif args.command in ("downstream", "eval", "eval-bases", "extract-bases"):
         lens = None
     else:
         lens = TunedLens(
             model,
             dropout=args.dropout,
+            extra_layers=args.extra_layers,
             layer_norm=args.layer_norm,
             mlp_hidden_sizes=args.mlp_hidden_sizes,
             rank=args.rank,
+            reuse_unembedding=not args.separate_unembeddings,
             shared_mlp_hidden_sizes=args.shared_mlp_hidden_sizes,
-            share_weights=args.share_weights,
             sublayers=args.sublayers,
         ).to(
             dtype=th.float16 if args.lens_dtype == "float16" else th.float32,
@@ -110,6 +135,10 @@ def main(args):
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
     silence_datasets_messages()
 
+    if args.command == "downstream":
+        downstream_loop(args, model, lens, tokenizer)
+        return
+
     print(f"Loading dataset '{' '.join(args.dataset)}'")
     if len(args.dataset) == 1 and args.dataset[0].endswith(".jsonl"):
         dataset = Dataset.from_json(args.dataset[0])
@@ -150,4 +179,20 @@ if __name__ == "__main__":
 
     # Only print on rank 0
     with nullcontext() if not local_rank else redirect_stdout(None):
-        main(parser.parse_args())
+        args = parser.parse_args()
+
+        if args.sweep:
+            ckpt_range = eval(f"range({args.sweep})")
+            output_root = args.output
+            assert output_root is not None
+            print(f"Running sweep over {len(ckpt_range)} checkpoints.")
+
+            for step in ckpt_range:
+                step_output = output_root / f"step{step}"
+                print(f"Running for step {step}, saving to '{step_output}'...")
+
+                args.output = step_output
+                args.revision = f"step{step}"
+                main(args)
+        else:
+            main(args)

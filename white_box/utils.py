@@ -13,6 +13,15 @@ def maybe_all_cat(x: th.Tensor) -> th.Tensor:
     return buffer
 
 
+def maybe_all_gather_lists(lst: list) -> list:
+    if not dist.is_initialized():
+        return lst
+
+    lists = [[] for _ in range(dist.get_world_size())]
+    dist.all_gather_object(lists, lst)
+    return sum(lists, [])
+
+
 def maybe_all_reduce(x: th.Tensor, op: str = "sum") -> th.Tensor:
     if not dist.is_initialized():
         return x
@@ -50,9 +59,9 @@ T = TypeVar("T")
 
 
 # Backported from Python 3.10
-def pairwise(iterable: Iterable[T]) -> Iterable[tuple[T, T]]:
+def pairwise(it: Iterable[T]) -> Iterable[tuple[T, T]]:
     """Iterate over pairs of elements in an iterable."""
-    yield from zip(iterable, islice(iterable, 1, None))
+    yield from zip(it, islice(it, 1, None))
 
 
 # Define pytree type recursively- this works for Pylance but unfortunately not MyPy

@@ -1,3 +1,4 @@
+from .calibration import CalibrationError
 from .dimensionality import effective_rank
 from .distance import (
     aitchison,

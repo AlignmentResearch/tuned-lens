@@ -11,11 +11,14 @@ class ResidualStats:
     Streams are automatically cast to full precision before updating the stats.
     """
 
-    def __init__(self):
+    # By default we accumulate in double precision to minimize numerical error
+    def __init__(self, cov: bool = True, dtype: th.dtype = th.float64):
         self._mu: Optional[ResidualStream] = None
         self._M2: Optional[ResidualStream] = None
         self._mean_norm: Optional[ResidualStream] = None
 
+        self.cov = cov
+        self.dtype = dtype
         self.n: int = 0
 
     def all_reduce_(self):
@@ -39,23 +42,31 @@ class ResidualStats:
         N, D = stream.shape
         self.n += N
 
-        if self._mu is None or self._M2 is None or self._mean_norm is None:
-            # We accumulate in double precision to minimize numerical error
-            self._mu = stream.map(lambda x: x.new_zeros(D, dtype=th.float64))
-            self._M2 = stream.map(lambda x: x.new_zeros(D, D, dtype=th.float64))
-            self._mean_norm = stream.map(lambda x: x.new_zeros((), dtype=th.float64))
+        if self._mu is None or self._mean_norm is None:
+            self._mu = stream.map(lambda x: x.new_zeros(D, dtype=self.dtype))
+            self._mean_norm = stream.map(lambda x: x.new_zeros((), dtype=self.dtype))
 
-        # See https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+        # Update running mean
         delta = stream.zip_map(lambda x, mu: x - mu, self._mu)
-        self._mu = delta.zip_map(lambda d, mu: mu + d.sum(0) / self.n, self._mu)
-        delta2 = stream.zip_map(lambda x, mu: x - mu, self._mu)
+        delta.zip_map(lambda d, mu: mu.add_(d.sum(0), alpha=1 / self.n), self._mu)
 
-        # TODO: Should we do something smarter than nan_to_num here?
-        # Like skip the update entirely if there are nonfinite values?
-        delta_M2 = delta.zip_map(lambda d, d2: d.T @ d2, delta2)
-        self._M2 = self._M2.zip_map(lambda acc, d: acc + d.nan_to_num(), delta_M2)
-        self._mean_norm = stream.zip_map(
-            lambda x, mu: mu + th.sum(x.norm(dim=-1) - mu) / self.n, self._mean_norm
+        # We allow the user to set cov = False because it's expensive and O(d^2)
+        if self.cov:
+            # See https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+            delta2 = stream.zip_map(lambda x, mu: x - mu, self._mu)
+
+            if self._M2 is None:
+                # On the first iteration set the running covariance to the sample cov
+                self._M2 = delta.zip_map(lambda d, d2: d.T @ d2, delta2)
+            else:
+                # This is the hottest part of the loop, where we compute the sample
+                # covariance and add it to the running estimate. This can lead to OOMs.
+                # We fuse the add and matmul in-place to save VRAM & memory bandwidth
+                self._M2.zip_map(lambda m, d, d2: m.addmm_(d.T, d2), delta, delta2)
+
+        stream.zip_map(
+            lambda x, mu: mu.add_(th.sum(x.norm(dim=-1) - mu), alpha=1 / self.n),
+            self._mean_norm,
         )
 
     def covariance(self, dtype: th.dtype = th.float32) -> ResidualStream:

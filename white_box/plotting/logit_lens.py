@@ -23,11 +23,14 @@ def plot_logit_lens(
     model: PreTrainedModel,
     tokenizer: Tokenizer,
     *,
+    hidden_offsets: Sequence[th.Tensor] = (),
+    mask_input: bool = False,
     input_ids: Optional[th.Tensor] = None,
     end_pos: Optional[int] = None,
     extra_decoder_layers: int = 0,
     layer_stride: int = 1,
-    metric: Literal["ce", "entropy", "js", "kl"] = "entropy",
+    metric: Literal["ce", "entropy", "kl", "log_prob", "prob"] = "entropy",
+    min_prob: float = 0.0,
     newline_replacement: str = "\\n",
     newline_token: str = "Ċ",
     rank: int = 0,
@@ -44,13 +47,31 @@ def plot_logit_lens(
         raise ValueError("topk must be greater than 0")
 
     """Plot a logit lens table for the given text."""
-    tokens, outputs, stream = _run_inference(
-        model, tokenizer, input_ids, text, sublayers, start_pos, end_pos
-    )
+    if text is not None:
+        input_ids = cast(th.Tensor, tokenizer.encode(text, return_tensors="pt"))
+    elif input_ids is None:
+        raise ValueError("Either text or input_ids must be provided")
+
+    with record_residual_stream(model, sublayers=sublayers) as stream:
+        outputs = model(input_ids.to(model.device))
+
+    tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())
+    if start_pos > 0:
+        outputs.logits = outputs.logits[..., start_pos:end_pos, :]
+        stream = stream.map(lambda x: x[..., start_pos:end_pos, :])
+        tokens = tokens[start_pos:end_pos]
 
     if tuned_lens is not None:
+
+        def decode_tl(h, i):
+            logits = tuned_lens(h, i)
+            if mask_input:
+                logits[..., input_ids] = -th.finfo(h.dtype).max
+
+            return logits.log_softmax(dim=-1)
+
         hidden_lps = stream.zip_map(
-            lambda h, i: tuned_lens(h, i).log_softmax(dim=-1),
+            decode_tl,
             range(len(stream) - 1),
         )
         hidden_lps.layers.append(outputs.logits.log_softmax(dim=-1))
@@ -62,20 +83,30 @@ def plot_logit_lens(
         _, layers = get_transformer_layers(model.base_model)
         L = len(layers)
 
-        def decode_fn(x):
+        def decode_ll(h):
             # Apply extra decoder layers if needed
             for i in range(L - extra_decoder_layers, L):
-                x, *_ = layers[i](x)
+                h, *_ = layers[i](h)
 
-            return E(ln_f(x)).log_softmax(dim=-1)
+            logits = E(ln_f(h))
+            if mask_input:
+                logits[..., input_ids] = -th.finfo(h.dtype).max
 
-        hidden_lps = stream.map(decode_fn)
+            return logits.log_softmax(dim=-1)
+
+        if hidden_offsets:
+            stream = stream.zip_map(lambda x, o: x + o, hidden_offsets)
+
+        hidden_lps = stream.map(decode_ll)
+        hidden_lps.layers[-1] = outputs.logits.log_softmax(dim=-1)
 
     # Replace whitespace and newline tokens with their respective replacements
     format_fn = np.vectorize(
         lambda x: x.replace(whitespace_token, whitespace_replacement).replace(
             newline_token, newline_replacement
         )
+        if isinstance(x, str)
+        else "<unk>"
     )
 
     # If rank, get the rank of next token predicted
@@ -103,15 +134,22 @@ def plot_logit_lens(
             raise NotImplementedError
         elif metric == "entropy":
             stats = hidden_lps.map(lambda x: -th.sum(x.exp() * x, dim=-1))
-        elif metric == "js":
-            max_color = None
-            stats = hidden_lps.pairwise_map(js_divergence)
-            top_strings.embeddings = None
         elif metric == "kl":
             log_probs = outputs.logits.log_softmax(-1)
             stats = hidden_lps.map(
                 lambda x: th.sum(log_probs.exp() * (log_probs - x), dim=-1)
             )
+        elif metric == "prob":
+            max_color = 1.0
+            stats = hidden_lps.map(lambda x: x.max(-1).values.exp())
+
+            if min_prob:
+                top_strings = top_strings.zip_map(
+                    lambda strings, probs: [
+                        s if p.max() > min_prob else "" for s, p in zip(strings, probs)
+                    ],
+                    stats,
+                )
         else:
             raise ValueError(f"Unknown metric: {metric}")
 
@@ -119,9 +157,18 @@ def plot_logit_lens(
         hidden_lps=hidden_lps, tokenizer=tokenizer, k=topk, topk_diff=topk_diff
     )
 
+    color_scale = "blues"
+    if rank:
+        color_label = "Rank"
+    elif metric == "prob":
+        color_label = "Probability"
+    else:
+        color_label = f"{metric.capitalize()} (nats)"
+        color_scale = "rdbu_r"
+
     return _plot_stream(
         color_stream=stats.map(lambda x: x.squeeze().cpu()),
-        colorbar_label=f"{metric} (nats)" if not rank else "Rank",
+        colorbar_label=color_label,
         layer_stride=layer_stride,
         top_1_strings=top_strings,
         top_k_strings_and_probs=format_fn(topk_strings_and_probs),
@@ -134,7 +181,7 @@ def plot_logit_lens(
             if rank < 1
             else f": Rank {rank} ({model.name_or_path})"
         ),
-        colorscale="rdbu_r" if rank < 1 else "blues",
+        colorscale=color_scale,
         rank=rank,
     )
 
@@ -207,9 +254,6 @@ def _plot_stream(
     rank: int = 0,
 ) -> go.Figure:
 
-    color_matrix = np.stack(list(color_stream))[::layer_stride]
-    top_1_strings = np.stack(list(top_1_strings))[::layer_stride]
-
     # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
     x_labels = [x + "\u200c" * i for i, x in enumerate(x_labels)]
 
@@ -222,34 +266,47 @@ def _plot_stream(
         colorbar["tickvals"] = [0, 1, 2, 3, 4]
         colorbar["ticktext"] = ["1", "10", "100", "1000", "10000"]
 
-    fig = go.Figure()
-    fig.add_trace(
-        go.Heatmap(
-            colorscale=colorscale,
-            customdata=top_k_strings_and_probs[::layer_stride],
-            text=top_1_strings,
-            texttemplate="%{text}",
-            x=x_labels,
-            y=color_stream.labels()[::layer_stride],
-            z=color_matrix,
-            hoverlabel=dict(bgcolor="rgb(42, 42, 50)"),
-            hovertemplate="<br>".join(
-                f" %{{customdata[{i}][0]}} %{{customdata[{i}][1]:.1f}}% "
-                for i in range(k)
-            )
-            + "<extra></extra>",
-            colorbar=dict(
-                title=colorbar_label,
-                titleside="right",
-            ),
-            zmax=vmax,
-            zmin=0,
+    labels = ["input", *range(1, len(color_stream) - 1), "output"]
+
+    color_matrix = np.stack(list(color_stream))
+    top_1_strings = np.stack(list(top_1_strings))
+
+    def stride_keep_last(x, stride: int):
+        if len(x) % stride != 1:
+            return np.concatenate([x[::stride], [x[-1]]])
+
+    if layer_stride > 1:
+        color_matrix = stride_keep_last(color_matrix, layer_stride)
+        labels = stride_keep_last(labels, layer_stride)
+        top_1_strings = stride_keep_last(top_1_strings, layer_stride)
+        top_k_strings_and_probs = stride_keep_last(
+            top_k_strings_and_probs, layer_stride
         )
+
+    heatmap = go.Heatmap(
+        colorscale=colorscale,
+        customdata=top_k_strings_and_probs,
+        text=top_1_strings,
+        texttemplate="<b>%{text}</b>",
+        x=x_labels,
+        y=labels,
+        z=color_matrix,
+        hoverlabel=dict(bgcolor="rgb(42, 42, 50)"),
+        hovertemplate="<br>".join(
+            f" %{{customdata[{i}][0]}} %{{customdata[{i}][1]:.1f}}% " for i in range(k)
+        )
+        + "<extra></extra>",
+        colorbar=dict(
+            title=colorbar_label,
+            titleside="right",
+        ),
+        zmax=vmax,
+        zmin=0,
     )
 
     # TODO Height needs to equal some function of Max(num_layers, topk).
     # Ignore for now. Works until k=18
-    fig.update_layout(
+    fig = go.Figure(heatmap).update_layout(
         title_text=title,
         title_x=0.5,
         width=200 + 80 * len(x_labels),
@@ -262,29 +319,3 @@ def _plot_stream(
 # Allow all naming conventions
 plot_focused_lens = plot_logit_lens
 plot_tuned_lens = plot_logit_lens
-
-
-def _run_inference(
-    model: PreTrainedModel,
-    tokenizer: Tokenizer,
-    input_ids: Optional[th.Tensor],
-    text: Optional[str],
-    sublayers: bool,
-    start_pos: int,
-    end_pos: Optional[int],
-) -> tuple:
-    if text is not None:
-        input_ids = cast(th.Tensor, tokenizer.encode(text, return_tensors="pt"))
-    elif input_ids is None:
-        raise ValueError("Either text or input_ids must be provided")
-
-    with record_residual_stream(model, sublayers=sublayers) as stream:
-        outputs = model(input_ids.to(model.device))
-
-    tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())
-    if start_pos > 0:
-        outputs.logits = outputs.logits[..., start_pos:end_pos, :]
-        stream = stream.map(lambda x: x[..., start_pos:end_pos, :])
-        tokens = tokens[start_pos:end_pos]
-
-    return tokens, outputs, stream

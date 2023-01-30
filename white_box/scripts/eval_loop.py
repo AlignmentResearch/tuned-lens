@@ -4,14 +4,18 @@ from collections import defaultdict
 from itertools import islice
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from transformers import PreTrainedModel
+from typing import Optional
 from white_box import (
     record_residual_stream,
     LogitStats,
     ResidualStats,
-    ResidualStream,
     TunedLens,
 )
+from white_box.nn import Decoder
+from white_box.stats import CalibrationError
 from white_box.utils import (
+    maybe_all_cat,
     maybe_all_reduce,
     maybe_shift_labels,
     maybe_shift_preds,
@@ -27,9 +31,9 @@ import torch.distributed as dist
 @th.no_grad()
 def eval_loop(
     args: Namespace,
-    model: th.nn.Module,
+    model: PreTrainedModel,
     data: Dataset,
-    lens: TunedLens,
+    lens: Optional[TunedLens],
     nats_to_bpb_ratio: float,
 ):
     local_rank = dist.get_rank() if dist.is_initialized() else 0
@@ -37,11 +41,11 @@ def eval_loop(
         data.shuffle(seed=args.seed),  # type: ignore[arg-type],
         batch_size=args.per_gpu_batch_size,
     )
-    lens.eval()
+    if lens:
+        lens.eval()
 
-    # Running mean & covariance of the hidden states
-    first_token_stats = ResidualStats()
-    delta_stats = ResidualStats()
+    # Running mean & covariance of the hidden states & residuals
+    delta_stats = ResidualStats(cov=False)
     stream_stats = ResidualStats()
 
     if args.limit:
@@ -54,23 +58,28 @@ def eval_loop(
     output_dir = root_dir / f"rank_{local_rank}"
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    L = len(lens)
+    _to_logits = lens.to_logits if lens else Decoder(model)
+    L = model.config.num_hidden_layers
     batches = []
     transfer_batches = []
 
+    final_calibration = CalibrationError()
+    grad_alignments = [[] for _ in range(L)]
+    ll_calibration = [CalibrationError() for _ in range(L)]
+    tl_calibration = [CalibrationError() for _ in range(L)]
+
     final_logit_stats = LogitStats()
-    ll_logit_statistics = [LogitStats() for _ in range(L)]
-    tl_logit_statistics = [LogitStats() for _ in range(L)]
+    ml_statistics = [LogitStats() for _ in range(L)]
+    ll_statistics = [LogitStats() for _ in range(L)]
+    tl_statistics = [LogitStats() for _ in range(L)]
 
     pbar = tqdm(dl, desc="Evaluating", position=local_rank, total=total)
     for batch in pbar:
         batch = send_to_device(batch, th.device(local_rank))
-        output = model(**batch, output_hidden_states=True)
-        stream = ResidualStream(
-            embeddings=output.hidden_states[0], layers=output.hidden_states[1:-1]
-        )
-        shift = args.token_shift if args.token_shift is not None else 1
+        with record_residual_stream(model) as stream:
+            output = model(**batch)
 
+        shift = args.token_shift if args.token_shift is not None else 1
         final_lps = output.logits.log_softmax(dim=-1)
         final_probs = final_lps.exp()
         labels = maybe_shift_labels(batch["input_ids"], shift)
@@ -79,55 +88,108 @@ def eval_loop(
         transfer_ces = th.zeros(L, L, device=final_lps.device)
         transfer_kls = th.zeros(L, L, device=final_lps.device)
 
-        for j, (name, h) in zip(range(L), stream.items()):
-            baseline_lps = lens.to_logits(h).log_softmax(dim=-1)
-            ll_logit_statistics[j].update(baseline_lps, assume_normalized=True)
+        # Compute logit lens eval and statistics
+        for (j, d), (name, h) in zip(enumerate(stream.residuals()), stream.items()):
+            if args.grad_alignment:
+                h.requires_grad_(True)
+                h.retain_grad()
 
-            batch_output["baseline_ce"][name] = th.nn.functional.cross_entropy(
-                maybe_shift_preds(baseline_lps, shift).flatten(0, 1),
-                labels.flatten(),
-                reduction="none",
+            with th.set_grad_enabled(args.grad_alignment):
+                baseline_lps = _to_logits(h).log_softmax(dim=-1)
+
+                # Note that we don't reduce the loss here, since we want to look at
+                # the full distribution of losses across tokens and samples
+                losses = th.nn.functional.cross_entropy(
+                    maybe_shift_preds(baseline_lps, shift).flatten(0, 1),
+                    labels.flatten(),
+                    reduction="none",
+                )
+                avg_loss = losses.mean()
+
+            if args.grad_alignment:
+                avg_loss.backward()
+
+                assert h.grad is not None
+                grad_alignments[j].append(
+                    th.nn.functional.cosine_similarity(
+                        h.grad.flatten(1), d.flatten(1), dim=-1
+                    )
+                )
+                h.grad = None
+
+            ll_calibration[j].update(
+                labels, maybe_shift_preds(baseline_lps.exp(), shift)
             )
+            ll_statistics[j].update(baseline_lps, assume_normalized=True)
+
+            batch_output["baseline_ce"][name] = losses
             batch_output["baseline_entropy"][name] = th.sum(
                 -baseline_lps.exp() * baseline_lps, dim=-1
             )
-
-            lens_lps = lens(h, idx=j).log_softmax(dim=-1)
-            batch_output["lens_ce"][name] = th.nn.functional.cross_entropy(
-                maybe_shift_preds(lens_lps, shift).flatten(0, 1),
-                labels.flatten(),
-                reduction="none",
+            batch_output["baseline_kl"][name] = th.sum(
+                final_probs * (final_lps - baseline_lps), dim=-1
             )
-            batch_output["lens_entropy"][name] = th.sum(
-                -lens_lps.exp() * lens_lps, dim=-1
-            )
-            batch_output["lens_kl"][name] = th.sum(
-                final_probs * (final_lps - lens_lps), dim=-1
-            )
-            tl_logit_statistics[j].update(lens_lps, assume_normalized=True)
 
-            if args.transfer:
-                # Probs from the probe that was trained and tested on layer j.
-                diag_probs = lens_lps.exp()
+        if args.mean_ablate and delta_stats.n > 20_000:
+            from white_box.utils import revcumsum
 
-                # Each iteration of the loop processes a different *probe* layer i
-                # for the test layer j.
-                for i in range(L):
-                    transfer_lps = lens(h, idx=i).log_softmax(dim=-1)
-                    transfer_ces[i, j] = th.nn.functional.cross_entropy(
-                        maybe_shift_preds(transfer_lps, shift).flatten(0, 1),
-                        labels.flatten(),
-                    )
-                    transfer_kls[i, j] = th.sum(
-                        diag_probs * (lens_lps - transfer_lps), dim=-1
-                    ).mean()
+            offsets = revcumsum(list(delta_stats.mean()))
 
+            for (j, offset), (name, h) in zip(enumerate(offsets), stream.items()):
+                baseline_lps = _to_logits(h + offset).log_softmax(dim=-1)
+
+                batch_output["mean_ablation_ce"][name] = th.nn.functional.cross_entropy(
+                    maybe_shift_preds(baseline_lps, shift).flatten(0, 1),
+                    labels.flatten(),
+                    reduction="none",
+                )
+                batch_output["mean_ablation_entropy"][name] = th.sum(
+                    -baseline_lps.exp() * baseline_lps, dim=-1
+                )
+                batch_output["mean_ablation_kl"][name] = th.sum(
+                    final_probs * (final_lps - baseline_lps), dim=-1
+                )
+                ml_statistics[j].update(baseline_lps, assume_normalized=True)
+
+        # Compute tuned lens eval and statistics if applicable
+        if lens:
+            for j, (name, h) in zip(range(L), stream.items()):
+                lens_lps = lens(h, idx=j).log_softmax(dim=-1)
+                lens_probs = lens_lps.exp()
+
+                batch_output["lens_ce"][name] = th.nn.functional.cross_entropy(
+                    maybe_shift_preds(lens_lps, shift).flatten(0, 1),
+                    labels.flatten(),
+                    reduction="none",
+                )
+                batch_output["lens_entropy"][name] = th.sum(
+                    -lens_probs * lens_lps, dim=-1
+                )
+                batch_output["lens_kl"][name] = th.sum(
+                    final_probs * (final_lps - lens_lps), dim=-1
+                )
+                tl_calibration[j].update(labels, maybe_shift_preds(lens_probs, shift))
+                tl_statistics[j].update(lens_lps, assume_normalized=True)
+
+                if args.transfer:
+                    # Each iteration of the loop processes a different *probe* layer i
+                    # for the test layer j.
+                    for i in range(L):
+                        transfer_lps = lens(h, idx=i).log_softmax(dim=-1)
+                        transfer_ces[i, j] = th.nn.functional.cross_entropy(
+                            maybe_shift_preds(transfer_lps, shift).flatten(0, 1),
+                            labels.flatten(),
+                        )
+                        transfer_kls[i, j] = th.sum(
+                            lens_probs * (lens_lps - transfer_lps), dim=-1
+                        ).mean()
+
+        final_calibration.update(labels, maybe_shift_preds(final_probs, shift))
         final_logit_stats.update(final_lps, assume_normalized=True)
         if args.residual_stats:
-            first_tokens = stream.map(lambda x: x[:, 0])
+            # Drop the first token because it's weird
             rest = stream.map(lambda x: x[:, 1:])
 
-            first_token_stats.update(first_tokens)
             delta_stats.update(rest.residuals())
             stream_stats.update(rest)
 
@@ -163,19 +225,39 @@ def eval_loop(
         if local_rank == 0:
             th.save(agg_transfer, root_dir / "aggregate_transfer_metrics.pt")
 
-    first_token_stats.all_reduce_()
+    # first_token_stats.all_reduce_()
     delta_stats.all_reduce_()
     stream_stats.all_reduce_()
-    for stats in ll_logit_statistics:
+    for stats in ll_statistics:
         stats.all_reduce_()
-    for stats in tl_logit_statistics:
+    for stats in ml_statistics:
         stats.all_reduce_()
 
+    final_calibration.all_gather_()
+    for cal in ll_calibration:
+        cal.all_gather_()
+
+    if lens:
+        for stats in tl_statistics:
+            stats.all_reduce_()
+        for cal in tl_calibration:
+            cal.all_gather_()
+
+    if args.grad_alignment:
+        grad_alignments = [maybe_all_cat(th.cat(x, dim=0)) for x in grad_alignments]
+        if local_rank == 0:
+            th.save(grad_alignments, root_dir / "grad_alignments.pt")
+
     if local_rank == 0:
-        th.save(first_token_stats, root_dir / "first_token_stats.pt")
         th.save(delta_stats, root_dir / "delta_stats.pt")
         th.save(stream_stats, root_dir / "stream_stats.pt")
 
         th.save(final_logit_stats, root_dir / "final_logit_stats.pt")
-        th.save(ll_logit_statistics, root_dir / "ll_logit_stats.pt")
-        th.save(tl_logit_statistics, root_dir / "tl_logit_stats.pt")
+        th.save(ll_statistics, root_dir / "ll_logit_stats.pt")
+        th.save(ml_statistics, root_dir / "ml_logit_stats.pt")
+        if lens:
+            th.save(tl_statistics, root_dir / "tl_logit_stats.pt")
+            th.save(tl_calibration, root_dir / "tl_calibration.pt")
+
+        th.save(final_calibration, root_dir / "final_calibration.pt")
+        th.save(ll_calibration, root_dir / "ll_calibration.pt")

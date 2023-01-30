@@ -29,8 +29,9 @@ def extract_bases(
         lens.float() if lens else Decoder(model).float(),
         [x.float() for x in outputs.hidden_states[:-1]],
         k=args.k,
-        labels=batch["input_ids"],
+        labels=batch["input_ids"] if args.loss == "ce" else None,
         mode=args.mode,
+        no_adapter=args.no_adapter,
     )
     for i, basis in enumerate(basis_iter):
         if local_rank == 0:

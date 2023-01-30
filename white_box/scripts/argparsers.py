@@ -35,6 +35,11 @@ def get_lens_parser() -> ArgumentParser:
         help="Loss function to use.",
     )
     parent_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Don't permanently cache the model on disk.",
+    )
+    parent_parser.add_argument(
         "--per-gpu-batch-size",
         type=int,
         default=1,
@@ -66,6 +71,12 @@ def get_lens_parser() -> ArgumentParser:
         "--split", type=str, default="validation", help="Split of the dataset to use."
     )
     parent_parser.add_argument(
+        "--sweep", type=str, help="Range of checkpoints to sweep over"
+    )
+    parent_parser.add_argument(
+        "--task", type=str, nargs="+", help="lm-eval task to run the model on."
+    )
+    parent_parser.add_argument(
         "--text-column",
         type=str,
         default="text",
@@ -87,6 +98,7 @@ def get_lens_parser() -> ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
     train_parser = subparsers.add_parser("train", parents=[parent_parser])
+    downstream_parser = subparsers.add_parser("downstream", parents=[parent_parser])
     eval_parser = subparsers.add_parser("eval", parents=[parent_parser])
 
     eval_basis_parser = subparsers.add_parser("eval-bases", parents=[parent_parser])
@@ -98,6 +110,9 @@ def get_lens_parser() -> ArgumentParser:
     )
     train_parser.add_argument(
         "--dropout", type=float, default=0.0, help="Dropout prob for lens inputs."
+    )
+    train_parser.add_argument(
+        "--extra-layers", type=int, default=0, help="Number of extra decoder layers."
     )
     train_parser.add_argument(
         "--lasso", type=float, default=0.0, help="LASSO (L1) regularization strength."
@@ -153,9 +168,19 @@ def get_lens_parser() -> ArgumentParser:
         required=True,
         help="File to save the lenses to. Defaults to the model name.",
     )
+    train_parser.add_argument(
+        "--pre-ln",
+        action="store_true",
+        help="Apply layer norm before, and not after, each probe.",
+    )
     train_parser.add_argument("--rank", type=int, help="Rank of the tuned lenses.")
     train_parser.add_argument(
         "--resume", type=Path, help="File to resume training from."
+    )
+    train_parser.add_argument(
+        "--separate-unembeddings",
+        action="store_true",
+        help="Learn a separate unembedding for each layer.",
     )
     train_parser.add_argument(
         "--shared-mlp-hidden-sizes",
@@ -163,11 +188,6 @@ def get_lens_parser() -> ArgumentParser:
         nargs="+",
         default=[],
         help="Hidden sizes of the MLP shared by all probes.",
-    )
-    train_parser.add_argument(
-        "--share-weights",
-        action="store_true",
-        help="Share weights between probes for different layers.",
     )
     train_parser.add_argument(
         "--sublayers",
@@ -191,21 +211,43 @@ def get_lens_parser() -> ArgumentParser:
         " and 0 for SGD.",
     )
     train_parser.add_argument(
-        "--weight-decay", type=float, default=0.0, help="Weight decay coefficient."
+        "--weight-decay", type=float, default=1e-3, help="Weight decay coefficient."
     )
     train_parser.add_argument(
         "--zero", action="store_true", help="Use ZeroRedundancyOptimizer."
     )
 
+    downstream_parser.add_argument(
+        "lens",
+        type=Path,
+        help="Directory containing the tuned lens to evaluate.",
+        nargs="?",
+    )
+    downstream_parser.add_argument(
+        "--limit", type=int, default=500, help="Number of samples to evaluate on."
+    )
+    downstream_parser.add_argument(
+        "-o", "--output", type=Path, help="Folder to save the results to."
+    )
+
     # Evaluation-only arguments
     eval_parser.add_argument(
-        "lens", type=Path, help="Directory containing the tuned lens to evaluate."
+        "lens",
+        type=Path,
+        help="Directory containing the tuned lens to evaluate.",
+        nargs="?",
+    )
+    eval_parser.add_argument(
+        "--grad-alignment", action="store_true", help="Evaluate gradient alignment."
     )
     eval_parser.add_argument(
         "--limit",
         type=int,
         default=None,
         help="Number of batches to evaluate on. If None, will use the entire dataset.",
+    )
+    eval_parser.add_argument(
+        "--mean-ablate", action="store_true", help="Evaluate mean ablation."
     )
     eval_parser.add_argument(
         "-o",
@@ -222,6 +264,9 @@ def get_lens_parser() -> ArgumentParser:
     # Basis evaluation-only arguments
     eval_basis_parser.add_argument(
         "bases", type=Path, help="Directory containing the causal bases to evaluate."
+    )
+    eval_basis_parser.add_argument(
+        "--k", type=int, default=1, help="Number of features to use.", required=True
     )
     eval_basis_parser.add_argument(
         "--limit",
@@ -241,16 +286,16 @@ def get_lens_parser() -> ArgumentParser:
         "lens", type=Path, help="Directory containing the tuned lens to use.", nargs="?"
     )
     extract_parser.add_argument(
-        "--optimizer", type=str, choices=("lbfgs", "pgd"), default="lbfgs"
+        "--mode", type=str, choices=("mean", "resample", "zero"), default="mean"
     )
     extract_parser.add_argument(
-        "--mode", type=str, choices=("mean", "resample", "zero"), default="mean"
+        "--no-adapter", action="store_true", help="Do not use learned probes."
     )
     extract_parser.add_argument(
         "-o", "--output", type=Path, help="File to save the basis to."
     )
     extract_parser.add_argument(
-        "--k", type=int, default=25, help="Number of basis vectors to extract."
+        "--k", type=int, default=50, help="Number of basis vectors to extract."
     )
 
     return parser

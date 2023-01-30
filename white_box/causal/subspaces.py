@@ -58,6 +58,7 @@ def extract_causal_bases(
     labels: Optional[th.Tensor] = None,
     max_iter: int = 100,
     mode: Literal["mean", "resample", "zero"] = "mean",
+    no_adapter: bool = False,
 ) -> Iterable[CausalBasis]:
     """Extract causal bases for probes at each layer of a model.
 
@@ -94,7 +95,10 @@ def extract_causal_bases(
             log_p = model(hiddens[i]).log_softmax(-1)
 
         elif isinstance(model, TunedLens):
-            log_p = model(hiddens[i], i).log_softmax(-1)
+            logits = (
+                model(hiddens[i], i) if not no_adapter else model.to_logits(hiddens[i])
+            )
+            log_p = logits.log_softmax(-1)
             U = (eye + model[i].weight.data.T) @ U
         else:
             raise NotImplementedError()

@@ -35,9 +35,7 @@ def train_loop(
     local_rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     if world_size > 1:
-        ddp_lens = DDP(
-            lens, device_ids=[local_rank], find_unused_parameters=not args.share_weights
-        )
+        ddp_lens = DDP(lens, device_ids=[local_rank], find_unused_parameters=True)
     else:
         ddp_lens = lens
 
@@ -143,7 +141,8 @@ def train_loop(
     for batch_idx, batch in enumerate(pbar, start=1):
         assert isinstance(batch, dict)
         batch = send_to_device(batch, th.device(local_rank))
-        output = model(**batch, output_hidden_states=True)
+        with th.autocast("cuda"):
+            output = model(**batch, output_hidden_states=True)
 
         final_logits = output.logits
         stream = ResidualStream(
