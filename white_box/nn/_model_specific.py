@@ -29,6 +29,10 @@ def instantiate_layer(model_config, layer_idx: int, model_type: str) -> th.nn.Mo
         raise ValueError(f"Unknown model type '{model_type}'")
 
 
+def maybe_wrap(layer: th.nn.Module) -> th.nn.Module:
+    return _BloomBlockWrapper(layer) if isinstance(layer, BloomBlock) else layer
+
+
 # Very annoying that we have to do this. See https://bit.ly/3XSQ7W6 for context on
 # what we're doing here.
 class _BloomBlockWrapper(th.nn.Module):

@@ -35,9 +35,9 @@ from white_box.scripts import (
 import json
 import os
 import pickle
+import shutil
 import torch as th
 import torch.distributed as dist
-import shutil
 
 
 def main(args):
@@ -87,17 +87,9 @@ def main(args):
     else:
         lens = TunedLens(
             model,
-            dropout=args.dropout,
             extra_layers=args.extra_layers,
-            layer_norm=args.layer_norm,
-            mlp_hidden_sizes=args.mlp_hidden_sizes,
-            rank=args.rank,
             reuse_unembedding=not args.separate_unembeddings,
-            shared_mlp_hidden_sizes=args.shared_mlp_hidden_sizes,
-            sublayers=args.sublayers,
-        ).to(
-            dtype=th.float16 if args.lens_dtype == "float16" else th.float32,
-        )
+        ).float()
 
     if lens:
         lens = lens.to(device=th.device("cuda", local_rank))

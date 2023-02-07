@@ -23,8 +23,8 @@ def sample_derangement(
     permutation = th.randperm(n, device=device, generator=generator)
 
     # Reject any permutations with fixed points. This seems inefficient,
-    # but the expected number of th.randperm calls is actually constant
-    # in n; it's equal to e ≈ 2.7.
+    # but the expected number of th.randperm calls is actually O(1); it
+    # asymptotically approaches e ≈ 2.7.
     # See https://www.cs.upc.edu/~conrado/research/talks/analco08.pdf.
     while th.any(permutation == indices):
         permutation = th.randperm(n, device=device, generator=generator)

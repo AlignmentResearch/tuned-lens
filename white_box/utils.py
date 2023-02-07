@@ -37,6 +37,14 @@ def maybe_all_reduce(x: th.Tensor, op: str = "sum") -> th.Tensor:
     return x
 
 
+def maybe_unpack(x):
+    """Unpack a tuple if it's a tuple, otherwise return the value."""
+    if isinstance(x, tuple):
+        x, *_ = x
+
+    return x
+
+
 def maybe_shift_labels(x: th.Tensor, shift: int):
     if shift > 0:
         return x[:, shift:]

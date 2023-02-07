@@ -2,24 +2,11 @@ from dataclasses import dataclass
 from torch.autograd.functional import hessian
 from torch.distributions import Distribution
 from transformers import PreTrainedModel
-from typing import cast, Callable, Literal, Optional, Sequence
-from white_box.model_surgery import get_final_layer_norm
+from typing import cast, Callable, Literal, Optional
+from white_box.model_surgery import get_final_layer_norm, get_transformer_layers
 from white_box.stats import kl_divergence
-from white_box.utils import pairwise
+from white_box.utils import maybe_unpack
 import torch as th
-import torch.nn.functional as F
-
-
-@dataclass
-class AuxiliaryLoss:
-    """Auxiliary loss for `Decoder.invert`"""
-
-    probe: th.nn.Module
-
-    # Must set exactly one of these
-    target_ids: Optional[th.Tensor] = None
-    target_logits: Optional[th.Tensor] = None
-    weight: float = 1.0
 
 
 @dataclass
@@ -49,7 +36,8 @@ class Decoder(th.nn.Module):
     def __init__(
         self,
         model: Optional[PreTrainedModel] = None,
-        mlp_hidden_sizes: Sequence[int] = (),
+        num_transformer_layers: int = 0,
+        *,
         # Automatically set when model is provided
         d_model: Optional[int] = None,
         vocab_size: Optional[int] = None,
@@ -57,6 +45,9 @@ class Decoder(th.nn.Module):
         norm_eps: float = 1e-5,
     ):
         super().__init__()
+
+        self.num_transformer_layers = num_transformer_layers
+        self.transformer_layers = th.nn.ModuleList()
 
         # Initializing from scratch without a model
         if not model:
@@ -69,19 +60,6 @@ class Decoder(th.nn.Module):
         # Starting from a HuggingFace model
         else:
             self.load_from_model(model)
-
-        # An empty nn.Sequential is the identity function
-        self.mlp = th.nn.Sequential()
-        if mlp_hidden_sizes:
-            sizes = [d_model, *mlp_hidden_sizes, d_model]
-
-            for i, j in pairwise(sizes):
-                layer = th.nn.Linear(i, j)
-                layer.bias.data.zero_()
-                self.mlp.extend([layer, th.nn.GELU(), th.nn.Dropout(0.1)])
-
-            self.mlp.pop(-1)  # Remove the last dropout
-            self.mlp.pop(-1)  # Remove last GELU
 
         # In general we don't want to finetune the decoder
         self.requires_grad_(False)
@@ -97,23 +75,26 @@ class Decoder(th.nn.Module):
             # we don't want to guess incorrectly for other module classes.
             raise ValueError("Currently we only support nn.Linear unembeddings.")
 
-        unembed = raw_unembed.weight.data
-        assert isinstance(unembed, th.Tensor)
+        U = raw_unembed.weight.data.float()
+        assert isinstance(U, th.Tensor)
 
-        vocab_size, d_model = unembed.shape
+        vocab_size, d_model = U.shape
         self.layer_norm = th.nn.LayerNorm(
             d_model, elementwise_affine=False, eps=getattr(raw_ln, "eps", 1e-5)
         )
-        self.unembedding = th.nn.Linear(d_model, vocab_size, device=unembed.device)
+        self.unembedding = th.nn.Linear(d_model, vocab_size, device=U.device)
 
         # Roll the LN bias into our unembedding Linear
         gamma, beta = raw_ln.weight.data.float(), raw_ln.bias.data
-        U = unembed.float()
         if isinstance(beta, th.Tensor):
             bias = beta.float() @ U.T
+
+            # GPT-J has a bias in the unembedding layer, so we need to add it
+            if raw_unembed.bias is not None:
+                bias += raw_unembed.bias.data.float()
+
             bias -= bias.mean()  # Shift invariance of softmax
             self.unembedding.bias.data = bias.to(beta.dtype)
-            assert self.unembedding.bias.data.isfinite().all()
 
         # Roll the LN diagonal scaling factor into our unembedding matrix
         if isinstance(gamma, th.Tensor):
@@ -124,22 +105,23 @@ class Decoder(th.nn.Module):
         # input gets centered by LayerNorm.
         U = U - U.mean(dim=0)
         U -= U.mean(dim=1, keepdim=True)
-        self.unembedding.weight.data = U.to(unembed.dtype)
-        assert self.unembedding.weight.data.isfinite().all()
+        self.unembedding.weight.data = U.to(raw_unembed.weight.dtype)
 
-        # Use SVD to compute the pseudo-inverse of U.
-        u, s, v_h = th.linalg.svd(U, full_matrices=False)
+        self.register_buffer("U_pinv", U.pinverse())
 
-        # Invert the singular values greater than a certain threshold,
-        # replacing the rest with zeros, to get the pseudoinverse.
-        # See https://www.johndcook.com/blog/2018/05/05/svd/.
-        min_sigma = th.finfo(s.dtype).eps * max(U.shape) * s.max()
-        s_plus = s.reciprocal().where(s > min_sigma, s.new_zeros(()))
-        self.register_buffer("U_pinv", v_h.T @ th.diag(s_plus) @ u.T)
+        if self.num_transformer_layers:
+            _, layers = get_transformer_layers(model)
+            self.transformer_layers.extend(
+                layers[-self.num_transformer_layers :]  # type: ignore[arg-type]
+            )
 
     def forward(self, h: th.Tensor, transform: Callable = lambda x: x) -> th.Tensor:
         """Convert hidden states into logits."""
-        return self.unembedding(self.layer_norm(transform(h)))
+        h = transform(h)
+        for layer in self.transformer_layers:
+            h = maybe_unpack(layer(h))
+
+        return self.unembedding(self.layer_norm(h))
 
     def metric_tensor(
         self, h: th.Tensor, transform: Callable = lambda x: x
@@ -173,7 +155,6 @@ class Decoder(th.nn.Module):
         self,
         logits: th.Tensor,
         *,
-        aux_losses: Sequence[AuxiliaryLoss] = (),
         compute_hessian: bool = False,
         h0: Optional[th.Tensor] = None,
         max_iter: int = 1000,
@@ -197,7 +178,6 @@ class Decoder(th.nn.Module):
 
         Args:
             logits: Tensor of shape `[..., vocab_size]` containing logits to invert.
-            aux_losses: Auxiliary losses to add to the inversion objective.
             compute_hessian: Whether to compute and return the Hessian of the inversion
                 objective at the solution.
             h0: Initial guess for the hidden state. If `None`, the least-squares
@@ -213,7 +193,6 @@ class Decoder(th.nn.Module):
 
         if h0 is None:
             # Initialize with the Moore-Penrose pseudoinverse
-            # TODO: Can we learn a better initialization?
             h0 = logits @ self.U_pinv.mT
 
         # Sanity check the shape of the initial hidden state. Can silently lead to
@@ -247,20 +226,6 @@ class Decoder(th.nn.Module):
             log_q = self(transform(h)).log_softmax(-1)
             kl = th.sum(p * (log_p - log_q), dim=-1).nanmean()
             loss = kl.clone()
-
-            for aux_loss in aux_losses:
-                logits = self(h + aux_loss.probe(h))
-                scale = aux_loss.weight
-
-                # This is a cross-entropy objective
-                if aux_loss.target_ids is not None:
-                    loss += scale * F.cross_entropy(logits, aux_loss.target_ids)
-
-                # This is a KL-divergence objective
-                elif aux_loss.target_logits is not None:
-                    loss += scale * kl_divergence(logits, aux_loss.target_logits)
-                else:
-                    raise ValueError("Auxiliary loss has no target.")
 
             if prior_weight and prior is not None:
                 # We evaluate the prior density on the post-norm hidden state,

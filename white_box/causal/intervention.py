@@ -193,9 +193,8 @@ def estimate_effects(
     assert len(c_outputs) == L - 1
 
     if lens:
-        # Putting the lens in eval mode is important because it may have dropout
         assert len(lens) == L
-        lens = lens.to(device).eval()
+        lens = lens.to(device)
 
     target_logits = derange(control.logits, generator=rng)
     result = InterventionResult(

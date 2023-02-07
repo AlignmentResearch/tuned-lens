@@ -105,7 +105,7 @@ def downstream_loop(
             assert all(req.request_type == "loglikelihood" for req in reqs)
             result_array = []
             for i, req in enumerate(reqs):
-                results, top1 = wrapper.loglikelihood(req)
+                results, top1 = wrapper(req)
                 result_array.append(results)
 
                 if i == 0 and isinstance(task, LambadaOpenAI):

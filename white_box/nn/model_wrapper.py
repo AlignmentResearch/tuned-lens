@@ -42,15 +42,14 @@ class ModelWrapper(th.nn.Module):
 
         if self.tuned_lens:
             for i, h in enumerate(outputs.hidden_states[:-1]):
-                lens_lps = self.tuned_lens(h, i).log_softmax(dim=-1)
-                yield lens_lps
+                yield self.tuned_lens(h, i).log_softmax(dim=-1)
 
         yield outputs.logits.log_softmax(dim=-1)
 
     def tok_encode(self, string: str):
         return self.tokenizer.encode(string, add_special_tokens=False)
 
-    def loglikelihood(self, request) -> DownstreamResult:
+    def forward(self, request) -> DownstreamResult:
         ctx_raw, target_raw = request.args
 
         # sanity check
@@ -74,9 +73,7 @@ class ModelWrapper(th.nn.Module):
 
         for log_probs in self.iter_log_probs(inputs[None]):
             # Slice to original seq length
-            log_probs = log_probs[
-                :, input_len - len(target) : input_len
-            ]  # [1, seq, vocab]
+            log_probs = log_probs[:, input_len - len(target) : input_len]
 
             # Check if per-token argmax is exactly equal to continuation
             greedy_tokens = log_probs.argmax(dim=-1)
