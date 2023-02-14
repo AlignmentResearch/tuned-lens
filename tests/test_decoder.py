@@ -1,4 +1,4 @@
-from white_box.nn import Decoder
+from tuned_lens.nn import Decoder
 from transformers import AutoConfig, AutoModelForCausalLM
 import pytest
 import torch as th

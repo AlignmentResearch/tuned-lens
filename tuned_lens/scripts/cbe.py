@@ -4,8 +4,10 @@ from itertools import islice
 from torch.utils.data import DataLoader
 from transformers import PreTrainedModel
 from tqdm.auto import tqdm
-from white_box.causal import ablate_subspace
-from white_box.utils import maybe_all_reduce, send_to_device
+from typing import Optional
+from tuned_lens.causal import ablate_subspace, extract_causal_bases
+from tuned_lens.nn import Decoder, TunedLens
+from tuned_lens.utils import maybe_all_reduce, send_to_device
 import torch as th
 import torch.distributed as dist
 
@@ -40,8 +42,8 @@ def eval_bases(
 
     def save():
         avg_kls, avg_incrs = kls.mean(0), loss_increments.mean(0)
-        maybe_all_reduce(avg_kls, "mean")
-        maybe_all_reduce(avg_incrs, "mean")
+        maybe_all_reduce(avg_kls)
+        maybe_all_reduce(avg_incrs)
 
         if local_rank == 0:
             th.save(avg_kls, args.output / "kls.pt")
@@ -74,3 +76,36 @@ def eval_bases(
             save()
 
     save()
+
+
+def extract_bases(
+    args: Namespace,
+    model: PreTrainedModel,
+    data: Dataset,
+    lens: Optional[TunedLens],
+):
+    local_rank = dist.get_rank() if dist.is_initialized() else 0
+    args.output.mkdir(parents=True, exist_ok=True)
+
+    data = data.shuffle(seed=args.seed)  # type: ignore[arg-type]
+    batch = send_to_device(data[: args.per_gpu_batch_size], th.device(local_rank))
+
+    with th.autocast("cuda"), th.no_grad():
+        outputs = model(**batch, output_hidden_states=True)
+
+    basis_iter = extract_causal_bases(
+        # Unfortunately I can't get this to work in half precision
+        lens.float() if lens else Decoder(model).float(),
+        [x.float() for x in outputs.hidden_states[:-1]],
+        k=args.k,
+        labels=batch["input_ids"] if args.loss == "ce" else None,
+        mode=args.mode,
+        no_adapter=args.no_adapter,
+    )
+    for i, basis in enumerate(basis_iter):
+        if local_rank == 0:
+            th.save(basis, args.output / f"layer_{i}.pt")
+
+
+def main(args):
+    pass

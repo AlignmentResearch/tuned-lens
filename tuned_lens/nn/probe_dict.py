@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from typing import Generator
-from white_box.model_surgery import get_key_path
+from tuned_lens.model_surgery import get_key_path
 import torch as th
 
 

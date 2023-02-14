@@ -22,7 +22,7 @@ def maybe_all_gather_lists(lst: list) -> list:
     return sum(lists, [])
 
 
-def maybe_all_reduce(x: th.Tensor, op: str = "sum") -> th.Tensor:
+def maybe_all_reduce(x: th.Tensor, op: str = "mean") -> th.Tensor:
     if not dist.is_initialized():
         return x
 

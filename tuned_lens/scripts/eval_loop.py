@@ -6,15 +6,15 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel
 from typing import Optional
-from white_box import (
+from tuned_lens import (
     record_residual_stream,
     LogitStats,
     ResidualStats,
     TunedLens,
 )
-from white_box.nn import Decoder
-from white_box.stats import CalibrationError
-from white_box.utils import (
+from tuned_lens.nn import Decoder
+from tuned_lens.stats import CalibrationError
+from tuned_lens.utils import (
     maybe_all_cat,
     maybe_all_reduce,
     maybe_shift_labels,
@@ -131,7 +131,7 @@ def eval_loop(
             )
 
         if args.mean_ablate and delta_stats.n > 20_000:
-            from white_box.utils import revcumsum
+            from tuned_lens.utils import revcumsum
 
             offsets = revcumsum(list(delta_stats.mean()))
 
@@ -213,7 +213,7 @@ def eval_loop(
 
     pbar.close()
     agg = pytree_map(lambda x: nats_to_bpb_ratio * x.mean(), pytree_stack(batches))
-    agg = pytree_map(lambda x: maybe_all_reduce(x, "mean"), agg)
+    agg = pytree_map(lambda x: maybe_all_reduce(x), agg)
     if local_rank == 0:
         th.save(agg, root_dir / "aggregate_metrics.pt")
 
@@ -221,7 +221,7 @@ def eval_loop(
         agg_transfer = pytree_map(
             lambda x: nats_to_bpb_ratio * x.mean(0), pytree_stack(transfer_batches)
         )
-        agg_transfer = pytree_map(lambda x: maybe_all_reduce(x, "mean"), agg_transfer)
+        agg_transfer = pytree_map(lambda x: maybe_all_reduce(x), agg_transfer)
         if local_rank == 0:
             th.save(agg_transfer, root_dir / "aggregate_transfer_metrics.pt")
 

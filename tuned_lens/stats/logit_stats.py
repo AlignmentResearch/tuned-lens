@@ -25,7 +25,7 @@ class LogitStats:
     def all_reduce_(self):
         """All-reduce the stats across all processes."""
         if self.sufficient_stats is not None:
-            maybe_all_reduce(self.sufficient_stats, op="mean")
+            maybe_all_reduce(self.sufficient_stats)
 
     @th.no_grad()
     def update(self, logits: th.Tensor, assume_normalized: bool = False):

@@ -1,5 +1,5 @@
 from torch.distributions import Categorical, Dirichlet, kl_divergence
-from white_box.stats import aitchison, aitchison_similarity, js_divergence, js_distance
+from tuned_lens.stats import aitchison, aitchison_similarity, js_divergence, js_distance
 import torch as th
 
 

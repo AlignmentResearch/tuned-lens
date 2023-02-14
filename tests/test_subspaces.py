@@ -1,4 +1,4 @@
-from white_box.causal import remove_subspace
+from tuned_lens.causal import remove_subspace
 import pytest
 import torch as th
 

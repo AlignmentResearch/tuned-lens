@@ -1,10 +1,12 @@
+from .scripts.lens import main as lens_main
 from argparse import ArgumentParser
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
+import os
+import torch.distributed as dist
 
 
-def get_lens_parser() -> ArgumentParser:
-    """Return the parser for the `lens` subcommand."""
-
+def run():
     parser = ArgumentParser(
         description="Train or evaluate a set of tuned lenses for a language model.",
         add_help=False,
@@ -15,10 +17,10 @@ def get_lens_parser() -> ArgumentParser:
         "model_name", type=str, help="Name of model to use in the Huggingface Hub."
     )
     parent_parser.add_argument(
-        "--dataset",
+        "dataset",
         type=str,
-        default=("wikitext", "wikitext-2-raw-v1"),
-        nargs="+",
+        default=("the_pile", "all"),
+        nargs="*",
         help="Name of dataset to use. Can either be a local .jsonl file or a name "
         "suitable to be passed to the HuggingFace load_dataset function.",
     )
@@ -96,13 +98,10 @@ def get_lens_parser() -> ArgumentParser:
         "0 = current token, -1 = previous token, etc.)",
     )
 
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="lens_command")
     train_parser = subparsers.add_parser("train", parents=[parent_parser])
     downstream_parser = subparsers.add_parser("downstream", parents=[parent_parser])
     eval_parser = subparsers.add_parser("eval", parents=[parent_parser])
-
-    eval_basis_parser = subparsers.add_parser("eval-bases", parents=[parent_parser])
-    extract_parser = subparsers.add_parser("extract-bases", parents=[parent_parser])
 
     # Training-only arguments
     train_parser.add_argument(
@@ -189,6 +188,15 @@ def get_lens_parser() -> ArgumentParser:
         nargs="?",
     )
     downstream_parser.add_argument(
+        "--injection", action="store_true", help="Simulate a prompt injection attack."
+    )
+    downstream_parser.add_argument(
+        "--num-shots",
+        type=int,
+        default=0,
+        help="Number of examples to use for few-shot evaluation.",
+    )
+    downstream_parser.add_argument(
         "--limit", type=int, default=500, help="Number of samples to evaluate on."
     )
     downstream_parser.add_argument(
@@ -226,41 +234,34 @@ def get_lens_parser() -> ArgumentParser:
         help="Evaluate how well probes transfer to other layers.",
     )
 
-    # Basis evaluation-only arguments
-    eval_basis_parser.add_argument(
-        "bases", type=Path, help="Directory containing the causal bases to evaluate."
-    )
-    eval_basis_parser.add_argument(
-        "--k", type=int, default=1, help="Number of features to use.", required=True
-    )
-    eval_basis_parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Number of batches to evaluate on. If None, will use the entire dataset.",
-    )
-    eval_basis_parser.add_argument(
-        "--mode", type=str, choices=("mean", "resample", "zero"), default="mean"
-    )
-    eval_basis_parser.add_argument(
-        "-o", "--output", type=Path, help="Folder to save the results to."
-    )
+    args = parser.parse_args()
 
-    # Basis extraction-only arguments
-    extract_parser.add_argument(
-        "lens", type=Path, help="Directory containing the tuned lens to use.", nargs="?"
-    )
-    extract_parser.add_argument(
-        "--mode", type=str, choices=("mean", "resample", "zero"), default="mean"
-    )
-    extract_parser.add_argument(
-        "--no-adapter", action="store_true", help="Do not use learned probes."
-    )
-    extract_parser.add_argument(
-        "-o", "--output", type=Path, help="File to save the basis to."
-    )
-    extract_parser.add_argument(
-        "--k", type=int, default=50, help="Number of basis vectors to extract."
-    )
+    # Support both distributed and non-distributed training
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is not None:
+        dist.init_process_group("nccl")
+        local_rank = int(local_rank)
 
-    return parser
+    # Only print on rank 0
+    with nullcontext() if not local_rank else redirect_stdout(None):
+        args = parser.parse_args()
+
+        if args.sweep:
+            ckpt_range = eval(f"range({args.sweep})")
+            output_root = args.output
+            assert output_root is not None
+            print(f"Running sweep over {len(ckpt_range)} checkpoints.")
+
+            for step in ckpt_range:
+                step_output = output_root / f"step{step}"
+                print(f"Running for step {step}, saving to '{step_output}'...")
+
+                args.output = step_output
+                args.revision = f"step{step}"
+                lens_main(args)
+        else:
+            lens_main(args)
+
+
+if __name__ == "__main__":
+    run()

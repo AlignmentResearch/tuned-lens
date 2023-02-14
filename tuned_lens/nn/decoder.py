@@ -3,9 +3,9 @@ from torch.autograd.functional import hessian
 from torch.distributions import Distribution
 from transformers import PreTrainedModel
 from typing import cast, Callable, Literal, Optional
-from white_box.model_surgery import get_final_layer_norm, get_transformer_layers
-from white_box.stats import kl_divergence
-from white_box.utils import maybe_unpack
+from tuned_lens.model_surgery import get_final_layer_norm, get_transformer_layers
+from tuned_lens.stats import kl_divergence
+from tuned_lens.utils import maybe_unpack
 import torch as th
 
 

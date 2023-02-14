@@ -7,8 +7,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup
-from white_box import ResidualStream, TunedLens
-from white_box.utils import (
+from tuned_lens import ResidualStream, TunedLens
+from tuned_lens.utils import (
     maybe_all_reduce,
     maybe_shift_labels,
     maybe_shift_preds,
@@ -187,7 +187,7 @@ def train_loop(
 
                 # Log the loss *before* LASSO regularization
                 logging_loss = loss.detach()
-                maybe_all_reduce(logging_loss, "mean")
+                maybe_all_reduce(logging_loss)
                 if local_rank == 0:
                     metrics[f"loss/{name}"].append(logging_loss)
 

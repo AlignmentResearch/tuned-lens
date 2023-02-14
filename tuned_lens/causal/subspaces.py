@@ -174,8 +174,8 @@ def extract_causal_bases(
                     loss = -th.sum(p * (log_p - log_q), dim=-1).mean()
 
                 loss.backward()
-                maybe_all_reduce(loss, "mean")
-                maybe_all_reduce(v.grad, "mean")  # type: ignore[arg-type]
+                maybe_all_reduce(loss)
+                maybe_all_reduce(v.grad)  # type: ignore[arg-type]
 
                 assert v.grad is not None
                 new_energy = -loss.detach() - base_loss

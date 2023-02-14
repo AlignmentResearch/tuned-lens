@@ -1,7 +1,7 @@
 from .tuned_lens import TunedLens
 from ..utils import pytree_map
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
-from typing import Iterable, NamedTuple, Optional
+from typing import Iterable, NamedTuple, Optional, Sequence
 import torch as th
 import torch.distributed as dist
 
@@ -11,9 +11,10 @@ class DownstreamResult(NamedTuple):
 
     results: list
     greedy_preds: list[list[int]]
+    is_exact_match: list[bool]
 
 
-class ModelWrapper(th.nn.Module):
+class DownstreamWrapper(th.nn.Module):
     """Wrapper around a model, a tokenizer, and a tuned lens for downstream eval."""
 
     def __init__(
@@ -49,15 +50,15 @@ class ModelWrapper(th.nn.Module):
     def tok_encode(self, string: str):
         return self.tokenizer.encode(string, add_special_tokens=False)
 
-    def forward(self, request) -> DownstreamResult:
-        ctx_raw, target_raw = request.args
+    def forward(self, request, prompt: str) -> DownstreamResult:
+        _, target_raw = request.args
 
         # sanity check
-        assert len(ctx_raw) > 0
+        assert len(prompt) > 0
         assert len(target_raw) > 0
         assert len(target_raw) <= self.max_length
 
-        ctx = self.tok_encode(ctx_raw)
+        ctx = self.tok_encode(prompt)
         target = self.tok_encode(target_raw)
 
         # when too long to fit in context, truncate from the left
@@ -68,6 +69,7 @@ class ModelWrapper(th.nn.Module):
         )
         (input_len,) = inputs.shape
 
+        exact_matches = []
         layer_results = []
         preds = []
 
@@ -88,11 +90,14 @@ class ModelWrapper(th.nn.Module):
 
             # Answer: (log prob, is-exact-match)
             result = (log_probs.sum(), max_equal)
+            exact_matches.append(max_equal)
             layer_results.append(
                 result if request.index is None else result[request.index]
             )
+            # breakpoint()
 
         # Force GPU sync at the end
         layer_results = pytree_map(lambda x: x.item(), layer_results)
         preds = pytree_map(lambda x: x.squeeze(0).tolist(), preds)
-        return DownstreamResult(layer_results, preds)
+        match_list = [bool(is_match) for is_match in exact_matches]
+        return DownstreamResult(layer_results, preds, match_list)

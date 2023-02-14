@@ -3,7 +3,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "white-box"
+name = "tuned-lens"
 description = "Tools for understanding how transformer predictions are built layer-by-layer"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,7 +25,7 @@ dev = [
 ]
 
 [project.scripts]
-white-box = "white_box.__main__:run"
+tuned-lens = "tuned_lens.__main__:run"
 
 [tool.setuptools]
-packages = ["white_box"]
+packages = ["tuned_lens"]

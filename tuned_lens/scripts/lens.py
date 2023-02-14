@@ -1,6 +1,5 @@
 """Train or evaluate a tuned lens for a language model."""
 
-from contextlib import nullcontext, redirect_stdout
 from datasets import Dataset, DatasetDict, load_dataset
 from functools import partial
 from hashlib import md5
@@ -17,23 +16,19 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
-from white_box.scripts import get_lens_parser
-from white_box import TunedLens
-from white_box.data import (
+from tuned_lens import TunedLens
+from tuned_lens.data import (
     chunk_and_tokenize,
     compute_nats_to_bpb_ratio,
     silence_datasets_messages,
 )
-from white_box.model_surgery import get_transformer_layers
-from white_box.scripts import (
+from tuned_lens.model_surgery import get_transformer_layers
+from tuned_lens.scripts import (
     downstream_loop,
     eval_loop,
-    eval_bases,
-    extract_bases,
     train_loop,
 )
 import json
-import os
 import pickle
 import shutil
 import torch as th
@@ -52,13 +47,13 @@ def main(args):
 
     if args.random_model:
         print(f"Sampling random weights for model '{args.model_name}'...")
-        model = AutoModelForCausalLM.from_config(
-            AutoConfig.from_pretrained(args.model_name, revision=args.revision),
-            torch_dtype=th.float16,
+        config = AutoConfig.from_pretrained(args.model_name, revision=args.revision)
+        model = AutoModelForCausalLM.from_config(  # type: ignore
+            config, torch_dtype=th.float16
         )
     else:
         print(f"Loading pretrained weights for '{args.model_name}'...")
-        model = AutoModelForCausalLM.from_pretrained(
+        model = AutoModelForCausalLM.from_pretrained(  # type: ignore
             args.model_name,
             cache_dir=cache_dir,
             low_cpu_mem_usage=True,
@@ -73,16 +68,16 @@ def main(args):
         if local_rank == 0:
             shutil.rmtree(cache_dir)
 
+    assert isinstance(model, PreTrainedModel)
     model.eval()
     model.requires_grad_(False)
-    assert isinstance(model, PreTrainedModel)
 
     th.cuda.set_device(local_rank)
 
     # Can be set either in eval or in training; in eval it's required
     if getattr(args, "lens", None):
         lens = TunedLens.load(args.lens, map_location="cpu")
-    elif args.command in ("downstream", "eval", "eval-bases", "extract-bases"):
+    elif args.command in ("downstream", "eval"):
         lens = None
     else:
         lens = TunedLens(
@@ -152,39 +147,5 @@ def main(args):
         train_loop(args, model, processed, lens, float(nats_to_bpb))
     elif args.command == "eval":
         eval_loop(args, model, processed, lens, float(nats_to_bpb))
-    elif args.command == "eval-bases":
-        eval_bases(args, model, processed)
-    elif args.command == "extract-bases":
-        extract_bases(args, model, processed, lens)
     else:
         raise ValueError(f"Unknown command: {args.command}")
-
-
-if __name__ == "__main__":
-    parser = get_lens_parser()
-
-    # Support both distributed and non-distributed training
-    local_rank = os.environ.get("LOCAL_RANK")
-    if local_rank is not None:
-        dist.init_process_group("nccl")
-        local_rank = int(local_rank)
-
-    # Only print on rank 0
-    with nullcontext() if not local_rank else redirect_stdout(None):
-        args = parser.parse_args()
-
-        if args.sweep:
-            ckpt_range = eval(f"range({args.sweep})")
-            output_root = args.output
-            assert output_root is not None
-            print(f"Running sweep over {len(ckpt_range)} checkpoints.")
-
-            for step in ckpt_range:
-                step_output = output_root / f"step{step}"
-                print(f"Running for step {step}, saving to '{step_output}'...")
-
-                args.output = step_output
-                args.revision = f"step{step}"
-                main(args)
-        else:
-            main(args)
