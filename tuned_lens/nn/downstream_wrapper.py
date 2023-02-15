@@ -50,8 +50,7 @@ class DownstreamWrapper(th.nn.Module):
     def tok_encode(self, string: str):
         return self.tokenizer.encode(string, add_special_tokens=False)
 
-    def forward(self, request, prompt: str) -> DownstreamResult:
-        _, target_raw = request.args
+    def forward(self, target_raw, prompt: str) -> DownstreamResult:
 
         # sanity check
         assert len(prompt) > 0
@@ -91,10 +90,7 @@ class DownstreamWrapper(th.nn.Module):
             # Answer: (log prob, is-exact-match)
             result = (log_probs.sum(), max_equal)
             exact_matches.append(max_equal)
-            layer_results.append(
-                result if request.index is None else result[request.index]
-            )
-            # breakpoint()
+            layer_results.append(result[0])
 
         # Force GPU sync at the end
         layer_results = pytree_map(lambda x: x.item(), layer_results)

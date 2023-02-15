@@ -76,9 +76,6 @@ def run():
         "--sweep", type=str, help="Range of checkpoints to sweep over"
     )
     parent_parser.add_argument(
-        "--task", type=str, nargs="+", help="lm-eval task to run the model on."
-    )
-    parent_parser.add_argument(
         "--text-column",
         type=str,
         default="text",
@@ -98,7 +95,7 @@ def run():
         "0 = current token, -1 = previous token, etc.)",
     )
 
-    subparsers = parser.add_subparsers(dest="lens_command")
+    subparsers = parser.add_subparsers(dest="command")
     train_parser = subparsers.add_parser("train", parents=[parent_parser])
     downstream_parser = subparsers.add_parser("downstream", parents=[parent_parser])
     eval_parser = subparsers.add_parser("eval", parents=[parent_parser])
@@ -182,7 +179,7 @@ def run():
     )
 
     downstream_parser.add_argument(
-        "lens",
+        "--lens",
         type=Path,
         help="Directory containing the tuned lens to evaluate.",
         nargs="?",
@@ -201,6 +198,9 @@ def run():
     )
     downstream_parser.add_argument(
         "-o", "--output", type=Path, help="Folder to save the results to."
+    )
+    downstream_parser.add_argument(
+        "--task", type=str, nargs="+", help="lm-eval task to run the model on."
     )
 
     # Evaluation-only arguments
