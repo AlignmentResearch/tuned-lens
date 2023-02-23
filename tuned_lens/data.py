@@ -80,7 +80,7 @@ def compute_nats_to_bpb_ratio(raw: T, tokenized: T) -> float:
     return (total_tokens / total_bytes) / math.log(2)
 
 
-def _tokenize_fn(x: dict, tokenizer: PreTrainedTokenizerBase, text_key: str):
+def _tokenize_fn(x: dict[str, list], tokenizer: PreTrainedTokenizerBase, text_key: str):
     """Annoyingly, we need to use a separate function so it can be hashed correctly."""
     chunk_size = min(tokenizer.model_max_length, 2048)
     sep = tokenizer.eos_token or "<|endoftext|>"
