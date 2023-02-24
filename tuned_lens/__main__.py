@@ -191,6 +191,9 @@ def run():
         "--injection", action="store_true", help="Simulate a prompt injection attack."
     )
     downstream_parser.add_argument(
+        "--incorrect-fewshot", action="store_true", help="Permute the fewshot labels."
+    )
+    downstream_parser.add_argument(
         "--num-shots",
         type=int,
         default=0,
@@ -218,9 +221,6 @@ def run():
         type=int,
         default=None,
         help="Number of batches to evaluate on. If None, will use the entire dataset.",
-    )
-    eval_parser.add_argument(
-        "--mean-ablate", action="store_true", help="Evaluate mean ablation."
     )
     eval_parser.add_argument(
         "-o",

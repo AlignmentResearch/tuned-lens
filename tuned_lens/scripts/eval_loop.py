@@ -69,7 +69,6 @@ def eval_loop(
     tl_calibration = [CalibrationError() for _ in range(L)]
 
     final_logit_stats = LogitStats()
-    ml_statistics = [LogitStats() for _ in range(L)]
     ll_statistics = [LogitStats() for _ in range(L)]
     tl_statistics = [LogitStats() for _ in range(L)]
 
@@ -129,27 +128,6 @@ def eval_loop(
             batch_output["baseline_kl"][name] = th.sum(
                 final_probs * (final_lps - baseline_lps), dim=-1
             )
-
-        if args.mean_ablate and delta_stats.n > 20_000:
-            from tuned_lens.utils import revcumsum
-
-            offsets = revcumsum(list(delta_stats.mean()))
-
-            for (j, offset), (name, h) in zip(enumerate(offsets), stream.items()):
-                baseline_lps = _to_logits(h + offset).log_softmax(dim=-1)
-
-                batch_output["mean_ablation_ce"][name] = th.nn.functional.cross_entropy(
-                    maybe_shift_preds(baseline_lps, shift).flatten(0, 1),
-                    labels.flatten(),
-                    reduction="none",
-                )
-                batch_output["mean_ablation_entropy"][name] = th.sum(
-                    -baseline_lps.exp() * baseline_lps, dim=-1
-                )
-                batch_output["mean_ablation_kl"][name] = th.sum(
-                    final_probs * (final_lps - baseline_lps), dim=-1
-                )
-                ml_statistics[j].update(baseline_lps, assume_normalized=True)
 
         # Compute tuned lens eval and statistics if applicable
         if lens:
@@ -230,8 +208,6 @@ def eval_loop(
     stream_stats.all_reduce_()
     for stats in ll_statistics:
         stats.all_reduce_()
-    for stats in ml_statistics:
-        stats.all_reduce_()
 
     final_calibration.all_gather_()
     for cal in ll_calibration:
@@ -254,7 +230,6 @@ def eval_loop(
 
         th.save(final_logit_stats, root_dir / "final_logit_stats.pt")
         th.save(ll_statistics, root_dir / "ll_logit_stats.pt")
-        th.save(ml_statistics, root_dir / "ml_logit_stats.pt")
         if lens:
             th.save(tl_statistics, root_dir / "tl_logit_stats.pt")
             th.save(tl_calibration, root_dir / "tl_calibration.pt")
