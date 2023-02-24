@@ -1,4 +1,8 @@
 {
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportPrivateImportUsage": "none",
+    },
     "python.testing.pytestArgs": [
         "tests"
     ],

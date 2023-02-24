@@ -1,5 +1,5 @@
 from numpy.typing import ArrayLike
-from typing import Literal, TYPE_CHECKING
+from typing import Literal, TYPE_CHECKING, Union
 import numpy as np
 
 if TYPE_CHECKING:
@@ -13,9 +13,10 @@ def fit_anomaly_detector(
     *,
     include_anomalies: bool = False,
     method: Literal["iforest", "lof", "svm"] = "lof",
+    plot: bool = True,
     seed: int = 42,
     **kwargs,
-) -> tuple["BaseEstimator", "RocCurveDisplay"]:
+) -> tuple["BaseEstimator", Union[float, "RocCurveDisplay"]]:
     """Fit an unsupervised anomaly detector and test its AUROC on held out mixed data.
 
     By default, the model only sees normal data during training, but anomalous data
@@ -28,15 +29,17 @@ def fit_anomaly_detector(
             set. If False, the the model is only trained on normal datapoints.
         method: The anomaly detection method to use. "iforest" for `IsolationForest`,
             "lof" for `LocalOutlierFactor`, and "svm" for `OneClassSVM`.
+        plot: Whether to return a `RocCurveDisplay` object instead of the AUROC.
         seed: The random seed to use for train/test split.
         **kwargs: Additional keyword arguments to pass to the scikit-learn constructor.
 
     Returns:
-        The fitted model and the AUROC on the held out mixed data.
+        The fitted model and the AUROC (or entire ROC curve if `plot=True`) on the held
+        out mixed data.
     """
     # Avoid importing sklearn at module level
     from sklearn.ensemble import IsolationForest
-    from sklearn.metrics import RocCurveDisplay
+    from sklearn.metrics import RocCurveDisplay, roc_auc_score
     from sklearn.model_selection import train_test_split
     from sklearn.neighbors import LocalOutlierFactor
     from sklearn.svm import OneClassSVM
@@ -61,7 +64,7 @@ def fit_anomaly_detector(
         test_y = np.concatenate([np.zeros(len(anomalous)), np.ones(len(test_normal))])
 
     if method == "iforest":
-        model = IsolationForest(**kwargs).fit(train_x)
+        model = IsolationForest(**kwargs, random_state=seed).fit(train_x)
         test_preds = model.score_samples(test_x)
     elif method == "lof":
         model = LocalOutlierFactor(novelty=True, **kwargs).fit(train_x)
@@ -72,5 +75,8 @@ def fit_anomaly_detector(
     else:
         raise ValueError(f"Unknown anomaly detection method '{method}'")
 
-    curve = RocCurveDisplay.from_predictions(test_y, test_preds)
-    return model, curve
+    if plot:
+        curve = RocCurveDisplay.from_predictions(test_y, test_preds)
+        return model, curve
+    else:
+        return model, roc_auc_score(test_y, test_preds)
