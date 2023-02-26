@@ -11,7 +11,7 @@ class DownstreamResult(NamedTuple):
 
     results: list
     greedy_preds: list[list[int]]
-    is_exact_match: list[bool]
+    hiddens: list[th.Tensor]
 
 
 class DownstreamWrapper(th.nn.Module):
@@ -37,16 +37,6 @@ class DownstreamWrapper(th.nn.Module):
     def max_length(self):
         return getattr(self.model.config, "max_position_embeddings", 2048)
 
-    def iter_log_probs(self, x: th.Tensor) -> Iterable:
-        """Iterate over log probs from each layer, w/o putting all of them in VRAM."""
-        outputs = self.model(x, output_hidden_states=self.tuned_lens is not None)
-
-        if self.tuned_lens:
-            for i, h in enumerate(outputs.hidden_states[:-1]):
-                yield self.tuned_lens(h, i).log_softmax(dim=-1)
-
-        yield outputs.logits.log_softmax(dim=-1)
-
     def tok_encode(self, string: str):
         return self.tokenizer.encode(string, add_special_tokens=False)
 
@@ -69,11 +59,22 @@ class DownstreamWrapper(th.nn.Module):
         )
         (input_len,) = inputs.shape
 
-        exact_matches = []
         layer_results = []
         preds = []
+        outputs = self.model(inputs[None], output_hidden_states=True)
+        hiddens = [
+            h[:, input_len - len(target) : input_len] for h in outputs.hidden_states
+        ]
 
-        for log_probs in self.iter_log_probs(inputs[None]):
+        def iter_log_probs() -> Iterable:
+            """Iterate over log probs from each layer, w/o putting them in VRAM."""
+            if self.tuned_lens:
+                for i, h in enumerate(outputs.hidden_states[:-1]):
+                    yield self.tuned_lens(h, i).log_softmax(dim=-1)
+
+            yield outputs.logits.log_softmax(dim=-1)
+
+        for log_probs in iter_log_probs():
             # Slice to original seq length
             log_probs = log_probs[:, input_len - len(target) : input_len]
 
@@ -90,14 +91,11 @@ class DownstreamWrapper(th.nn.Module):
 
             # Answer: (log prob, is-exact-match)
             result = (log_probs.sum(), max_equal)
-            exact_matches.append(max_equal)
             layer_results.append(
                 result if request.index is None else result[request.index]
             )
-            # breakpoint()
 
         # Force GPU sync at the end
         layer_results = pytree_map(lambda x: x.item(), layer_results)
         preds = pytree_map(lambda x: x.squeeze(0).tolist(), preds)
-        match_list = [bool(is_match) for is_match in exact_matches]
-        return DownstreamResult(layer_results, preds, match_list)
+        return DownstreamResult(layer_results, preds, hiddens)

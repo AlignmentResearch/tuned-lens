@@ -208,7 +208,7 @@ def run():
 
     # Evaluation-only arguments
     eval_parser.add_argument(
-        "lens",
+        "--lens",
         type=Path,
         help="Directory containing the tuned lens to evaluate.",
         nargs="?",

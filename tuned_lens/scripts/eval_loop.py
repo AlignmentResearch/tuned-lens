@@ -46,7 +46,7 @@ def eval_loop(
 
     # Running mean & covariance of the hidden states & residuals
     delta_stats = ResidualStats(cov=False)
-    stream_stats = ResidualStats()
+    stream_stats = ResidualStats(dtype=th.float32)
 
     if args.limit:
         dl = islice(dl, args.limit)

@@ -85,6 +85,7 @@ def downstream_loop(
         if dist.is_initialized():
             dist.barrier()
 
+        all_penultimate_hs = []
         labels = []
         log_likelihoods = []
         log_likelihoods_norm = []
@@ -140,11 +141,15 @@ def downstream_loop(
                 reqs = [reqs]
 
             assert all(req.request_type == "loglikelihood" for req in reqs)
+            penultimate_hs = []
             result_array = []
+            # breakpoint()
             for i, req in enumerate(reqs):
-                results, top1, exact_matches = wrapper(req, ctx)
+                results, top1, hiddens = wrapper(req, ctx)
+                penultimate_hs.append(hiddens[-1])
                 result_array.append(results)
 
+            all_penultimate_hs.append((doc_hash, th.cat(penultimate_hs)))
             log_likelihoods.append((doc_hash, result_array))
 
             # Transpose the result array
@@ -180,6 +185,8 @@ def downstream_loop(
                         if stderr is not None:
                             stderrs[i][metric_name + "_stderr"] = stderr(items)
 
+        for h, penultimate_h in maybe_all_gather_lists(all_penultimate_hs):
+            per_doc_info[h]["penultimate_h"] = penultimate_h
         for h, label in maybe_all_gather_lists(labels):
             per_doc_info[h]["label"] = label
         for h, ll_traj in maybe_all_gather_lists(log_likelihoods):

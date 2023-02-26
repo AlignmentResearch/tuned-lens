@@ -32,7 +32,7 @@ class ResidualStats:
         if self._mean_norm is not None:
             self._mean_norm.all_reduce_()
 
-    @th.autocast("cuda")
+    @th.autocast("cuda", enabled=False)
     @th.no_grad()
     def update(self, stream: ResidualStream):
         """Update the online stats in-place with a new stream."""
@@ -47,13 +47,13 @@ class ResidualStats:
             self._mean_norm = stream.map(lambda x: x.new_zeros((), dtype=self.dtype))
 
         # Update running mean
-        delta = stream.zip_map(lambda x, mu: x - mu, self._mu)
+        delta = stream.zip_map(lambda x, mu: x.type_as(mu) - mu, self._mu)
         delta.zip_map(lambda d, mu: mu.add_(d.sum(0), alpha=1 / self.n), self._mu)
 
         # We allow the user to set cov = False because it's expensive and O(d^2)
         if self.cov:
             # See https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
-            delta2 = stream.zip_map(lambda x, mu: x - mu, self._mu)
+            delta2 = stream.zip_map(lambda x, mu: x.type_as(mu) - mu, self._mu)
 
             if self._M2 is None:
                 # On the first iteration set the running covariance to the sample cov
@@ -65,7 +65,9 @@ class ResidualStats:
                 self._M2.zip_map(lambda m, d, d2: m.addmm_(d.T, d2), delta, delta2)
 
         stream.zip_map(
-            lambda x, mu: mu.add_(th.sum(x.norm(dim=-1) - mu), alpha=1 / self.n),
+            lambda x, mu: mu.add_(
+                th.sum(x.norm(dim=-1).type_as(mu) - mu), alpha=1 / self.n
+            ),
             self._mean_norm,
         )
 
