@@ -23,6 +23,7 @@ version = "0.0.1"
 [project.optional-dependencies]
 dev = [
     "pre-commit",
+    "pytest-skip-slow",
     "pytest",
 ]
 
@@ -31,3 +32,6 @@ tuned-lens = "tuned_lens.__main__:run"
 
 [tool.setuptools]
 packages = ["tuned_lens"]
+
+[tool.pytest.ini_options]
+addini = "slow : mark tests as slow these will be skipped by default"

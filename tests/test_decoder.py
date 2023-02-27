@@ -3,19 +3,7 @@ from transformers import AutoConfig, AutoModelForCausalLM
 import pytest
 import torch as th
 
-
-@pytest.mark.parametrize(
-    "model_str",
-    [
-        "bigscience/bloom-560m",
-        "EleutherAI/gpt-j-6B",
-        "EleutherAI/gpt-neo-125M",
-        "EleutherAI/pythia-125m",
-        "facebook/opt-125m",
-        "gpt2",
-    ],
-)
-def test_correctness(model_str: str):
+def correctness(model_str: str):
     th.manual_seed(42)
 
     # We use a random model with the correct config instead of downloading the
@@ -42,3 +30,21 @@ def test_correctness(model_str: str):
 
     x_hat = decoder.back_translate(x, tol=1e-5)
     th.testing.assert_close(y.exp(), decoder(x_hat).softmax(-1), atol=5e-4, rtol=0.01)
+   
+
+def test_correctness_fast():
+    correctness("EleutherAI/pythia-125m")
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "model_str",
+    [
+        "bigscience/bloom-560m",
+        "EleutherAI/gpt-j-6B",
+        "EleutherAI/gpt-neo-125M",
+        "facebook/opt-125m",
+        "gpt2",
+    ],
+)
+def test_correctness_slow(model_str: str):
+    correctness(model_str)
