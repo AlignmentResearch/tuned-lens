@@ -20,6 +20,8 @@ def correctness(model_str: str):
     decoder = Decoder(model)
     if model_str.startswith("facebook/opt"):
         ln_f = model.base_model.decoder.final_layer_norm
+    elif model_str.startswith("EleutherAI/pythia-125m"):
+        ln_f = model.base_model.final_layer_norm
     else:
         ln_f = model.base_model.ln_f
 
@@ -32,19 +34,19 @@ def correctness(model_str: str):
     th.testing.assert_close(y.exp(), decoder(x_hat).softmax(-1), atol=5e-4, rtol=0.01)
    
 
-def test_correctness_fast():
-    correctness("EleutherAI/pythia-125m")
-
 @pytest.mark.slow
+def test_correctness_slow():
+    correctness("EleutherAI/gpt-j-6B")
+
 @pytest.mark.parametrize(
     "model_str",
     [
+        "EleutherAI/pythia-125m",
         "bigscience/bloom-560m",
-        "EleutherAI/gpt-j-6B",
         "EleutherAI/gpt-neo-125M",
         "facebook/opt-125m",
         "gpt2",
     ],
 )
-def test_correctness_slow(model_str: str):
+def test_correctness(model_str: str):
     correctness(model_str)

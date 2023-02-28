@@ -44,6 +44,8 @@ ARG GROUP_ID
 RUN addgroup --gid $GROUP_ID developer
 RUN adduser --disabled-password --gecos '' --uid $USER_ID --gid $GROUP_ID developer
 
+ENV PATH="/home/developer/.local/bin:${PATH}"
+
 USER developer
 WORKDIR /home/developer/tuned-lens
 
@@ -59,7 +61,7 @@ WORKDIR /home/developer/tuned-lens
 # docker run tuned-lens-test
 
 # Using the development image
-# docker build -t tuned-lens-dev --target dev . 
-# docker run -it tuned-lens-dev --mount type=bind,source="$(pwd)",target=.
+# docker build -t tuned-lens-dev --target dev --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) .
+# docker run -it tuned-lens-dev --mount type=bind,source="$(pwd)",target=/home/developer/tuned-lens
 # Note: You will still need to install the package in the container in development mode
 # Warning: Don't push the development image to a public registry
