@@ -22,14 +22,19 @@ RUN python3 -m pip install -e /workspace
 RUN python3 -m pip uninstall tuned-lens -y
 RUN rm -rf /workspace
 
-# This stage is for production purposes
 FROM base as prod
 WORKDIR /workspace
 ADD . .
 RUN python3 -m pip install -e .
 
 
-# This stage is just for development purposes
+FROM base as test
+WORKDIR /workspace
+ADD . .
+RUN python3 -m pip install -e ".[dev]"
+
+ENTRYPOINT [ "pytest" ]
+
 FROM base as dev
 
 # This creates a developer user with the same UID and GID as the host user
@@ -44,14 +49,17 @@ WORKDIR /home/developer/tuned-lens
 
 
 # Example usage:
-# Building the production image
+
+# Using the production image
 # docker build -t tuned-lens-prod --target prod .
-# Running the production image
 # docker run -it tuned-lens-prod
 
-# Building the development image
+# Using the test image
+# docker build -t tuned-lens-test --target test .
+# docker run tuned-lens-test
+
+# Using the development image
 # docker build -t tuned-lens-dev --target dev . 
-# Running the development image
 # docker run -it tuned-lens-dev --mount type=bind,source="$(pwd)",target=.
 # Note: You will still need to install the package in the container in development mode
 # Warning: Don't push the development image to a public registry
