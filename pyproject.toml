@@ -13,7 +13,7 @@ dependencies = [
     "accelerate",
     "datasets",
     "plotly",
-    "sklearn",
+    "scikit-learn",
     # Needed for Fully Sharded Data Parallel
     "torch>=1.12.0",
     "transformers",
