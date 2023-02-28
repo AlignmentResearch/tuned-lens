@@ -1,15 +1,35 @@
 from tuned_lens.nn import Decoder
-from transformers import AutoConfig, AutoModelForCausalLM
+import transformers as tr
 import pytest
 import torch as th
+
+
+def get_final_layer_norm(model: tr.AutoModelForCausalLM):
+    """Get the final layer norm from a model.
+    
+        This isn't standardized across models, so this will need to be updated
+    """
+    base_model = model.base_model
+    if isinstance(base_model, tr.models.opt.modeling_opt.OPTModel):
+        return base_model.decoder.final_layer_norm
+    elif isinstance(base_model, tr.models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
+        return base_model.final_layer_norm
+    elif isinstance(base_model, (tr.models.bloom.modeling_bloom.BloomModel,
+                                 tr.models.gpt2.modeling_gpt2.GPT2Model,
+                                 tr.models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+                                 tr.models.gptj.modeling_gptj.GPTJModel)):
+        return base_model.ln_f
+    else:
+        raise NotImplementedError(f"Unknown model type {type(base_model)}")
+
 
 def correctness(model_str: str):
     th.manual_seed(42)
 
     # We use a random model with the correct config instead of downloading the
     # whole pretrained checkpoint.
-    config = AutoConfig.from_pretrained(model_str)
-    model = AutoModelForCausalLM.from_config(config)
+    config = tr.AutoConfig.from_pretrained(model_str)
+    model = tr.AutoModelForCausalLM.from_config(config)
 
     # One problem: we want to check that we handle GPT-J's unembedding bias
     # correctly, but it's zero-initialized. Give it a random Gaussian bias.
@@ -18,12 +38,7 @@ def correctness(model_str: str):
         U.bias.data.normal_()
 
     decoder = Decoder(model)
-    if model_str.startswith("facebook/opt"):
-        ln_f = model.base_model.decoder.final_layer_norm
-    elif model_str.startswith("EleutherAI/pythia-125m"):
-        ln_f = model.base_model.final_layer_norm
-    else:
-        ln_f = model.base_model.ln_f
+    ln_f = get_final_layer_norm(model)
 
     x = th.randn(1, 1, config.hidden_size)
     y = U(ln_f(x)).log_softmax(-1)  # type: ignore[attr-defined]
