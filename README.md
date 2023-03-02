@@ -12,7 +12,7 @@ each layer. This training is what diffentaits this method from simpleir approche
 
 
 ## Install instructions
-### Installing from source
+### Installing From Source
 First you will need to install the basic prequists into a virtual envirment
 * Python 3.9+
 * Pytorch 1.12.0+
@@ -24,7 +24,7 @@ cd tuned-lens
 pip install .
 ```
 
-### Install using docker
+### Install Using Docker
 If you perfer to run the code from within a container you can use the provided docker
 file
 ```
@@ -33,8 +33,8 @@ cd tuned-lens
 docker build -t tuned-lens-prod --target prod .
 ```
 
-## Quick start guid
-### Evaluating a lens
+## Quick Start Guid
+### Evaluating a Lens
 Once you have a lens file either by training it yourself of by downloading it. You
 can run various evaluations on it using the provided evaluation command.
 ```
@@ -45,7 +45,7 @@ tuned-lens eval gpt-2 --lens gpt-2-lens
 ```
 
 
-### Training a lens
+### Training a Lens
 This will train a tuned lens on gpt-2 with the default hyper parameters.
 
 ```bash
