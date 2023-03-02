@@ -1,26 +1,8 @@
 from tuned_lens.nn import Decoder
+from tuned_lens.model_surgery import get_final_layer_norm
 import transformers as tr
 import pytest
 import torch as th
-
-
-def get_final_layer_norm(model: tr.AutoModelForCausalLM):
-    """Get the final layer norm from a model.
-    
-        This isn't standardized across models, so this will need to be updated
-    """
-    base_model = model.base_model
-    if isinstance(base_model, tr.models.opt.modeling_opt.OPTModel):
-        return base_model.decoder.final_layer_norm
-    elif isinstance(base_model, tr.models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
-        return base_model.final_layer_norm
-    elif isinstance(base_model, (tr.models.bloom.modeling_bloom.BloomModel,
-                                 tr.models.gpt2.modeling_gpt2.GPT2Model,
-                                 tr.models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
-                                 tr.models.gptj.modeling_gptj.GPTJModel)):
-        return base_model.ln_f
-    else:
-        raise NotImplementedError(f"Unknown model type {type(base_model)}")
 
 
 def correctness(model_str: str):
