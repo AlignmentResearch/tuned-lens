@@ -5,13 +5,12 @@ FROM nvidia/cuda:11.6.0-devel-ubuntu20.04 as base
 ARG DEBIAN_FRONTEND=noninteractive
 
 # Most of this is a hack to get python 3.9 and pip installed on ubuntu 20.04
-RUN apt update
-RUN apt install -y software-properties-common
-RUN add-apt-repository ppa:deadsnakes/ppa
-
-RUN apt update
-RUN apt install -y git libsndfile1-dev tesseract-ocr espeak-ng python3.9 python3.9-distutils python3-pip ffmpeg
-RUN python3.9 -m pip install --upgrade --no-cache-dir pip
+RUN apt update \
+    && apt install -y software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt update \
+    && apt install -y git libsndfile1-dev tesseract-ocr espeak-ng python3.9 python3.9-distutils python3-pip ffmpeg \
+    && python3.9 -m pip install --upgrade --no-cache-dir pip
 
 # install pytorch
 ARG PYTORCH='1.13.1'
@@ -22,10 +21,10 @@ RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; 
 # Install requirements for tuned lens repo note this only monitors 
 # the pytpoject.toml file for changes
 COPY pyproject.toml setup.cfg /workspace/
-RUN mkdir /workspace/tuned_lens
-RUN python3.9 -m pip install -e /workspace
-RUN python3.9 -m pip uninstall tuned-lens -y
-RUN rm -rf /workspace
+RUN mkdir /workspace/tuned_lens \
+    && python3.9 -m pip install -e /workspace \
+    && python3.9 -m pip uninstall tuned-lens -y \
+    && rm -rf /workspace
 
 FROM base as prod
 WORKDIR /workspace
