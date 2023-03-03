@@ -1,6 +1,7 @@
 Data/
 notebooks/memorization.ipynb
 .ruff_cache
+lens/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

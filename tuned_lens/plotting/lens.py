@@ -18,7 +18,7 @@ Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
 
 @th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
-def plot_logit_lens(
+def plot_lens(
     model: PreTrainedModel,
     tokenizer: Tokenizer,
     *,
@@ -318,5 +318,5 @@ def _plot_stream(
 
 
 # Allow all naming conventions
-plot_focused_lens = plot_logit_lens
-plot_tuned_lens = plot_logit_lens
+plot_focused_lens = plot_lens
+plot_tuned_lens = plot_lens
