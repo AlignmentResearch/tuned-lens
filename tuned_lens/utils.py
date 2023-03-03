@@ -1,7 +1,18 @@
 from itertools import islice
-from typing import Any, Callable, Iterable, Sequence, TypeVar, Union
+from typing import cast, Any, Callable, Iterable, Sequence, Type, TypeVar, Union
 import torch as th
 import torch.distributed as dist
+
+
+T = TypeVar("T")
+
+
+def assert_type(typ: Type[T], obj: Any) -> T:
+    """Assert that an object is of a given type at runtime and return it."""
+    if not isinstance(obj, typ):
+        raise TypeError(f"Expected {typ.__name__}, got {type(obj).__name__}")
+
+    return cast(typ, obj)
 
 
 def maybe_all_cat(x: th.Tensor) -> th.Tensor:
