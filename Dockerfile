@@ -9,7 +9,7 @@ RUN apt update \
     && apt install -y software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt update \
-    && apt install -y git libsndfile1-dev tesseract-ocr espeak-ng python3.9 python3.9-distutils python3-pip ffmpeg \
+    && apt install -y git libsndfile1-dev tesseract-ocr espeak-ng python3.9 python3.9-distutils python3-pip ffmpeg zstd \
     && python3.9 -m pip install --upgrade --no-cache-dir pip requests
 
 # install pytorch
