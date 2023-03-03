@@ -14,6 +14,7 @@ dependencies = [
     "datasets",
     "plotly",
     "scikit-learn",
+    "zstandard",
     # Needed for Fully Sharded Data Parallel
     "torch>=1.12.0",
     "transformers",
@@ -31,7 +32,7 @@ dev = [
 tuned-lens = "tuned_lens.__main__:run"
 
 [tool.setuptools]
-packages = ["tuned_lens"]
+packages = ["tuned_lens", "tuned_lens_datasets"]
 
 [tool.pytest.ini_options]
 addini = "slow : mark tests as slow these will be skipped by default"
