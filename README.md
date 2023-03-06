@@ -23,7 +23,7 @@ pip install .
 ```
 
 ### Install Using Docker
-If you perfer to run the code from within a container you can use the provided docker
+If you prefer to run the code from within a container you can use the provided docker
 file
 ```
 git clone https://github.com/AlignmentResearch/tuned-lens
