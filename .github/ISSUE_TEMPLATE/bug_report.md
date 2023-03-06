@@ -25,7 +25,7 @@ If applicable, add screenshots to help explain your problem.
 **Environment:**
  - OS: [e.g. ubuntu 20.04]
  - Python version: [e.g. 3.9 ]
- - Cuda version: [e.g. 11.6 ]
+ - CUDA version: [e.g. 11.6]
  - Pytorch version: [e.g. 1.13.1]
  If you are running things in the provided docker file just say that.
  
