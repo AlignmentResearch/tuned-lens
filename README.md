@@ -5,9 +5,9 @@ Tools for understanding how transformer predictions are built layer-by-layer
 
 This package provides a simple interface training and evaluating __tuned lenses__. A tuned lens allows us to peak at the iterative computations that a transformer is using the compute the next token.
 
-A lens into a transformer with n layers allows you to replace the last $m$ layers of the model with an [affine tranformation](https://pytorch.org/docs/stable/generated/torch.nn.Linear.html) (we call these affine adapters).
+A lens into a transformer with n layers allows you to replace the last $m$ layers of the model with an [affine transformation](https://pytorch.org/docs/stable/generated/torch.nn.Linear.html) (we call these affine adapters).
 
-This essentially skips over these last few layers and lets you see the best prediction that can be made from the model's representations, i.e. the residual stream, at layer $n - m$. Since the representations may be rotated, shifted, or stretched from layer to layer it's useful to train the len's affine adapters specifically on each layer. This training is what differentiates this method from simpler approaches that decode the residual stream of the network directly using the unembeding layer i.e. the logit lens. We explain this process in more detail in a forth coming paper.
+This essentially skips over these last few layers and lets you see the best prediction that can be made from the model's representations, i.e. the residual stream, at layer $n - m$. Since the representations may be rotated, shifted, or stretched from layer to layer it's useful to train the len's affine adapters specifically on each layer. This training is what differentiates this method from simpler approaches that decode the residual stream of the network directly using the unembeding layer i.e. the logit lens. We explain this process in more detail in a forthcoming paper.
 
 ## Install instructions
 ### Installing From Source
@@ -17,7 +17,7 @@ First you will need to install the basic prequists into a virtual envirment
 
 then you can simply install the package using pip.
 ```
-git clone https://github.com/norabelrose/tuned-lens
+git clone https://github.com/AlignmentResearch/tuned-lens
 cd tuned-lens
 pip install .
 ```
@@ -26,7 +26,7 @@ pip install .
 If you perfer to run the code from within a container you can use the provided docker
 file
 ```
-git clone https://github.com/norabelrose/tuned-lens
+git clone https://github.com/AlignmentResearch/tuned-lens
 cd tuned-lens
 docker build -t tuned-lens-prod --target prod .
 ```
