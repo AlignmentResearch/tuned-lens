@@ -11,7 +11,7 @@ This essentially skips over these last few layers and lets you see the best pred
 
 ## Install instructions
 ### Installing From Source
-First you will need to install the basic prequists into a virtual envirment
+First you will need to install the basic prerequisites into a virtual environment
 * Python 3.9+
 * Pytorch 1.12.0+
 
@@ -45,7 +45,7 @@ unzstd test.jsonl.zst
 Once you have a lens file either by training it yourself of by downloading it. You
 can run various evaluations on it using the provided evaluation command.
 ```
-tuned-lens eval gpt-2 test.jsonl --lens gpt-2-lens 
+tuned-lens eval gpt-2 tuned_lens/datasets/pile_sliver --lens gpt-2-lens 
     --dataset the_pile all \
     --split validation \
     --output lens_eval_results.json
@@ -56,15 +56,15 @@ tuned-lens eval gpt-2 test.jsonl --lens gpt-2-lens
 This will train a tuned lens on gpt-2 with the default hyper parameters.
 
 ```bash
-tuned-lens train gpt-2 val.jsonl
+tuned-lens train gpt-2 tuned_lens/datasets/pile_sliver
     --dataset the_pile all \
-    --split validation \
+    --split train \
     --output gpt-2-lens
 ```
 
 > **Note**
-> This will download the entire validation set of the pile which is over 30 GBs. If you
-> are doing this within a docker file it's recomended to mount external storage to huggingface's
+> This will download the entire validation set of the pile which is about 0.5 GBs. If you
+> are doing this within a docker file it's recommended to mount external storage to huggingface's
 > cache directory.
 
 ### Citation
