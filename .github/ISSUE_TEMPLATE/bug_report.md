@@ -12,7 +12,7 @@ A clear and concise description of what the bug is.
 
 **To Reproduce**
 Steps to reproduce the behavior:
-1. When I launch the docker file
+1. When I launch the Docker file
 2. And then I run this command
 3. I get the following weird thing
 
@@ -24,9 +24,9 @@ If applicable, add screenshots to help explain your problem.
 
 **Environment:**
  - OS: [e.g. ubuntu 20.04]
- - Python version: [e.g. 3.9 ]
+ - Python version: [e.g. 3.9]
  - CUDA version: [e.g. 11.6]
- - Pytorch version: [e.g. 1.13.1]
+ - PyTorch version: [e.g. 1.13.1]
  If you are running things in the provided docker file just say that.
  
 **Additional context**
