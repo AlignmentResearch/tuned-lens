@@ -27,7 +27,7 @@ If applicable, add screenshots to help explain your problem.
  - Python version: [e.g. 3.9]
  - CUDA version: [e.g. 11.6]
  - PyTorch version: [e.g. 1.13.1]
- If you are running things in the provided docker file just say that.
+ If you are running things in the provided Dockerfile please provide its tag or the commit you built from.
  
 **Additional context**
 Add any other context about the problem here.
