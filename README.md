@@ -70,11 +70,6 @@ tuned-lens train gpt-2 val.jsonl
 > are doing this within a docker file it's recommended to mount external storage to huggingface's
 > cache directory.
 
-### Citation
-# Tuned Lens
-
-The Tuned Lens is a technique for understanding how transformer predictions are built layer-by-layer that improves upon nostalgebraist's [logit lens](https://www.lesswrong.com/posts/AcKRB8wDpdaN6v6ru/interpreting-gpt-the-logit-lens). The Tuned Lens is more robust, less biased, and applicable to more models than the Logit Lens.
-
 ## Citation Information
 
 If you find this library useful, please cite it as
