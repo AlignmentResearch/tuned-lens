@@ -6,7 +6,7 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedTokenizerFast,
 )
-from typing import cast, Literal, Optional, Sequence, Union
+from typing import Any, cast, Literal, Optional, Sequence, Union
 import math
 import numpy as np
 import plotly.graph_objects as go
@@ -22,9 +22,12 @@ def plot_lens(
     model: PreTrainedModel,
     tokenizer: Tokenizer,
     *,
+    tuned_lens: Optional[TunedLens] = None,
     hidden_offsets: Sequence[th.Tensor] = (),
-    mask_input: bool = False,
+    text: Optional[str] = None,
     input_ids: Optional[th.Tensor] = None,
+    mask_input: bool = False,
+    start_pos: int = 0,
     end_pos: Optional[int] = None,
     extra_decoder_layers: int = 0,
     layer_stride: int = 1,
@@ -32,16 +35,35 @@ def plot_lens(
     min_prob: float = 0.0,
     newline_replacement: str = "\\n",
     newline_token: str = "Ċ",
-    rank: int = 0,
-    start_pos: int = 0,
-    sublayers: bool = False,
-    text: Optional[str] = None,
+    whitespace_token: str = "Ġ",
+    whitespace_replacement: str = "_",
     topk_diff: bool = False,
     topk: int = 10,
-    tuned_lens: Optional[TunedLens] = None,
-    whitespace_replacement: str = "_",
-    whitespace_token: str = "Ġ",
 ) -> go.Figure:
+    """Plot a logit lens table for the given text.
+
+    Args:
+        model: The model to be examined.
+        tokenizer: The tokenizer to use for encoding the text.
+        hidden_offsets: A sequence of tensors of the same shape as the hidden
+        text: The text to use for evaluated. If not provided, the input_ids will be
+            used.
+        input_ids: The input IDs to use for evaluated. If not provided, the text will
+            be encoded.
+        mask_input: Forbid the lens from predicting the input tokens.
+        start_pos: The first token id to visualize.
+        end_pos: The token id to stop visualizing before.
+        extra_decoder_layers: The number of extra decoder layers to apply after before
+            the unembeding.
+        layer_stride: The number of layers to skip between each layer displayed.
+        metric: The metric to use for the lens table.
+        min_prob: At least one token must have a probability greater than this for the
+            lens prediction to be displayed.
+        newline_replacement: The string to replace newline tokens with.
+        newline_token: The token to replace with newline_replacement.
+        whitespace_replacement: The string to replace whitespace tokens with.
+        topk_diff: If true, only show the topk most different tokens.
+    """
     if topk < 1:
         raise ValueError("topk must be greater than 0")
 
@@ -51,14 +73,14 @@ def plot_lens(
     elif input_ids is None:
         raise ValueError("Either text or input_ids must be provided")
 
-    with record_residual_stream(model, sublayers=sublayers) as stream:
+    with record_residual_stream(model) as stream:
         outputs = model(input_ids.to(model.device))
 
     tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())
-    if start_pos > 0:
-        outputs.logits = outputs.logits[..., start_pos:end_pos, :]
-        stream = stream.map(lambda x: x[..., start_pos:end_pos, :])
-        tokens = tokens[start_pos:end_pos]
+
+    outputs.logits = outputs.logits[..., start_pos:end_pos, :]
+    stream = stream.map(lambda x: x[..., start_pos:end_pos, :])
+    tokens = tokens[start_pos:end_pos]
 
     if tuned_lens is not None:
 
@@ -108,58 +130,44 @@ def plot_lens(
         else "<unk>"
     )
 
-    # If rank, get the rank of next token predicted
-    # Set this to the stats & top_strings
-    if rank > 0:
-        # remove the last rank sequences from the stream
-        token_offset = rank
-        hidden_lps = hidden_lps.map(lambda x: x[:, :-token_offset, :])
-        ranks = _get_rank(hidden_lps, tokens, token_offset)
-        top_strings = ranks
-        # stats = ranks
-        stats = ranks
-        stats = stats.map(lambda x: th.log10(x + 1))
-        max_color = int(np.log10(10000))  # out of 50k tokens
-        tokens = tokens[:-token_offset]
-    else:
-        top_strings = (
-            hidden_lps.map(lambda x: x.argmax(-1).squeeze().cpu().tolist())
-            .map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
-            .map(format_fn)
+    top_strings = (
+        hidden_lps.map(lambda x: x.argmax(-1).squeeze().cpu().tolist())
+        .map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
+        .map(format_fn)
+    )
+
+    max_color = math.log(model.config.vocab_size)
+
+    if min_prob:
+        top_strings = top_strings.zip_map(
+            lambda strings, log_probs: [
+                s if lp.max() > np.log(min_prob) else "" for s, lp in zip(strings, log_probs)
+            ],
+            hidden_lps,
         )
-        max_color = math.log(model.config.vocab_size)
 
-        if metric == "ce":
-            raise NotImplementedError
-        elif metric == "entropy":
-            stats = hidden_lps.map(lambda x: -th.sum(x.exp() * x, dim=-1))
-        elif metric == "kl":
-            log_probs = outputs.logits.log_softmax(-1)
-            stats = hidden_lps.map(
-                lambda x: th.sum(log_probs.exp() * (log_probs - x), dim=-1)
-            )
-        elif metric == "prob":
-            max_color = 1.0
-            stats = hidden_lps.map(lambda x: x.max(-1).values.exp())
-
-            if min_prob:
-                top_strings = top_strings.zip_map(
-                    lambda strings, probs: [
-                        s if p.max() > min_prob else "" for s, p in zip(strings, probs)
-                    ],
-                    stats,
-                )
-        else:
-            raise ValueError(f"Unknown metric: {metric}")
+    if metric == "ce":
+        raise NotImplementedError
+    elif metric == "entropy":
+        stats = hidden_lps.map(lambda x: -th.sum(x.exp() * x, dim=-1))
+    elif metric == "kl":
+        log_probs = outputs.logits.log_softmax(-1)
+        stats = hidden_lps.map(
+            lambda x: th.sum(log_probs.exp() * (log_probs - x), dim=-1)
+        )
+    elif metric == "prob":
+        max_color = 1.0
+        stats = hidden_lps.map(lambda x: x.max(-1).values.exp())
+    else:
+        raise ValueError(f"Unknown metric: {metric}")
 
     topk_strings_and_probs = _get_topk_probs(
         hidden_lps=hidden_lps, tokenizer=tokenizer, k=topk, topk_diff=topk_diff
     )
 
     color_scale = "blues"
-    if rank:
-        color_label = "Rank"
-    elif metric == "prob":
+
+    if metric == "prob":
         color_label = "Probability"
     else:
         color_label = f"{metric.capitalize()} (nats)"
@@ -177,25 +185,9 @@ def plot_lens(
         title=("Tuned Lens" if tuned_lens is not None else "Logit Lens")
         + (
             f" ({model.name_or_path})"
-            if rank < 1
-            else f": Rank {rank} ({model.name_or_path})"
         ),
         colorscale=color_scale,
-        rank=rank,
     )
-
-
-def _get_rank(
-    stream: ResidualStream,
-    input_ids: th.Tensor,
-    token_offset: int = 1,
-):
-    # Skip the first token because not predicted
-    next_token_ids = input_ids[:, token_offset:]
-    # Get the sorted indices of the logits for each layer of hidden_lps
-    stream = stream.map(lambda x: x.argsort(dim=-1, descending=True))
-    # Get the rank of the ground-truth next token for each layer
-    return stream.map(lambda x: (next_token_ids.unsqueeze(-1) == x).nonzero()[:, -1])
 
 
 def _get_topk_probs(
@@ -241,48 +233,39 @@ def _get_topk_probs(
 
 def _plot_stream(
     color_stream: ResidualStream,
-    top_k_strings_and_probs=None,
+    top_k_strings_and_probs,
+    top_1_strings: ResidualStream,
     x_labels: Sequence[str] = (),
-    top_1_strings=None,
     colorbar_label: str = "",
     layer_stride: int = 1,
-    vmax: Optional[int] = None,
+    vmax: Optional[float] = None,
     k: int = 10,
     title: str = "",
     colorscale: str = "rdbu_r",
-    rank: int = 0,
 ) -> go.Figure:
 
     # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
     x_labels = [x + "\u200c" * i for i, x in enumerate(x_labels)]
-
-    colorbar = dict(
-        title=colorbar_label,
-        titleside="right",
-        tickfont=dict(size=20),
-    )
-    if rank > 0:  # make log-scale for rank plots
-        colorbar["tickvals"] = [0, 1, 2, 3, 4]
-        colorbar["ticktext"] = ["1", "10", "100", "1000", "10000"]
 
     labels = ["input", *range(1, len(color_stream) - 1), "output"]
 
     color_matrix = np.stack(list(color_stream))
     top_1_strings = np.stack(list(top_1_strings))
 
-    def stride_keep_last(x, stride: int):
-        if len(x) % stride != 1:
+    def stride_keep_last(x: Sequence[Any], stride: int):
+        if stride == 1:
+            return x
+        elif len(x) % stride != 1:
             return np.concatenate([x[::stride], [x[-1]]])
         else:
             return x[::stride]
 
-    if layer_stride > 1:
-        color_matrix = stride_keep_last(color_matrix, layer_stride)
-        labels = stride_keep_last(labels, layer_stride)
-        top_1_strings = stride_keep_last(top_1_strings, layer_stride)
-        top_k_strings_and_probs = stride_keep_last(
-            top_k_strings_and_probs, layer_stride
-        )
+    color_matrix = stride_keep_last(color_matrix, layer_stride)
+    labels = stride_keep_last(labels, layer_stride)
+    top_1_strings = stride_keep_last(top_1_strings, layer_stride)
+    top_k_strings_and_probs = stride_keep_last(
+        top_k_strings_and_probs, layer_stride
+    )
 
     heatmap = go.Heatmap(
         colorscale=colorscale,
@@ -315,8 +298,3 @@ def _plot_stream(
         yaxis_title="Layer",
     )
     return fig
-
-
-# Allow all naming conventions
-plot_focused_lens = plot_lens
-plot_tuned_lens = plot_lens

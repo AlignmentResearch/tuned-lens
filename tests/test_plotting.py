@@ -61,22 +61,6 @@ def test_plot_logit_lens():
         topk_diff=True,
     )
 
-    # TODO: Make this work
-    # Plot Rank 1
-    # plot_logit_lens(
-    #     pythia_125M_model,
-    #     input_ids=input_ids,
-    #     tokenizer=tokenizer,
-    #     rank=1,
-    # )
-    # # Plot Rank 2
-    # plot_logit_lens(
-    #     pythia_125M_model,
-    #     input_ids=input_ids,
-    #     tokenizer=tokenizer,
-    #     rank=2,
-    # )
-
     # Plot w/ topk equals large
     plot_lens(
         pythia_125M_model,
