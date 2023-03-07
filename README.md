@@ -7,7 +7,10 @@ This package provides a simple interface training and evaluating __tuned lenses_
 
 A lens into a transformer with n layers allows you to replace the last $m$ layers of the model with an [affine transformation](https://pytorch.org/docs/stable/generated/torch.nn.Linear.html) (we call these affine adapters).
 
-This essentially skips over these last few layers and lets you see the best prediction that can be made from the model's representations, i.e. the residual stream, at layer $n - m$. Since the representations may be rotated, shifted, or stretched from layer to layer it's useful to train the len's affine adapters specifically on each layer. This training is what differentiates this method from simpler approaches that decode the residual stream of the network directly using the unembeding layer i.e. the logit lens. We explain this process in more detail in a forthcoming paper.
+This skips over these last few layers and lets you see the best prediction that can be made from the model's intermediate representations, i.e. the residual stream, at layer $n - m$. Since the representations may be rotated, shifted, or stretched from layer to layer it's useful to train an affine specifically on each layer. This training is what differentiates this method from simpler approaches that decode the residual stream of the network directly using the unembeding layer i.e. the [logit lens](https://www.lesswrong.com/posts/AcKRB8wDpdaN6v6ru/interpreting-gpt-the-logit-lens). We explain this process and its applications in a forthcoming paper "Eliciting Latent Predictions from Transformers with the Tuned Lens".
+
+### Acknowledgments
+Originally concieved by [Igor Ostrovsky](https://twitter.com/igoro?lang=en) and [Stella Biderman](www.stellabiderman) at [EleutherAI](www.eleuther.ai), this library was built as a collaboration between FAR and EleutherAI researchers.
 
 ## Install instructions
 ### Installing From Source
@@ -64,7 +67,23 @@ tuned-lens train gpt-2 val.jsonl
 
 > **Note**
 > This will download the entire validation set of the pile which is over 30 GBs. If you
-> are doing this within a docker file it's recomended to mount external storage to huggingface's
+> are doing this within a docker file it's recommended to mount external storage to huggingface's
 > cache directory.
 
 ### Citation
+# Tuned Lens
+
+The Tuned Lens is a technique for understanding how transformer predictions are built layer-by-layer that improves upon nostalgebraist's [logit lens](https://www.lesswrong.com/posts/AcKRB8wDpdaN6v6ru/interpreting-gpt-the-logit-lens). The Tuned Lens is more robust, less biased, and applicable to more models than the Logit Lens.
+
+## Citation Information
+
+If you find this library useful, please cite it as
+
+```bibtex
+@article{belrose2023eliciting,
+  title={Eliciting Latent Predictions from Transformers with the Tuned Lens},
+  authors={Belrose, Nora and Furman, Zach and Smith, Logan and Halawi, Danny and McKinney, Lev and Ostrovsky, Igor and Biderman, Stella and Steinhardt, Jacob},
+  journal={to appear},
+  year={2023}
+}
+```

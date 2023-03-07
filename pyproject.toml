@@ -14,6 +14,7 @@ dependencies = [
     "datasets",
     "plotly",
     "scikit-learn",
+    "zstandard",
     # Needed for Fully Sharded Data Parallel
     "torch>=1.12.0",
     "transformers",
