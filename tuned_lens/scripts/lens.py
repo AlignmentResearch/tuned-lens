@@ -131,7 +131,9 @@ def main(args):
         dataset = Dataset.from_json(args.dataset[0])
         assert isinstance(dataset, Dataset)
     else:
-        dataset = load_dataset(*args.dataset, split=args.split)
+        dataset = load_dataset(
+            *args.dataset, split=args.split, streaming=args.streaming
+        )
         if not isinstance(dataset, (Dataset, DatasetDict)):
             raise ValueError("Only Dataset and DatasetDict instances are supported.")
 

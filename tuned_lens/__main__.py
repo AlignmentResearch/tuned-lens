@@ -96,6 +96,12 @@ def run():
         help="How to shift the labels wrt the input tokens (1 = next token, "
         "0 = current token, -1 = previous token, etc.)",
     )
+    parent_parser.add_argument(
+        "--stream",
+        type=bool,
+        action="store_true",
+        help="Steam the dataset instead of downloading it all.",
+    )
 
     subparsers = parser.add_subparsers(dest="command")
     train_parser = subparsers.add_parser("train", parents=[parent_parser])
