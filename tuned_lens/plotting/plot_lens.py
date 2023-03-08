@@ -1,5 +1,5 @@
 from ..model_surgery import get_final_layer_norm, get_transformer_layers
-from ..nn.lenses import TunedLens
+from ..nn.lenses import Lens
 from ..residual_stream import ResidualStream, record_residual_stream
 from transformers import (
     PreTrainedModel,
@@ -21,15 +21,13 @@ Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
 def plot_lens(
     model: PreTrainedModel,
     tokenizer: Tokenizer,
+    lens: Lens,
     *,
-    tuned_lens: Optional[TunedLens] = None,
-    hidden_offsets: Sequence[th.Tensor] = (),
     text: Optional[str] = None,
     input_ids: Optional[th.Tensor] = None,
     mask_input: bool = False,
     start_pos: int = 0,
     end_pos: Optional[int] = None,
-    extra_decoder_layers: int = 0,
     layer_stride: int = 1,
     metric: Literal["ce", "entropy", "kl", "log_prob", "prob"] = "entropy",
     min_prob: float = 0.0,
@@ -45,7 +43,9 @@ def plot_lens(
     Args:
         model: The model to be examined.
         tokenizer: The tokenizer to use for encoding the text.
-        hidden_offsets: A sequence of tensors of the same shape as the hidden
+        lens: The lens use for intermediate predictions.
+
+    KWArgs:
         text: The text to use for evaluated. If not provided, the input_ids will be
             used.
         input_ids: The input IDs to use for evaluated. If not provided, the text will
@@ -63,6 +63,9 @@ def plot_lens(
         newline_token: The token to replace with newline_replacement.
         whitespace_replacement: The string to replace whitespace tokens with.
         topk_diff: If true, only show the topk most different tokens.
+
+    Returns:
+        A plotly figure containing the lens table.
     """
     if topk < 1:
         raise ValueError("topk must be greater than 0")
@@ -82,44 +85,18 @@ def plot_lens(
     stream = stream.map(lambda x: x[..., start_pos:end_pos, :])
     tokens = tokens[start_pos:end_pos]
 
-    if tuned_lens is not None:
+    def decode_tl(h, i):
+        logits = lens.forward(h, i)
+        if mask_input:
+            logits[..., input_ids] = -th.finfo(h.dtype).max
 
-        def decode_tl(h, i):
-            logits = tuned_lens(h, i)
-            if mask_input:
-                logits[..., input_ids] = -th.finfo(h.dtype).max
+        return logits.log_softmax(dim=-1)
 
-            return logits.log_softmax(dim=-1)
-
-        hidden_lps = stream.zip_map(
-            decode_tl,
-            range(len(stream) - 1),
-        )
-        hidden_lps.layers.append(outputs.logits.log_softmax(dim=-1))
-    else:
-        E = model.get_output_embeddings()
-        ln_f = get_final_layer_norm(model.base_model)
-        assert isinstance(ln_f, th.nn.LayerNorm)
-
-        _, layers = get_transformer_layers(model.base_model)
-        L = len(layers)
-
-        def decode_ll(h):
-            # Apply extra decoder layers if needed
-            for i in range(L - extra_decoder_layers, L):
-                h, *_ = layers[i](h)
-
-            logits = E(ln_f(h))
-            if mask_input:
-                logits[..., input_ids] = -th.finfo(h.dtype).max
-
-            return logits.log_softmax(dim=-1)
-
-        if hidden_offsets:
-            stream = stream.zip_map(lambda x, o: x + o, hidden_offsets)
-
-        hidden_lps = stream.map(decode_ll)
-        hidden_lps.layers[-1] = outputs.logits.log_softmax(dim=-1)
+    hidden_lps = stream.zip_map(
+        decode_tl,
+        range(len(stream) - 1),
+    )
+    hidden_lps.layers.append(outputs.logits.log_softmax(dim=-1))
 
     # Replace whitespace and newline tokens with their respective replacements
     format_fn = np.vectorize(
@@ -182,7 +159,7 @@ def plot_lens(
         x_labels=format_fn(tokens),
         vmax=max_color,
         k=topk,
-        title=("Tuned Lens" if tuned_lens is not None else "Logit Lens")
+        title=lens.__class__.__name__
         + (
             f" ({model.name_or_path})"
         ),
