@@ -48,7 +48,7 @@ unzstd test.jsonl.zst
 Once you have a lens file either by training it yourself of by downloading it. You
 can run various evaluations on it using the provided evaluation command.
 ```
-tuned-lens eval gpt-2 test.jsonl --lens gpt-2-lens 
+tuned-lens eval gpt2 test.jsonl --lens gpt-2-lens 
     --dataset the_pile all \
     --split validation \
     --output lens_eval_results.json
@@ -59,7 +59,7 @@ tuned-lens eval gpt-2 test.jsonl --lens gpt-2-lens
 This will train a tuned lens on gpt-2 with the default hyper parameters.
 
 ```bash
-tuned-lens train gpt-2 val.jsonl
+tuned-lens train gpt2 val.jsonl
     --dataset the_pile all \
     --split validation \
     --output gpt-2-lens
