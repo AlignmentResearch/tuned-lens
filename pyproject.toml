@@ -34,6 +34,9 @@ test = [
     "pytest",
     "mock",
 ]
+notebooks = [
+    ipywidgets,
+]
 
 [project.scripts]
 tuned-lens = "tuned_lens.__main__:run"

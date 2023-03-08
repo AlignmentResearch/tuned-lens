@@ -1,4 +1,3 @@
-from ..model_surgery import get_final_layer_norm, get_transformer_layers
 from ..nn.lenses import Lens
 from ..residual_stream import ResidualStream, record_residual_stream
 from transformers import (
@@ -6,15 +5,16 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedTokenizerFast,
 )
-from typing import Any, cast, Literal, Optional, Sequence, Union
+from typing import Any, NamedTuple, cast, Literal, Optional, Sequence, Union
 import math
 import numpy as np
 import plotly.graph_objects as go
 import torch as th
+import torch.nn.functional as F
 
 
 Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
-
+Statistic = Literal["ce", "entropy", "forward_kl", "max_prob"]
 
 @th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
@@ -29,7 +29,7 @@ def plot_lens(
     start_pos: int = 0,
     end_pos: Optional[int] = None,
     layer_stride: int = 1,
-    metric: Literal["ce", "entropy", "kl", "log_prob", "prob"] = "entropy",
+    statistic: Statistic = "entropy",
     min_prob: float = 0.0,
     newline_replacement: str = "\\n",
     newline_token: str = "Ċ",
@@ -57,12 +57,17 @@ def plot_lens(
             the unembeding.
         layer_stride: The number of layers to skip between each layer displayed.
         metric: The metric to use for the lens table.
+            * ce: The cross entropy between the labels and the lens predictions.
+            * entropy: The entropy of the lens prediction.
+            * forward_kl: The KL divergence between the model and the lens.
+            * max_prob: The probability of the most likely token.
         min_prob: At least one token must have a probability greater than this for the
             lens prediction to be displayed.
         newline_replacement: The string to replace newline tokens with.
         newline_token: The token to replace with newline_replacement.
         whitespace_replacement: The string to replace whitespace tokens with.
-        topk_diff: If true, only show the topk most different tokens.
+        topk_diff: If true show the top k tokens where the metric has changed the from
+            the previous layer.
 
     Returns:
         A plotly figure containing the lens table.
@@ -70,19 +75,33 @@ def plot_lens(
     if topk < 1:
         raise ValueError("topk must be greater than 0")
 
-    """Plot a logit lens table for the given text."""
     if text is not None:
         input_ids = cast(th.Tensor, tokenizer.encode(text, return_tensors="pt"))
     elif input_ids is None:
         raise ValueError("Either text or input_ids must be provided")
 
+    if input_ids.nelement() < 1:
+        raise ValueError("Input must be at least 1 token long.")
+
     with record_residual_stream(model) as stream:
         outputs = model(input_ids.to(model.device))
 
     tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())
-
-    outputs.logits = outputs.logits[..., start_pos:end_pos, :]
+    model_logits = outputs.logits[..., start_pos:end_pos, :]
     stream = stream.map(lambda x: x[..., start_pos:end_pos, :])
+    targets = th.cat(
+        (input_ids, th.full_like(input_ids[..., -1:], tokenizer.eos_token_id)),
+        dim=-1,
+    )
+    t_start_pos = start_pos if start_pos < 0 else start_pos + 1
+    if end_pos is None:
+        t_end_pos = None
+    elif end_pos < 0:
+        t_end_pos = end_pos
+    else:
+        t_end_pos = end_pos + 1
+
+    targets = targets[..., t_start_pos:t_end_pos]
     tokens = tokens[start_pos:end_pos]
 
     def decode_tl(h, i):
@@ -96,7 +115,10 @@ def plot_lens(
         decode_tl,
         range(len(stream) - 1),
     )
-    hidden_lps.layers.append(outputs.logits.log_softmax(dim=-1))
+    # Add model predictions
+    hidden_lps.layers.append(
+        outputs.logits.log_softmax(dim=-1)[..., start_pos:end_pos, :]
+    )
 
     # Replace whitespace and newline tokens with their respective replacements
     format_fn = np.vectorize(
@@ -118,41 +140,31 @@ def plot_lens(
     if min_prob:
         top_strings = top_strings.zip_map(
             lambda strings, log_probs: [
-                s if lp.max() > np.log(min_prob) else "" for s, lp in zip(strings, log_probs)
+                s if lp.max() > np.log(min_prob) else ""
+                for s, lp in zip(strings, log_probs)
             ],
             hidden_lps,
         )
 
-    if metric == "ce":
-        raise NotImplementedError
-    elif metric == "entropy":
-        stats = hidden_lps.map(lambda x: -th.sum(x.exp() * x, dim=-1))
-    elif metric == "kl":
-        log_probs = outputs.logits.log_softmax(-1)
-        stats = hidden_lps.map(
-            lambda x: th.sum(log_probs.exp() * (log_probs - x), dim=-1)
-        )
-    elif metric == "prob":
-        max_color = 1.0
-        stats = hidden_lps.map(lambda x: x.max(-1).values.exp())
-    else:
-        raise ValueError(f"Unknown metric: {metric}")
+    p_stat = compute_statistics(
+        statistic,
+        hidden_lps,
+        model_logits=model_logits,
+        targets=targets
+    )
 
     topk_strings_and_probs = _get_topk_probs(
         hidden_lps=hidden_lps, tokenizer=tokenizer, k=topk, topk_diff=topk_diff
     )
 
     color_scale = "blues"
-
-    if metric == "prob":
-        color_label = "Probability"
-    else:
-        color_label = f"{metric.capitalize()} (nats)"
-        color_scale = "rdbu_r"
+    color_scale = "rdbu_r"
 
     return _plot_stream(
-        color_stream=stats.map(lambda x: x.squeeze().cpu()),
-        colorbar_label=color_label,
+        color_stream=p_stat.stats.map(lambda x: x.squeeze().cpu()),
+        colorbar_label=(
+            p_stat.name + (f" ({p_stat.units})" if p_stat.units else "")
+        ),
         layer_stride=layer_stride,
         top_1_strings=top_strings,
         top_k_strings_and_probs=format_fn(topk_strings_and_probs),
@@ -165,6 +177,61 @@ def plot_lens(
         ),
         colorscale=color_scale,
     )
+
+
+class PlotableStatistic(NamedTuple):
+    """A plotable statistic."""
+    stats: ResidualStream
+    name: str
+    units: Optional[str] = None
+    max: Optional[float] = None
+    min: Optional[float] = None
+
+
+def compute_statistics(
+    statistic: Statistic,
+    hidden_lps: ResidualStream,
+    model_logits: th.Tensor,
+    targets: th.Tensor,
+) -> PlotableStatistic:
+    if statistic == "ce":
+        assert targets.shape == hidden_lps[-1].shape[:-1], \
+            ("Batch and sequence lengths of targets and log probs must match."
+             f"Got {targets.shape} and {hidden_lps[-1].shape[:-1]} respectively.")
+        num_tokens = targets.nelement()
+        targets = targets.reshape(num_tokens)
+        hidden_lps = hidden_lps.map(lambda x: x.reshape(num_tokens, -1))
+        return PlotableStatistic(
+            name="Cross Entropy",
+            units="nats",
+            stats=hidden_lps.map(
+                lambda hlp: F.cross_entropy(hlp, targets, reduction="none")
+            )
+        )
+    elif statistic == "entropy":
+        return PlotableStatistic(
+            name="Entropy",
+            units="nats",
+            stats=hidden_lps.map(
+                lambda hlp: -th.sum(hlp.exp() * hlp, dim=-1)
+            )
+        )
+    elif statistic == "forward_kl":
+        log_probs = model_logits.log_softmax(-1)
+        return PlotableStatistic(
+            name="Forward KL",
+            units="nats",
+            stats=hidden_lps.map(
+                lambda hlp: th.sum(log_probs.exp() * (log_probs - hlp), dim=-1)
+            )
+        )
+    elif statistic == "max_prob":
+        return PlotableStatistic(
+            name="Max Probability",
+            stats=hidden_lps.map(lambda x: x.max(-1).values.exp()),
+        )
+    else:
+        raise ValueError(f"Unknown statistic: {statistic}")
 
 
 def _get_topk_probs(
@@ -220,11 +287,10 @@ def _plot_stream(
     title: str = "",
     colorscale: str = "rdbu_r",
 ) -> go.Figure:
-
     # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
     x_labels = [x + "\u200c" * i for i, x in enumerate(x_labels)]
 
-    labels = ["input", *range(1, len(color_stream) - 1), "output"]
+    labels = ["input", *map(str, range(1, len(color_stream) - 1)), "output"]
 
     color_matrix = np.stack(list(color_stream))
     top_1_strings = np.stack(list(top_1_strings))
