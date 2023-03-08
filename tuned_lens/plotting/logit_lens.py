@@ -1,5 +1,5 @@
 from ..model_surgery import get_final_layer_norm, get_transformer_layers
-from ..nn.tuned_lens import TunedLens
+from ..nn.lenses import TunedLens
 from ..residual_stream import ResidualStream, record_residual_stream
 from ..stats import js_divergence
 from transformers import (
