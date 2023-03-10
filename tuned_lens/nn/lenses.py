@@ -5,9 +5,7 @@ import abc
 from ._model_specific import instantiate_layer, maybe_wrap
 from ..model_surgery import get_final_layer_norm, get_transformer_layers
 from transformers import PreTrainedModel
-from typing import Generator, Optional, Union
-import inspect
-import json
+from typing import Optional, Generator, Union
 import torch as th
 
 
