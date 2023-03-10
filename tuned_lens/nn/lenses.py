@@ -1,9 +1,12 @@
 from copy import deepcopy
+import inspect
 from pathlib import Path
+import json
 import abc
 
 from ._model_specific import instantiate_layer, maybe_wrap
 from ..model_surgery import get_final_layer_norm, get_transformer_layers
+from ..load_artifacts import load_lens_artifacts
 from transformers import PreTrainedModel
 from typing import Optional, Generator, Union
 import torch as th
@@ -198,26 +201,25 @@ class TunedLens(Lens):
 
     @classmethod
     def load(
-        cls, path: Union[str, Path], ckpt: str = "params.pt", **kwargs
+        cls, resource_id: str, **kwargs
     ) -> "TunedLens":
-        """Load a tuned lens from a directory.
+        """Load a tuned lens from a or hugging face hub.
 
         Args:
-            path : The path to the directory containing the config and checkpoint.
-            ckpt : The name of the checkpoint file. Defaults to 'params.pt'.
+            resource_id : The path to the directory containing the config and checkpoint
+                or the name of the model on the hugging face hub.
             **kwargs : Additional arguments to pass to torch.load.
 
         Returns:
             A TunedLens instance.
         """
-        path = Path(path)
-
+        config_path, ckpt_path = load_lens_artifacts(resource_id)
         # Load config
-        with open(path / "config.json", "r") as f:
+        with open(config_path, "r") as f:
             config = json.load(f)
 
         # Load parameters
-        state = th.load(path / ckpt, **kwargs)
+        state = th.load(ckpt_path, **kwargs)
 
         # Backwards compatibility
         keys = list(state.keys())

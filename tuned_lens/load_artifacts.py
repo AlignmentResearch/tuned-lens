@@ -5,11 +5,13 @@ import os
 from huggingface_hub import hf_hub_download
 
 
-def load_lens_artifact(
+def load_lens_artifacts(
         resource_id: str,
         repo_id: Optional[str] = None,
         repo_type: Optional[str] = None,
         revision: Optional[str] = None,
+        config_file: str = "config.json",
+        ckpt_file: str = "params.pt",
         subfolder: str = "lens",
 ) -> Tuple[Path, Path]:
     """First checks for lens resource locally then tries to download it from the hub
@@ -26,7 +28,8 @@ def load_lens_artifact(
         subfolder: The subfolder of the repository to download the lens from.
 
     Returns:
-        The path to the folder containing the lens.
+        * The path to the config.json file
+        * The path to the params.pt file
 
     Raises:
         ValueError: if the lens resource could not be found.
@@ -45,12 +48,12 @@ def load_lens_artifact(
 
     # Fist check if the resource id is a path to a folder that exists
     local_path = Path(resource_id)
-    if ((local_path/"config.json").exists() and (local_path/"params.pt").exists()):
-        return local_path/"config.json", local_path/"params.pt"
+    if ((local_path/config_file).exists() and (local_path/ckpt_file).exists()):
+        return local_path/config_file, local_path/ckpt_file
 
     subfolder = '/'.join((subfolder, resource_id))
     params_path = hf_hub_download(
-        filename="params.pt",
+        filename=ckpt_file,
         repo_id=repo_id,
         repo_type=repo_type,
         revision=revision,
@@ -58,13 +61,13 @@ def load_lens_artifact(
     )
 
     config_path = hf_hub_download(
-        filename="config.json",
+        filename=config_file,
         repo_id=repo_id,
         repo_type=repo_type,
         revision=revision,
         subfolder=subfolder,
-
     )
+
     if config_path is not None and params_path is not None:
         return Path(config_path), Path(params_path)
 
