@@ -12,8 +12,7 @@ repos:
     rev: 22.8.0
     hooks:
     -   id: black
--   repo: https://github.com/pycqa/flake8
-    rev: '5.0.4'
+-   repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: 'v0.0.254'
     hooks:
-    -   id: flake8
-        args: ["--ignore=E203,F401,W503", --max-line-length=88]
+    -   id: ruff

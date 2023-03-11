@@ -18,7 +18,7 @@ ARG CUDA='cu116'
 
 RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; python3.9 -m pip install --no-cache-dir -U $VERSION --extra-index-url https://download.pytorch.org/whl/$CUDA
 
-# Install requirements for tuned lens repo note this only monitors 
+# Install requirements for tuned lens repo note this only monitors
 # the pytpoject.toml file for changes
 COPY pyproject.toml setup.cfg /workspace/
 RUN mkdir /workspace/tuned_lens \

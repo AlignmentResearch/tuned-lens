@@ -48,7 +48,7 @@ unzstd test.jsonl.zst
 Once you have a lens file either by training it yourself of by downloading it. You
 can run various evaluations on it using the provided evaluation command.
 ```
-tuned-lens eval gpt2 test.jsonl --lens gpt-2-lens 
+tuned-lens eval gpt2 test.jsonl --lens gpt-2-lens
     --dataset the_pile all \
     --split validation \
     --output lens_eval_results.json
@@ -69,6 +69,15 @@ tuned-lens train gpt2 val.jsonl
 > This will download the entire validation set of the pile which is over 30 GBs. If you
 > are doing this within a docker file it's recommended to mount external storage to huggingface's
 > cache directory.
+
+## Contributing
+
+Make sure to install the dev dependencies and install the pre-commit hooks
+```
+$ pip install -e ".[dev]"
+$ pre-commit install
+```
+
 
 ## Citation Information
 
