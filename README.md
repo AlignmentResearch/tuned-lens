@@ -71,7 +71,6 @@ tuned-lens train gpt2 val.jsonl
 > cache directory.
 
 ## Contributing
-
 Make sure to install the dev dependencies and install the pre-commit hooks
 ```
 $ pip install -e ".[dev]"
