@@ -12,12 +12,16 @@ license = {text = "MIT License"}
 dependencies = [
     "accelerate",
     "datasets",
-    "plotly",
+    "plotly>=5.13.1",
     "scikit-learn",
     "zstandard",
     # Needed for Fully Sharded Data Parallel
     "torch>=1.12.0",
     "transformers",
+<<<<<<< Updated upstream
+=======
+    "huggingface_hub>=0.12.1",
+>>>>>>> Stashed changes
 ]
 version = "0.0.1"
 
