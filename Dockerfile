@@ -34,12 +34,7 @@ RUN python3.9 -m pip install -e .
 
 FROM base as test
 WORKDIR /workspace
-ADD . .
 RUN python3.9 -m pip install -e ".[dev]"
-
-ENTRYPOINT [ "pytest" ]
-
-FROM base as dev
 
 # Example usage:
 
