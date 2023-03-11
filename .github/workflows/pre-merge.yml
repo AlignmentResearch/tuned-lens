@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "main" ]
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   pre-commit:
     name: "Pre-commit checks"
@@ -24,7 +28,18 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-      - name: Build Docker images
-        run: docker build . --target test --tag $GITHUB_REF
-      - name: Run tests within Docker container
-        run: docker run $GITHUB_REF
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      - name: Build Docker image
+        uses: docker/build-push-action@v4
+        with: # Note that we do NOT push here
+          context: .
+          target: test
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Run unit tests within Docker container
+        run: docker run ${{ steps.meta.outputs.tags }}

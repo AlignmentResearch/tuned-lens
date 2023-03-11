@@ -42,6 +42,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   build-n-publish-python-package:
     name: Build and publish Python distributions to PyPI and TestPyPI
