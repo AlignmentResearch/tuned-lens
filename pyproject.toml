@@ -24,6 +24,7 @@ version = "0.0.1"
 [project.optional-dependencies]
 dev = [
     "pre-commit",
+    "bump2version",
     "pytest-skip-slow",
     "pytest",
 ]
