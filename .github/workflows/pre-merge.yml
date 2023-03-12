@@ -45,5 +45,5 @@ jobs:
           docker run \
             -v $PWD:/workspace \
             --pull=never \
-            --rm ${{ steps.meta.outputs.tags }} \
+            --rm ${{ steps.meta.outputs.tags }} -it \
             "python3.9 -m pip install -e '.[test]' && pytest"
