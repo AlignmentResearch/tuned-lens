@@ -28,6 +28,10 @@ dev = [
     "pytest-skip-slow",
     "pytest",
 ]
+test = [
+    "pytest-skip-slow",
+    "pytest",
+]
 
 [project.scripts]
 tuned-lens = "tuned_lens.__main__:run"

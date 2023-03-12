@@ -20,20 +20,27 @@ RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; 
 
 # Install requirements for tuned lens repo note this only monitors
 # the pytpoject.toml file for changes
-COPY pyproject.toml setup.cfg /workspace/
-RUN mkdir /workspace/tuned_lens \
-    && python3.9 -m pip install -e /workspace \
-    && python3.9 -m pip uninstall tuned-lens -y
 
 FROM base as prod
-WORKDIR /workspace
 ADD . .
 RUN python3.9 -m pip install -e .
 
-
 FROM base as test
+COPY pyproject.toml setup.cfg /workspace/
 WORKDIR /workspace
-RUN python3.9 -m pip install -e ".[dev]"
+# Have all the dependencies installed so that we can cache them
+RUN RUN mkdir tuned_lens \
+    && python3.9 -m pip install -e ".[test]" \
+    && python3.9 -m pip uninstall tuned_lens \
+    && rmdir tuned_lens
+
+FROM base as dev
+COPY pyproject.toml setup.cfg /workspace/
+WORKDIR /workspace
+RUN mkdir tuned_lens \
+    && python3.9 -m pip install -e ".[dev]" \
+    && python3.9 -m pip uninstall tuned_lens \
+    && rmdir tuned_lens
 
 # Example usage:
 
@@ -43,7 +50,7 @@ RUN python3.9 -m pip install -e ".[dev]"
 
 # Using the test image
 # docker build -t tuned-lens-test --target test .
-# docker run tuned-lens-test
+# docker run tuned-lens-test -v $PWD:/workspace pytest
 
 # Using the development image
 # docker build -t tuned-lens-dev --target dev

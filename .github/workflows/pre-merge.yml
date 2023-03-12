@@ -17,7 +17,6 @@ jobs:
     - uses: pre-commit/action@v3.0.0
       with:
         extra_args: ruff --all-files
-  # For reference https://docs.docker.com/build/ci/github-actions/share-image-jobs/
   build-and-test:
     name: "Build Docker image and run unit tests within it"
     runs-on: ubuntu-latest
@@ -37,7 +36,7 @@ jobs:
         with:
           context: .
           target: test
-          push: true
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -47,4 +46,5 @@ jobs:
             -v $PWD:/workspace \
             --pull=never \
             --rm ${{ steps.meta.outputs.tags }} \
-            pytest
+            python3.9 install -e ".[test]" \
+            && python3.9 -m pytest
