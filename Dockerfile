@@ -29,10 +29,10 @@ FROM base as test
 COPY pyproject.toml setup.cfg /workspace/
 WORKDIR /workspace
 # Have all the dependencies installed so that we can cache them
-RUN RUN mkdir tuned_lens \
+RUN mkdir tuned_lens \
     && python3.9 -m pip install -e ".[test]" \
-    && python3.9 -m pip uninstall tuned_lens \
-    && rmdir tuned_lens
+    && python3.9 -m pip uninstall -y tuned_lens \
+    && rmdir tuned_lens && rm pyproject.toml setup.cfg
 
 FROM base as dev
 COPY pyproject.toml setup.cfg /workspace/
@@ -40,7 +40,8 @@ WORKDIR /workspace
 RUN mkdir tuned_lens \
     && python3.9 -m pip install -e ".[dev]" \
     && python3.9 -m pip uninstall tuned_lens \
-    && rmdir tuned_lens
+    && rmdir tuned_lens && rm pyproject.toml setup.cfg
+
 
 # Example usage:
 
