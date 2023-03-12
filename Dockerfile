@@ -23,8 +23,7 @@ RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; 
 COPY pyproject.toml setup.cfg /workspace/
 RUN mkdir /workspace/tuned_lens \
     && python3.9 -m pip install -e /workspace \
-    && python3.9 -m pip uninstall tuned-lens -y \
-    && rm -rf /workspace
+    && python3.9 -m pip uninstall tuned-lens -y
 
 FROM base as prod
 WORKDIR /workspace
