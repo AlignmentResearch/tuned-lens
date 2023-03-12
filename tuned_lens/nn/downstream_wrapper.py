@@ -1,7 +1,7 @@
 from .tuned_lens import TunedLens
 from ..utils import pytree_map
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
-from typing import Iterable, NamedTuple, Optional, Sequence
+from typing import Iterable, NamedTuple, Optional
 import torch as th
 import torch.distributed as dist
 
