@@ -273,6 +273,8 @@ def _plot_stream(
     def stride_keep_last(x, stride: int):
         if len(x) % stride != 1:
             return np.concatenate([x[::stride], [x[-1]]])
+        else:
+            return x[::stride]
 
     if layer_stride > 1:
         color_matrix = stride_keep_last(color_matrix, layer_stride)
