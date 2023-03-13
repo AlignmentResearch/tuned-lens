@@ -1,4 +1,4 @@
-from tuned_lens.nn.tuned_lens import TunedLens
+from tuned_lens.nn.lenses import TunedLens
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tuned_lens.plotting import plot_logit_lens
 import torch as th

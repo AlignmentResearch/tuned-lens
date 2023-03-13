@@ -9,7 +9,6 @@ import torch.distributed as dist
 def run():
     parser = ArgumentParser(
         description="Train or evaluate a set of tuned lenses for a language model.",
-        add_help=False,
     )
     # Arguments shared by train and eval; see https://stackoverflow.com/a/56595689.
     parent_parser = ArgumentParser(add_help=False)
