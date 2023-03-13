@@ -16,6 +16,7 @@ import torch.nn.functional as F
 Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
 Statistic = Literal["ce", "entropy", "forward_kl", "max_prob"]
 
+
 @th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
 def plot_lens(
@@ -38,7 +39,7 @@ def plot_lens(
     topk_diff: bool = False,
     topk: int = 10,
 ) -> go.Figure:
-    """Plot a logit lens table for the given text.
+    """Plot a lens table for the given text.
 
     Args:
         model: The model to be examined.
@@ -147,10 +148,7 @@ def plot_lens(
         )
 
     p_stat = compute_statistics(
-        statistic,
-        hidden_lps,
-        model_logits=model_logits,
-        targets=targets
+        statistic, hidden_lps, model_logits=model_logits, targets=targets
     )
 
     topk_strings_and_probs = _get_topk_probs(
@@ -162,25 +160,21 @@ def plot_lens(
 
     return _plot_stream(
         color_stream=p_stat.stats.map(lambda x: x.squeeze().cpu()),
-        colorbar_label=(
-            p_stat.name + (f" ({p_stat.units})" if p_stat.units else "")
-        ),
+        colorbar_label=(p_stat.name + (f" ({p_stat.units})" if p_stat.units else "")),
         layer_stride=layer_stride,
         top_1_strings=top_strings,
         top_k_strings_and_probs=format_fn(topk_strings_and_probs),
         x_labels=format_fn(tokens),
         vmax=max_color,
         k=topk,
-        title=lens.__class__.__name__
-        + (
-            f" ({model.name_or_path})"
-        ),
+        title=lens.__class__.__name__ + (f" ({model.name_or_path})"),
         colorscale=color_scale,
     )
 
 
 class PlotableStatistic(NamedTuple):
     """A plotable statistic."""
+
     stats: ResidualStream
     name: str
     units: Optional[str] = None
@@ -195,9 +189,10 @@ def compute_statistics(
     targets: th.Tensor,
 ) -> PlotableStatistic:
     if statistic == "ce":
-        assert targets.shape == hidden_lps[-1].shape[:-1], \
-            ("Batch and sequence lengths of targets and log probs must match."
-             f"Got {targets.shape} and {hidden_lps[-1].shape[:-1]} respectively.")
+        assert targets.shape == hidden_lps[-1].shape[:-1], (
+            "Batch and sequence lengths of targets and log probs must match."
+            f"Got {targets.shape} and {hidden_lps[-1].shape[:-1]} respectively."
+        )
         num_tokens = targets.nelement()
         targets = targets.reshape(num_tokens)
         hidden_lps = hidden_lps.map(lambda x: x.reshape(num_tokens, -1))
@@ -206,15 +201,13 @@ def compute_statistics(
             units="nats",
             stats=hidden_lps.map(
                 lambda hlp: F.cross_entropy(hlp, targets, reduction="none")
-            )
+            ),
         )
     elif statistic == "entropy":
         return PlotableStatistic(
             name="Entropy",
             units="nats",
-            stats=hidden_lps.map(
-                lambda hlp: -th.sum(hlp.exp() * hlp, dim=-1)
-            )
+            stats=hidden_lps.map(lambda hlp: -th.sum(hlp.exp() * hlp, dim=-1)),
         )
     elif statistic == "forward_kl":
         log_probs = model_logits.log_softmax(-1)
@@ -223,7 +216,7 @@ def compute_statistics(
             units="nats",
             stats=hidden_lps.map(
                 lambda hlp: th.sum(log_probs.exp() * (log_probs - hlp), dim=-1)
-            )
+            ),
         )
     elif statistic == "max_prob":
         return PlotableStatistic(
@@ -306,9 +299,7 @@ def _plot_stream(
     color_matrix = stride_keep_last(color_matrix, layer_stride)
     labels = stride_keep_last(labels, layer_stride)
     top_1_strings = stride_keep_last(top_1_strings, layer_stride)
-    top_k_strings_and_probs = stride_keep_last(
-        top_k_strings_and_probs, layer_stride
-    )
+    top_k_strings_and_probs = stride_keep_last(top_k_strings_and_probs, layer_stride)
 
     heatmap = go.Heatmap(
         colorscale=colorscale,
