@@ -26,6 +26,7 @@ dev = [
     "pre-commit",
     "pytest-skip-slow",
     "pytest",
+    "mock",
 ]
 
 [project.scripts]
