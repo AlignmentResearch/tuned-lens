@@ -12,9 +12,12 @@ This skips over these last few layers and lets you see the best prediction that 
 ### Acknowledgments
 Originally concieved by [Igor Ostrovsky](https://twitter.com/igoro?lang=en) and [Stella Biderman](www.stellabiderman) at [EleutherAI](www.eleuther.ai), this library was built as a collaboration between FAR and EleutherAI researchers.
 
+> **Warning**
+> This package has not reached 1.0 yet. Expect the public interface to change regularly and without a major version bump.
+
 ## Install instructions
 ### Installing From Source
-First you will need to install the basic prequists into a virtual envirment
+First you will need to install the basic prerequisites into a virtual environment
 * Python 3.9+
 * Pytorch 1.12.0+
 
