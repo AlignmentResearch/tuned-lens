@@ -1,0 +1,49 @@
+name: Pre-merge checks
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  pre-commit:
+    name: "Pre-commit checks"
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v3
+    - uses: pre-commit/action@v3.0.0
+      with:
+        extra_args: ruff --all-files
+  build-and-test:
+    name: "Build Docker image and run unit tests within it"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.IMAGE_NAME }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver: docker
+      - name: Build Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          target: test
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+      - name: Run tests
+        run: |
+          docker run \
+            -v $PWD:/workspace \
+            --pull=never \
+            --rm ${{ steps.meta.outputs.tags }} \
+            pytest

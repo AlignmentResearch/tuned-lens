@@ -126,7 +126,9 @@ class ResidualStream:
             plt.xlabel("Sublayer")
             plt.xticks(
                 labels=[
-                    l for i, l in enumerate(self.labels()) if i % tick_spacing == 0
+                    label
+                    for i, label in enumerate(self.labels())
+                    if i % tick_spacing == 0
                 ],
                 ticks=range(0, len(self), tick_spacing),
                 rotation=60,

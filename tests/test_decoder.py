@@ -6,18 +6,23 @@ import torch as th
 
 def get_final_layer_norm(model: tr.AutoModelForCausalLM):
     """Get the final layer norm from a model.
-    
-        This isn't standardized across models, so this will need to be updated
+
+    This isn't standardized across models, so this will need to be updated
     """
     base_model = model.base_model
     if isinstance(base_model, tr.models.opt.modeling_opt.OPTModel):
         return base_model.decoder.final_layer_norm
     elif isinstance(base_model, tr.models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
         return base_model.final_layer_norm
-    elif isinstance(base_model, (tr.models.bloom.modeling_bloom.BloomModel,
-                                 tr.models.gpt2.modeling_gpt2.GPT2Model,
-                                 tr.models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
-                                 tr.models.gptj.modeling_gptj.GPTJModel)):
+    elif isinstance(
+        base_model,
+        (
+            tr.models.bloom.modeling_bloom.BloomModel,
+            tr.models.gpt2.modeling_gpt2.GPT2Model,
+            tr.models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+            tr.models.gptj.modeling_gptj.GPTJModel,
+        ),
+    ):
         return base_model.ln_f
     else:
         raise NotImplementedError(f"Unknown model type {type(base_model)}")
@@ -47,11 +52,12 @@ def correctness(model_str: str):
 
     x_hat = decoder.back_translate(x, tol=1e-5)
     th.testing.assert_close(y.exp(), decoder(x_hat).softmax(-1), atol=5e-4, rtol=0.01)
-   
+
 
 @pytest.mark.slow
 def test_correctness_slow():
     correctness("EleutherAI/gpt-j-6B")
+
 
 @pytest.mark.parametrize(
     "model_str",
