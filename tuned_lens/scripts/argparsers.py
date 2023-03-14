@@ -40,7 +40,7 @@ def get_cbe_parser() -> ArgumentParser:
         "lens", type=Path, help="Directory containing the tuned lens to use.", nargs="?"
     )
     extract_parser.add_argument(
-        "--no-adapter", action="store_true", help="Do not use learned probes."
+        "--no-translator", action="store_true", help="Do not use learned probes."
     )
     extract_parser.add_argument(
         "--k", type=int, default=50, help="Number of basis vectors to extract."

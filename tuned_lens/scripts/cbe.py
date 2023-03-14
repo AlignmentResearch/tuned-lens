@@ -100,7 +100,7 @@ def extract_bases(
         k=args.k,
         labels=batch["input_ids"] if args.loss == "ce" else None,
         mode=args.mode,
-        no_adapter=args.no_adapter,
+        no_translator=args.no_translator,
     )
     for i, basis in enumerate(basis_iter):
         if local_rank == 0:
