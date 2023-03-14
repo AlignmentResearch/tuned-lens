@@ -53,16 +53,15 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
-          target: test
+          target: prod
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
       - name: Run tests
         run: |
           docker run \
             -v $PWD:/workspace \
             --pull=never \
             --rm ${{ steps.meta.outputs.tags }} \
-            docker run --rm test_img:latest tuned-lens --help
+            tuned-lens --help
   build-n-publish-python-package:
     name: Build and publish Python distributions to TestPyPI
     runs-on: ubuntu-latest
