@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+env:
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   validate-tag:
     name: Validate tag
