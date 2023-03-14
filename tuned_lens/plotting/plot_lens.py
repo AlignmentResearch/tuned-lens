@@ -32,6 +32,8 @@ def plot_lens(
     layer_stride: int = 1,
     statistic: Statistic = "entropy",
     min_prob: float = 0.0,
+    max_string_len: Optional[int] = 7,
+    ellipsis: str = "…",
     newline_replacement: str = "\\n",
     newline_token: str = "Ċ",
     whitespace_token: str = "Ġ",
@@ -64,6 +66,9 @@ def plot_lens(
             * max_prob: The probability of the most likely token.
         min_prob: At least one token must have a probability greater than this for the
             lens prediction to be displayed.
+        max_string_len: If not None, clip the string representation of the tokens to
+            this length and add an ellipsis.
+        ellipsis: The string to use for the ellipsis.
         newline_replacement: The string to replace newline tokens with.
         newline_token: The token to replace with newline_replacement.
         whitespace_replacement: The string to replace whitespace tokens with.
@@ -169,6 +174,8 @@ def plot_lens(
         k=topk,
         title=lens.__class__.__name__ + (f" ({model.name_or_path})"),
         colorscale=color_scale,
+        ellipsis=ellipsis,
+        max_string_len=max_string_len,
     )
 
 
@@ -272,6 +279,8 @@ def _plot_stream(
     color_stream: ResidualStream,
     top_k_strings_and_probs,
     top_1_strings: ResidualStream,
+    max_string_len: Optional[int] = None,
+    ellipsis: str = "…",
     x_labels: Sequence[str] = (),
     colorbar_label: str = "",
     layer_stride: int = 1,
@@ -284,6 +293,15 @@ def _plot_stream(
     x_labels = [x + "\u200c" * i for i, x in enumerate(x_labels)]
 
     labels = ["input", *map(str, range(1, len(color_stream) - 1)), "output"]
+
+    if max_string_len is not None:
+        # Clip top 1 strings to a maximum length and add an ellipsis
+        top_1_strings = top_1_strings.map(
+            lambda x: [
+                s if len(s) <= max_string_len else s[:max_string_len] + ellipsis
+                for s in x
+            ]
+        )
 
     color_matrix = np.stack(list(color_stream))
     top_1_strings = np.stack(list(top_1_strings))
