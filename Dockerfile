@@ -18,28 +18,30 @@ ARG CUDA='cu116'
 
 RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; python3.9 -m pip install --no-cache-dir -U $VERSION --extra-index-url https://download.pytorch.org/whl/$CUDA
 
-# Install requirements for tuned lens repo note this only monitors 
+# Install requirements for tuned lens repo note this only monitors
 # the pytpoject.toml file for changes
-COPY pyproject.toml setup.cfg /workspace/
-RUN mkdir /workspace/tuned_lens \
-    && python3.9 -m pip install -e /workspace \
-    && python3.9 -m pip uninstall tuned-lens -y \
-    && rm -rf /workspace
 
 FROM base as prod
-WORKDIR /workspace
 ADD . .
 RUN python3.9 -m pip install -e .
 
-
 FROM base as test
+COPY pyproject.toml setup.cfg /workspace/
 WORKDIR /workspace
-ADD . .
-RUN python3.9 -m pip install -e ".[dev]"
-
-ENTRYPOINT [ "pytest" ]
+# Have all the dependencies installed so that we can cache them
+RUN mkdir tuned_lens \
+    && python3.9 -m pip install -e ".[test]" \
+    && python3.9 -m pip uninstall -y tuned_lens \
+    && rmdir tuned_lens && rm pyproject.toml setup.cfg
 
 FROM base as dev
+COPY pyproject.toml setup.cfg /workspace/
+WORKDIR /workspace
+RUN mkdir tuned_lens \
+    && python3.9 -m pip install -e ".[dev]" \
+    && python3.9 -m pip uninstall tuned_lens \
+    && rmdir tuned_lens && rm pyproject.toml setup.cfg
+
 
 # Example usage:
 
@@ -49,7 +51,7 @@ FROM base as dev
 
 # Using the test image
 # docker build -t tuned-lens-test --target test .
-# docker run tuned-lens-test
+# docker run tuned-lens-test -v $PWD:/workspace pytest
 
 # Using the development image
 # docker build -t tuned-lens-dev --target dev

@@ -18,3 +18,4 @@ coverage.xml
 .hypothesis
 .github
 .vscode
+.ruff_cache

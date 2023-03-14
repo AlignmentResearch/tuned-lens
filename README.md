@@ -1,7 +1,7 @@
 # Tuned Lens 🔎
 Tools for understanding how transformer predictions are built layer-by-layer
 
-<img width="1028" alt="tuned lens" src="https://user-images.githubusercontent.com/39116809/206883419-4fb9083d-3fa0-48e9-ba97-b70cb21b08e9.png">
+![Using the Tuned-lens](https://user-images.githubusercontent.com/12176390/224879115-8bc95f26-68e4-4f43-9b4c-06ca5934a29d.png)
 
 This package provides a simple interface training and evaluating __tuned lenses__. A tuned lens allows us to peak at the iterative computations that a transformer is using the compute the next token.
 
@@ -12,9 +12,12 @@ This skips over these last few layers and lets you see the best prediction that 
 ### Acknowledgments
 Originally concieved by [Igor Ostrovsky](https://twitter.com/igoro?lang=en) and [Stella Biderman](www.stellabiderman) at [EleutherAI](www.eleuther.ai), this library was built as a collaboration between FAR and EleutherAI researchers.
 
+> **Warning**
+> This package has not reached 1.0 yet. Expect the public interface to change regularly and without a major version bump.
+
 ## Install instructions
 ### Installing From Source
-First you will need to install the basic prequists into a virtual envirment
+First you will need to install the basic prerequisites into a virtual environment
 * Python 3.9+
 * Pytorch 1.12.0+
 
@@ -48,7 +51,7 @@ unzstd test.jsonl.zst
 Once you have a lens file either by training it yourself of by downloading it. You
 can run various evaluations on it using the provided evaluation command.
 ```
-tuned-lens eval gpt2 test.jsonl --lens gpt-2-lens 
+tuned-lens eval gpt2 test.jsonl --lens gpt-2-lens
     --dataset the_pile all \
     --split validation \
     --output lens_eval_results.json
@@ -69,6 +72,14 @@ tuned-lens train gpt2 val.jsonl
 > This will download the entire validation set of the pile which is over 30 GBs. If you
 > are doing this within a docker file it's recommended to mount external storage to huggingface's
 > cache directory.
+
+## Contributing
+Make sure to install the dev dependencies and install the pre-commit hooks
+```
+$ pip install -e ".[dev]"
+$ pre-commit install
+```
+
 
 ## Citation Information
 

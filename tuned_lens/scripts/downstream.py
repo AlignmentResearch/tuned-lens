@@ -52,27 +52,22 @@ def downstream_loop(
         dataset = task.test_docs() or task.validation_docs()
 
         if isinstance(dataset, Dataset):
-            N = len(dataset)
-
             dataset = dataset.shuffle(seed=42)
             if dist.is_initialized():
                 dataset = dataset.shard(world_size, local_rank)
             if args.limit and len(dataset) > args.limit:
                 print(f"Limiting dataset to {args.limit} examples")
                 dataset = dataset.select(range(args.limit))
-                N = args.limit * world_size
         elif isinstance(dataset, Iterable):
             if not isinstance(dataset, MutableSequence):
                 dataset = list(dataset)
 
-            N = len(dataset)
             rnd.shuffle(dataset)
             if dist.is_initialized():
                 dataset = dataset[local_rank :: dist.get_world_size()]
             if args.limit and len(dataset) > args.limit:
                 print(f"Limiting dataset to {args.limit} examples")
                 dataset = dataset[: args.limit]
-                N = args.limit * world_size
         else:
             raise ValueError(f"Cannot shuffle dataset of type {type(dataset)}")
 
@@ -85,7 +80,7 @@ def downstream_loop(
         if dist.is_initialized():
             dist.barrier()
 
-        all_penultimate_hs = []
+        all_hiddens = []
         labels = []
         log_likelihoods = []
         log_likelihoods_norm = []
@@ -102,10 +97,13 @@ def downstream_loop(
                     ]
                     doc["gold"] = rnd.choice(wrong_answers)
                 else:
-                    assert "label" in doc and doc["label"] in (0, 1)
+                    assert "label" in doc
                     doc["label"] = 1 - doc["label"]
 
+        choices = set()
         for doc in pbar:
+            assert isinstance(doc, dict)
+
             ctx = task.fewshot_context(
                 doc,
                 args.num_shots,
@@ -113,21 +111,18 @@ def downstream_loop(
             )
             if args.injection:
                 assert args.num_shots > 0, "Cannot inject zero-shot prompt"
+                label = doc.get("gold", doc.get("label"))
+                if label is not None:
+                    choices.add(label)
 
                 # Multiple choice case
                 if "choices" in doc:
-                    wrong_answers = [
-                        choice for choice in doc["choices"] if choice != doc["gold"]
-                    ]
-                    injection = PROMPT_INJECTION_DEFAULT.format(
-                        rnd.choice(wrong_answers)
-                    )
-                else:
-                    assert "label" in doc and doc["label"] in (0, 1)
-                    doc_ = doc.copy()
-                    doc_["label"] = 1 - doc_["label"]
-                    target = task.doc_to_target(doc_)
-                    injection = PROMPT_INJECTION_DEFAULT.format(target)
+                    choices = set(doc["choices"])
+                if len(choices) < 2:
+                    continue
+
+                wrong_answers = [choice for choice in choices if choice != label]
+                injection = PROMPT_INJECTION_DEFAULT.format(rnd.choice(wrong_answers))
 
                 insertion_idx = ctx.rindex("Answer:")
                 ctx = ctx[:insertion_idx] + injection + ctx[insertion_idx:]
@@ -141,15 +136,14 @@ def downstream_loop(
                 reqs = [reqs]
 
             assert all(req.request_type == "loglikelihood" for req in reqs)
-            penultimate_hs = []
+            hiddens = []
             result_array = []
-            # breakpoint()
             for i, req in enumerate(reqs):
-                results, top1, hiddens = wrapper(req, ctx)
-                penultimate_hs.append(hiddens[-1])
+                results, top1, hs = wrapper(req, ctx)
+                hiddens.append(th.cat([h.mean(-2) for h in hs]))
                 result_array.append(results)
 
-            all_penultimate_hs.append((doc_hash, th.cat(penultimate_hs)))
+            all_hiddens.append((doc_hash, th.stack(hiddens)))
             log_likelihoods.append((doc_hash, result_array))
 
             # Transpose the result array
@@ -161,7 +155,6 @@ def downstream_loop(
             pbar.set_postfix({k: agg_fns[k](v) for k, v in layer_metrics[-1].items()})
 
         hashes = maybe_all_gather_lists(doc_hashes)
-        assert len(hashes) == N, f"Expected {N} hashes, got {len(hashes)}"
         num_duplicates = len(hashes) - len(set(hashes))
         print(f"Hash collisions: {num_duplicates}")
 
@@ -172,7 +165,6 @@ def downstream_loop(
             for metric_name, items in metric_dict.items():
                 items = maybe_all_gather_lists(items)
 
-                assert len(items) == N, f"Expected {N} items, got {len(items)}"
                 if local_rank == 0:
                     agg_metrics[i][metric_name] = task.aggregation()[metric_name](items)
 
@@ -185,8 +177,12 @@ def downstream_loop(
                         if stderr is not None:
                             stderrs[i][metric_name + "_stderr"] = stderr(items)
 
-        for h, penultimate_h in maybe_all_gather_lists(all_penultimate_hs):
-            per_doc_info[h]["penultimate_h"] = penultimate_h
+        # Save the hiddens separately for each rank because they're so big
+        # and we don't want to run out of memory
+        rank_dir = root_dir / f"rank_{local_rank}"
+        rank_dir.mkdir(exist_ok=True, parents=True)
+        th.save(all_hiddens, rank_dir / f"{task_name}_hiddens.pt")
+
         for h, label in maybe_all_gather_lists(labels):
             per_doc_info[h]["label"] = label
         for h, ll_traj in maybe_all_gather_lists(log_likelihoods):
