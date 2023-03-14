@@ -232,7 +232,7 @@ class TunedLens(Lens):
                 if old_key in key:
                     warn(
                         f"Loading a checkpoint with a '{old_key}' key. "
-                        "This is deprecated and will be removed in the future."
+                        "This is deprecated and may be removed in a future version. "
                     )
                     new_key = key.replace(old_key, "translator")
                     state[new_key] = state.pop(key)
