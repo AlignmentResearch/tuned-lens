@@ -64,7 +64,9 @@ jobs:
   build-n-publish-python-package:
     name: Build and publish Python distributions to TestPyPI
     runs-on: ubuntu-latest
-    needs: build-and-test
+    needs:
+      - build-and-test
+      - validate-tag
     steps:
     - uses: actions/checkout@master
     - name: Set up Python 3.10
