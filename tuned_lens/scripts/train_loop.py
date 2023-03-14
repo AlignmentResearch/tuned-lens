@@ -7,7 +7,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup
-from tuned_lens import ResidualStream, TunedLens
+from tuned_lens import TunedLens
+from tuned_lens.residual_stream import ResidualStream
 from tuned_lens.utils import (
     maybe_all_reduce,
     maybe_shift_labels,
