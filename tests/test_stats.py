@@ -1,6 +1,6 @@
 from torch.distributions import Dirichlet, kl_divergence
-from tuned_lens import ResidualStats, ResidualStream
-from tuned_lens.stats import LogitStats
+from tuned_lens.stats import LogitStats, ResidualStats
+from tuned_lens.residual_stream import ResidualStream
 import pytest
 import random
 import torch as th
