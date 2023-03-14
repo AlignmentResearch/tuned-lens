@@ -1,0 +1,40 @@
+name: Run pre-release checks
+
+on:
+  release:
+    types: [created]
+
+env:
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-test:
+    name: "Build Docker image and run integration tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.IMAGE_NAME }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver: docker
+      - name: Build Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          target: test
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+      - name: Run tests
+        run: |
+          docker run \
+            -v $PWD:/workspace \
+            --pull=never \
+            --rm ${{ steps.meta.outputs.tags }} \
+            docker run --rm test_img:latest tuned-lens --help
