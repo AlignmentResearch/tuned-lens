@@ -30,3 +30,7 @@ jobs:
           echo $TAG
           echo $PROJECT_VERSION
           if [[ "$TAG" != "v$PROJECT_VERSION" ]]; then exit 1; fi
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
