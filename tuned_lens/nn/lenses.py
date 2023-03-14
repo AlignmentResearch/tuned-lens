@@ -22,6 +22,7 @@ class Lens(abc.ABC, th.nn.Module):
 
 class LogitLens(Lens):
     """Decodes the residual stream into logits using the unembeding matrix."""
+
     layer_norm: th.nn.LayerNorm
     unembedding: th.nn.Linear
     extra_layers: th.nn.Sequential
@@ -83,7 +84,7 @@ class TunedLens(Lens):
     layer_norm: th.nn.LayerNorm
     unembedding: th.nn.Linear
     extra_layers: th.nn.Sequential
-    layer_adapters: th.nn.ModuleList
+    layer_translators: th.nn.ModuleList
 
     def __init__(
         self,
@@ -122,7 +123,11 @@ class TunedLens(Lens):
 
         self.extra_layers = th.nn.Sequential()
 
-        if model is None == (d_model is None or num_layers is None or vocab_size is None):
+        if (
+            model
+            is None
+            == (d_model is None or num_layers is None or vocab_size is None)
+        ):
             raise ValueError(
                 "Must provide either a model or d_model, num_layers, and vocab_size"
             )
@@ -167,42 +172,40 @@ class TunedLens(Lens):
         self.unembedding.requires_grad_(False)
 
         out_features = d_model if reuse_unembedding else vocab_size
-        adapter = th.nn.Linear(d_model, out_features, bias=bias)
+        translator = th.nn.Linear(d_model, out_features, bias=bias)
         if not reuse_unembedding:
-            adapter.weight.data = self.unembedding.weight.data.clone()
-            adapter.bias.data.zero_()
+            translator.weight.data = self.unembedding.weight.data.clone()
+            translator.bias.data.zero_()
         else:
-            adapter.weight.data.zero_()
-            adapter.bias.data.zero_()
+            translator.weight.data.zero_()
+            translator.bias.data.zero_()
 
-        self.add_module("input_adapter", adapter if include_input else None)
+        self.add_module("input_translator", translator if include_input else None)
         # Don't include the final layer
         num_layers -= 1
 
-        self.layer_adapters = th.nn.ModuleList(
-            [deepcopy(adapter) for _ in range(num_layers)]
+        self.layer_translators = th.nn.ModuleList(
+            [deepcopy(translator) for _ in range(num_layers)]
         )
 
     def __getitem__(self, item: int) -> th.nn.Module:
         """Get the probe module at the given index."""
-        if isinstance(self.input_adapter, th.nn.Module):
+        if isinstance(self.input_translator, th.nn.Module):
             if item == 0:
-                return self.input_adapter
+                return self.input_translator
             else:
                 item -= 1
 
-        return self.layer_adapters[item]
+        return self.layer_translators[item]
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
-        if isinstance(self.input_adapter, th.nn.Module):
-            yield self.input_adapter
+        if isinstance(self.input_translator, th.nn.Module):
+            yield self.input_translator
 
-        yield from self.layer_adapters
+        yield from self.layer_translators
 
     @classmethod
-    def load(
-        cls, resource_id: str, **kwargs
-    ) -> "TunedLens":
+    def load(cls, resource_id: str, **kwargs) -> "TunedLens":
         """Load a tuned lens from a or hugging face hub.
 
         Args:
@@ -225,7 +228,7 @@ class TunedLens(Lens):
         keys = list(state.keys())
         for key in keys:
             if "probe" in key:
-                new_key = key.replace("probe", "adapter")
+                new_key = key.replace("probe", "translator")
                 state[new_key] = state.pop(key)
 
         # Drop unrecognized config keys
@@ -284,7 +287,7 @@ class TunedLens(Lens):
         if not self.config["reuse_unembedding"]:
             raise RuntimeError("TunedLens.transform_hidden requires reuse_unembedding")
 
-        # Note that we add the adapter output residually, in contrast to the formula
+        # Note that we add the translator output residually, in contrast to the formula
         # in the paper. By parametrizing it this way we ensure that weight decay
         # regularizes the transform toward the identity, not the zero transformation.
         return h + self[idx](h)
@@ -312,8 +315,8 @@ class TunedLens(Lens):
         return self.to_logits(h)
 
     def __len__(self) -> int:
-        N = len(self.layer_adapters)
-        if self.input_adapter:
+        N = len(self.layer_translators)
+        if self.input_translator:
             N += 1
 
         return N

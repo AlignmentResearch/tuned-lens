@@ -8,7 +8,7 @@ def test_plot_logit_lens():
     pythia_125M_model = AutoModelForCausalLM.from_pretrained("EleutherAI/pythia-125m")
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-125m")
     pythia_125M_lens = TunedLens(pythia_125M_model)
-    pythia_125M_lens.attn_adapters = th.nn.ModuleList()
+    pythia_125M_lens.attn_translators = th.nn.ModuleList()
     text = "Never gonna give you up, never gonna let you down,"
     text += " never gonna run around and desert you"
     input_ids = tokenizer(text, return_tensors="pt").input_ids
