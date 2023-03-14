@@ -1,4 +1,3 @@
-from pathlib import Path
 from tuned_lens.nn.lenses import TunedLens, LogitLens
 import transformers as trf
 
