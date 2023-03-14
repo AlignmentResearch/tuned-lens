@@ -23,7 +23,7 @@ RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; 
 
 FROM base as prod
 ADD . .
-RUN python3.9 -m pip install -e .
+RUN python3.9 -m pip install .
 
 FROM base as test
 COPY pyproject.toml setup.cfg /workspace/
