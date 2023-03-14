@@ -6,13 +6,9 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel
 from typing import Optional
-from tuned_lens import (
-    record_residual_stream,
-    LogitStats,
-    ResidualStats,
-    TunedLens,
-)
-from tuned_lens.nn import Decoder
+from tuned_lens.residual_stream import record_residual_stream
+from tuned_lens.stats import ResidualStats, LogitStats
+from tuned_lens.nn import Decoder, TunedLens
 from tuned_lens.stats import CalibrationError
 from tuned_lens.utils import (
     maybe_all_cat,
