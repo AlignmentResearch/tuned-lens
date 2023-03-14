@@ -56,11 +56,11 @@ jobs:
           target: prod
           tags: ${{ steps.meta.outputs.tags }}
       - name: Run tests
-        run: |
-          docker run \
-            --pull=never \
-            --rm ${{ steps.meta.outputs.tags }} \
-            tuned-lens --help
+        run: >-
+          docker run
+          --pull=never
+          --rm ${{ steps.meta.outputs.tags }}
+          tuned-lens --help
   build-n-publish-python-package:
     name: Build and publish Python distributions to TestPyPI
     runs-on: ubuntu-latest
