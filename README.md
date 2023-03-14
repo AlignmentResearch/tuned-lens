@@ -1,7 +1,7 @@
 # Tuned Lens 🔎
 Tools for understanding how transformer predictions are built layer-by-layer
 
-<img width="1028" alt="tuned lens" src="https://user-images.githubusercontent.com/39116809/206883419-4fb9083d-3fa0-48e9-ba97-b70cb21b08e9.png">
+![Using the Tuned-lens](https://user-images.githubusercontent.com/12176390/224878602-4c754648-0cae-4a7c-b80e-6846d42bf1da.png)
 
 This package provides a simple interface training and evaluating __tuned lenses__. A tuned lens allows us to peak at the iterative computations that a transformer is using the compute the next token.
 
