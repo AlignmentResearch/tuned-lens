@@ -245,6 +245,10 @@ def run():
     with nullcontext() if not local_rank else redirect_stdout(None):
         args = parser.parse_args()
 
+        if args.command is None:
+            parser.print_help()
+            exit(1)
+
         if args.sweep:
             ckpt_range = eval(f"range({args.sweep})")
             output_root = args.output
