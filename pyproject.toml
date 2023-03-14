@@ -20,7 +20,7 @@ dependencies = [
     "transformers",
     "huggingface_hub",
 ]
-version = "0.0.3b"
+version = "0.0.3b3"
 
 [project.optional-dependencies]
 dev = [
