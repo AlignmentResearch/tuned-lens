@@ -39,8 +39,6 @@ jobs:
           context: .
           target: test
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
       - name: Run tests
         run: |
           docker run \
