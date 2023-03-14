@@ -224,12 +224,13 @@ class TunedLens(Lens):
         # Load parameters
         state = th.load(ckpt_path, **kwargs)
 
-        # Backwards compatibility
+        # Backwards compatibility we really need to stop renaming things
         keys = list(state.keys())
         for key in keys:
-            if "probe" in key:
-                new_key = key.replace("probe", "translator")
-                state[new_key] = state.pop(key)
+            for old_key in ["probe", "adapter"]:
+                if old_key in key:
+                    new_key = key.replace(old_key, "translator")
+                    state[new_key] = state.pop(key)
 
         # Drop unrecognized config keys
         unrecognized = set(config) - set(inspect.getfullargspec(cls).kwonlyargs)
