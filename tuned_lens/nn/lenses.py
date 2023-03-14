@@ -22,6 +22,7 @@ class Lens(abc.ABC, th.nn.Module):
 
 class LogitLens(Lens):
     """Decodes the residual stream into logits using the unembeding matrix."""
+
     layer_norm: th.nn.LayerNorm
     unembedding: th.nn.Linear
     extra_layers: th.nn.Sequential
@@ -122,7 +123,11 @@ class TunedLens(Lens):
 
         self.extra_layers = th.nn.Sequential()
 
-        if model is None == (d_model is None or num_layers is None or vocab_size is None):
+        if (
+            model
+            is None
+            == (d_model is None or num_layers is None or vocab_size is None)
+        ):
             raise ValueError(
                 "Must provide either a model or d_model, num_layers, and vocab_size"
             )
@@ -200,9 +205,7 @@ class TunedLens(Lens):
         yield from self.layer_adapters
 
     @classmethod
-    def load(
-        cls, resource_id: str, **kwargs
-    ) -> "TunedLens":
+    def load(cls, resource_id: str, **kwargs) -> "TunedLens":
         """Load a tuned lens from a or hugging face hub.
 
         Args:
