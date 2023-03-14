@@ -1,5 +1,6 @@
 from copy import deepcopy
 import inspect
+from logging import warn
 from pathlib import Path
 import json
 import abc
@@ -229,6 +230,10 @@ class TunedLens(Lens):
         for key in keys:
             for old_key in ["probe", "adapter"]:
                 if old_key in key:
+                    warn(
+                        f"Loading a checkpoint with a '{old_key}' key. "
+                        "This is deprecated and will be removed in the future."
+                    )
                     new_key = key.replace(old_key, "translator")
                     state[new_key] = state.pop(key)
 
