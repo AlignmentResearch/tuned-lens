@@ -3,7 +3,7 @@ Tools for understanding how transformer predictions are built layer-by-layer
 
 ![Using the Tuned-lens](https://user-images.githubusercontent.com/12176390/224879115-8bc95f26-68e4-4f43-9b4c-06ca5934a29d.png)
 
-This package provides a simple interface training and evaluating __tuned lenses__. A tuned lens allows us to peak at the iterative computations that a transformer is using the compute the next token.
+This package provides a simple interface training and evaluating __tuned lenses__. A tuned lens allows us to peak at the iterative computations a transformer uses to compute the next token.
 
 A lens into a transformer with n layers allows you to replace the last $m$ layers of the model with an [affine transformation](https://pytorch.org/docs/stable/generated/torch.nn.Linear.html) (we call these affine translators).
 
@@ -23,18 +23,15 @@ First you will need to install the basic prerequisites into a virtual environmen
 
 then you can simply install the package using pip.
 ```
-git clone https://github.com/AlignmentResearch/tuned-lens
-cd tuned-lens
-pip install .
+pip install tuned-lens
 ```
 
 ### Install Using Docker
 If you prefer to run the code from within a container you can use the provided docker
 file
 ```
-git clone https://github.com/AlignmentResearch/tuned-lens
-cd tuned-lens
-docker build -t tuned-lens-prod --target prod .
+docker pull ghcr.io/alignmentresearch/tuned-lens:latest
+docker run --rm tuned-lens:latest tuned-lens --help
 ```
 
 ## Quick Start Guid
