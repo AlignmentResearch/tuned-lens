@@ -5,8 +5,6 @@ on:
     tags:
       - 'v*'
 
-env:
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   validate-tag:
@@ -40,11 +38,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v4
-        with:
-          images: ${{ env.IMAGE_NAME }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
         with:
@@ -54,12 +47,12 @@ jobs:
         with:
           context: .
           target: prod
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: smoke_test_img:latest
       - name: Run tests
         run: >-
           docker run
           --pull=never
-          --rm ${{ steps.meta.outputs.tags }}
+          --rm smoke_test_img:latest
           tuned-lens --help
   build-n-publish-python-package:
     name: Build and publish Python distributions to TestPyPI
