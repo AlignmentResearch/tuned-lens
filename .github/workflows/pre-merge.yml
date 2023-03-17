@@ -45,7 +45,7 @@ jobs:
           directory: ./coverage/reports/
           env_vars: OS,PYTHON
           fail_ci_if_error: true
-          files: ./coverage1.xml,./coverage2.xml,!./cache
+          files: coverage.xml,!./cache
           flags: unittests
           name: codecov-umbrella
           verbose: true
