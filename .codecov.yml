@@ -1,5 +1,23 @@
+codecov:
+  require_ci_to_pass: yes
+
 coverage:
   status:
     project:
-      default:
-        target: auto  # auto compares coverage to the previous base commit
+      tests:
+        target: 100%
+        threshold: 1%
+      tuned_lens:
+        target: auto
+        threshold: 1%
+        if_not_found: success
+        if_ci_failed: error
+
+flags:
+  tests:
+    paths:
+      - tests/
+    statuses:
+  tuned_lens:
+    paths:
+      - tuned_lens/

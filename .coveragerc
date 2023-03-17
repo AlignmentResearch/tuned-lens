@@ -1,4 +1,9 @@
+[run]
+source = tuned_lens,tests
+omit = */__init__.py
+
 [report]
+include = tuned_lens/*, tests/*
 # Regexes for lines to exclude from consideration
 exclude_lines =
     # Have to re-enable the standard pragma

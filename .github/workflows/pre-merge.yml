@@ -38,7 +38,11 @@ jobs:
             -v $PWD:/workspace \
             --pull=never \
             --rm unit_test_img:latest \
-            pytest --cov=./ --cov-report=xml
+            pytest \
+            --cov=tuned_lens
+            --cov=tests --cov-config=.coveragerc \
+            --cov-report xml:coverage_package.xml \
+            --cov-report xml:coverage_tests.xml tests/
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
         with:
