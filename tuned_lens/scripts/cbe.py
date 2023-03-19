@@ -1,3 +1,4 @@
+"""Sub commands for extracting and evaluating causal bases."""
 from argparse import Namespace
 from datasets import Dataset
 from itertools import islice
@@ -19,6 +20,7 @@ def eval_bases(
     model: PreTrainedModel,
     data: Dataset,
 ):
+    """Sub command for evaluating a set of causal bases."""
     assert args.output is not None
 
     local_rank = dist.get_rank() if dist.is_initialized() else 0
@@ -84,6 +86,7 @@ def extract_bases(
     data: Dataset,
     lens: Optional[TunedLens],
 ):
+    """Sub command for extracting causal basis from a model and lens."""
     local_rank = dist.get_rank() if dist.is_initialized() else 0
     args.output.mkdir(parents=True, exist_ok=True)
 
@@ -105,7 +108,3 @@ def extract_bases(
     for i, basis in enumerate(basis_iter):
         if local_rank == 0:
             th.save(basis, args.output / f"layer_{i}.pt")
-
-
-def main(args):
-    pass

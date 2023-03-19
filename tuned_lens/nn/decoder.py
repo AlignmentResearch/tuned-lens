@@ -1,3 +1,4 @@
+"""Provides a class for mapping transformer hidden states to logits (and vice versa)."""
 from dataclasses import dataclass
 from torch.autograd.functional import hessian
 from torch.distributions import Distribution
@@ -11,7 +12,7 @@ import torch as th
 
 @dataclass
 class InversionOutput:
-    """Output of `Decoder.invert`"""
+    """Output of `Decoder.invert`."""
 
     preimage: th.Tensor
     grad_norm: th.Tensor
@@ -44,6 +45,19 @@ class Decoder(th.nn.Module):
         # Overridden by model if provided
         norm_eps: float = 1e-5,
     ):
+        """Initialize the decoder.
+
+        Args:
+            model: A HuggingFace model from which to extract the unembedding matrix.
+            num_transformer_layers: To leave at the end of the transformer.
+
+        Automatically set if the model is provided.
+
+        KWArgs:
+            d_model: The dimensionality of the hidden states.
+            vocab_size: The size of the vocabulary.
+            norm_eps: The epsilon value for the layer norm.
+        """
         super().__init__()
 
         self.num_transformer_layers = num_transformer_layers
@@ -183,8 +197,15 @@ class Decoder(th.nn.Module):
             h0: Initial guess for the hidden state. If `None`, the least-squares
                 solution of the linear equation xU = logits is used, where U is the
                 unembedding matrix.
+            max_iter: Maximum number of iterations for the optimizer to take.
             optimizer: Optimization algorithm to use. Currently, only "lbfgs" and "sgd"
                 are supported.
+            prior_weight: The weight of the prior distribution is given in the loss.
+            prior: Prior distribution over hidden states used to regularize
+                the inversion.
+            step_size: The step size for the optimizer.
+            tol: Tolerance for the inversion objective.
+            transform: Callable = lambda x: x,
             weight: Optional tensor of shape `[..., vocab_size]` containing weights
                 for each vocabulary item. If `None`, all classes are weighted equally.
         """

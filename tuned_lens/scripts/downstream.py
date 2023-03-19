@@ -1,3 +1,4 @@
+"""Provides Sub command for downstream evaluation."""
 from argparse import Namespace
 from collections import defaultdict
 from datasets import Dataset
@@ -28,6 +29,7 @@ def downstream_loop(
     lens: TunedLens,
     tokenizer: PreTrainedTokenizerBase,
 ):
+    """Downstream evaluation loop for the tuned lens model."""
     from lm_eval.metrics import stderr_for_metric
     from lm_eval.tasks import get_task_dict
 

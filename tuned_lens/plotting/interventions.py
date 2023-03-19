@@ -1,9 +1,11 @@
+"""Provides function for plotting the stimulus-response alignment."""
 import pandas as pd
 import plotly.graph_objects as go
 import torch as th
 
 
 def plot_stimulus_response_alignment(df: pd.DataFrame) -> go.Figure:
+    """Plot the stimulus-response alignment by layer."""
     layer_means = df.groupby("stimulus_layer")["sr_alignment"].mean()
 
     cell_grouped = df.groupby(["stimulus_layer", "token_index"])

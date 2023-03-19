@@ -1,3 +1,4 @@
+"""Provides a wrapper for implementing downstream evaluation with a tuned lens."""
 from .lenses import TunedLens
 from ..utils import pytree_map
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
@@ -23,6 +24,7 @@ class DownstreamWrapper(th.nn.Module):
         tokenizer: PreTrainedTokenizerBase,
         tuned_lens: Optional[TunedLens] = None,
     ):
+        """Construct a new DownstreamWrapper."""
         super().__init__()
 
         local_rank = dist.get_rank() if dist.is_initialized() else 0
@@ -34,13 +36,16 @@ class DownstreamWrapper(th.nn.Module):
             self.tuned_lens.eval()
 
     @property
-    def max_length(self):
+    def max_length(self) -> int:
+        """Maximum length the context window."""
         return getattr(self.model.config, "max_position_embeddings", 2048)
 
-    def tok_encode(self, string: str):
+    def tok_encode(self, string: str) -> list[int]:
+        """Encode a string into a list of token IDs."""
         return self.tokenizer.encode(string, add_special_tokens=False)
 
     def forward(self, request, prompt: str) -> DownstreamResult:
+        """Process command line request and return a DownstreamResult."""
         _, target_raw = request.args
 
         # sanity check

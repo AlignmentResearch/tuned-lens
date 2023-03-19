@@ -1,3 +1,4 @@
+"""Training loop for training a TunedLens model against a transformer on a dataset."""
 from argparse import Namespace
 from collections import defaultdict
 from datasets import Dataset
@@ -11,8 +12,8 @@ from tuned_lens import TunedLens
 from tuned_lens.residual_stream import ResidualStream
 from tuned_lens.utils import (
     maybe_all_reduce,
-    maybe_shift_labels,
-    maybe_shift_preds,
+    shift_labels,
+    shift_preds,
     send_to_device,
 )
 import torch as th
@@ -26,6 +27,15 @@ def train_loop(
     lens: TunedLens,
     nats_to_bpb: float,
 ):
+    """Trains a TunedLens model against a transformer on a dataset.
+
+    Args:
+        args: The command-line arguments see __main__.py train subcommand.
+        model: The transformer model to train.
+        data: The dataset to train on.
+        lens: The TunedLens model to train.
+        nats_to_bpb: The ratio of nats to bits per byte for the dataset.
+    """
     lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
     print(f"Tuned lens memory usage: {lens_size / 2 ** 20:.2f} MB per GPU")
 
@@ -166,14 +176,14 @@ def train_loop(
         else:
             raise NotImplementedError(f"Unknown loss {args.loss}")
 
-        labels = maybe_shift_labels(labels, shift)
+        labels = shift_labels(labels, shift)
 
         # We do this sequentially to save VRAM
         for i, (name, h) in enumerate(stream.items()):
             # bfloat16 has larger dynamic range than float16 and seems to be better for
             # computing log softmax & KL loss
             with th.autocast("cuda", dtype=th.bfloat16):
-                logits = maybe_shift_preds(ddp_lens(h, idx=i), shift)
+                logits = shift_preds(ddp_lens(h, idx=i), shift)
 
                 if args.loss == "ce":
                     loss = th.nn.functional.cross_entropy(

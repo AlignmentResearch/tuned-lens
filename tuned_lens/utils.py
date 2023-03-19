@@ -1,3 +1,5 @@
+"""Utilities for distributed training and handling nested collections of tensors."""
+
 from itertools import islice
 from typing import cast, Any, Callable, Iterable, Sequence, Type, TypeVar, Union
 import torch as th
@@ -16,6 +18,7 @@ def assert_type(typ: Type[T], obj: Any) -> T:
 
 
 def maybe_all_cat(x: th.Tensor) -> th.Tensor:
+    """Concatenate a tensor across all processes."""
     if not dist.is_initialized():
         return x
 
@@ -25,6 +28,7 @@ def maybe_all_cat(x: th.Tensor) -> th.Tensor:
 
 
 def maybe_all_gather_lists(lst: list) -> list:
+    """Gather a list of objects from all processes."""
     if not dist.is_initialized():
         return lst
 
@@ -34,6 +38,7 @@ def maybe_all_gather_lists(lst: list) -> list:
 
 
 def maybe_all_reduce(x: th.Tensor, op: str = "mean") -> th.Tensor:
+    """Reduce a tensor across all processes."""
     if not dist.is_initialized():
         return x
 
@@ -56,7 +61,17 @@ def maybe_unpack(x):
     return x
 
 
-def maybe_shift_labels(x: th.Tensor, shift: int):
+def shift_labels(x: th.Tensor, shift: int):
+    """Shift labels by a given amount.
+
+    Args:
+        x: (batch x seq_len) labels to shift.
+        shift: Amount to shift by. Positive values take from the start, negative values
+            negative values take from the end.
+
+    Returns:
+        (batch x (seq_len - shift)) labels shifted by the given amount.
+    """
     if shift > 0:
         return x[:, shift:]
     if shift < 0:
@@ -65,7 +80,17 @@ def maybe_shift_labels(x: th.Tensor, shift: int):
     return x
 
 
-def maybe_shift_preds(x: th.Tensor, shift: int):
+def shift_preds(x: th.Tensor, shift: int):
+    """Shift predictions by a given amount.
+
+    Args:
+        x: (batch x seq_len) predictions to shift.
+        shift: Amount to shift by. Positive values take from the end, negative values
+            from the start.
+
+    Returns:
+        (batch x (seq_len - shift)) predictions shifted by the given amount.
+    """
     if shift > 0:
         return x[:, :-shift]
     if shift < 0:
@@ -107,9 +132,15 @@ def pytree_flatten(tree: AnyTree) -> Iterable[th.Tensor]:
 def pytree_map(
     func: Callable[[th.Tensor], Any], tree: TreeType, strict: bool = True
 ) -> TreeType:
-    """
-    Recursively apply a function to all tensors in a pytree, returning the results
-    in a new pytree with the same structure. Non-tensor leaves are copied.
+    """Recursively apply a function to all tensors in a pytree.
+
+    Args:
+        func: Function to apply to each tensor.
+        tree: Pytree to apply the function to.
+        strict: If True, raise an error if a non-tensor leaf is encountered.
+
+    Returns:
+        A new pytree with the same structure. Non-tensor leaves are copied.
     """
     # Stopping condition
     if isinstance(tree, th.Tensor):
@@ -134,11 +165,18 @@ def pytree_map(
         return tree
 
 
-def pytree_cat(trees: Sequence, dim: int = 0) -> AnyTree:
-    """
-    Concatenate pytrees along a given dimension, returning a new pytree with the same
-    structure. All pytrees are expected to have the same structure; undefined behavior
+def pytree_cat(trees: Sequence[AnyTree], dim: int = 0) -> AnyTree:
+    """Concatenate pytrees along a given dimension.
+
+    All pytrees are expected to use the same collection; undefined behavior
     will occur if this is not the case.
+
+    Args:
+        trees: Sequence of pytrees containing tensors to concatenate.
+        dim: Dimension to concatenate along.
+
+    Returns:
+        - A new pytree with the same structure.
     """
     transposed_iter = zip(*(pytree_flatten(tree) for tree in trees))
     leaf_iter = (th.cat(seq, dim) for seq in transposed_iter)
@@ -153,10 +191,17 @@ def pytree_cat(trees: Sequence, dim: int = 0) -> AnyTree:
 
 
 def pytree_stack(trees: Sequence, dim: int = 0) -> AnyTree:
-    """
-    Stack pytrees along a given dimension, returning a new pytree with the same
-    structure. All pytrees are expected to have the same structure; undefined behavior
+    """Stack pytrees along a given dimension.
+
+    All pytrees are expected to use the same collection; undefined behavior
     will occur if this is not the case.
+
+    Args:
+        trees: Sequence of pytrees containing tensors to stack.
+        dim: Dimension to concatenate along.
+
+    Returns:
+        A new pytree with the same structure.
     """
     if not len(trees):
         raise ValueError("Cannot stack empty sequence of pytrees")

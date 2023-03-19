@@ -1,3 +1,4 @@
+"""Provides lenses for decoding hidden states into logits."""
 from copy import deepcopy
 import inspect
 from logging import warn
@@ -18,7 +19,7 @@ class Lens(abc.ABC, th.nn.Module):
 
     @abc.abstractmethod
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
-        """Decode hidden states into logits"""
+        """Decode hidden states into logits."""
 
 
 class LogitLens(Lens):
@@ -200,6 +201,7 @@ class TunedLens(Lens):
         return self.layer_translators[item]
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
+        """Get iterator over the translators within the lens."""
         if isinstance(self.input_translator, th.nn.Module):
             yield self.input_translator
 
@@ -270,17 +272,28 @@ class TunedLens(Lens):
         lens.load_state_dict(state)
         return lens
 
-    def save(self, path: Union[Path, str], ckpt: str = "params.pt") -> None:
+    def save(
+        self,
+        path: Union[Path, str],
+        ckpt: str = "params.pt",
+        config: str = "config.json",
+    ) -> None:
+        """Save the lens to a directory.
+
+        Args:
+            path : The path to the directory to save the lens to.
+            ckpt : The name of the checkpoint file to save the parameters to.
+            config : The name of the config file to save the config to.
+        """
         path = Path(path)
         path.mkdir(exist_ok=True, parents=True)
         th.save(self.state_dict(), path / ckpt)
 
-        with open(path / "config.json", "w") as f:
+        with open(path / config, "w") as f:
             json.dump(self.config, f)
 
     def normalize_(self):
         """Canonicalize the transforms by centering their weights and biases."""
-
         for linear in self:
             assert isinstance(linear, th.nn.Linear)
 
@@ -307,7 +320,7 @@ class TunedLens(Lens):
         return self.unembedding(self.layer_norm(h))
 
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
-        """Transform and then decode the hidden states into logits"""
+        """Transform and then decode the hidden states into logits."""
         # Sanity check to make sure we don't finetune the decoder
         # if any(p.requires_grad for p in self.parameters(recurse=False)):
         #     raise RuntimeError("Make sure to freeze the decoder")
@@ -321,6 +334,7 @@ class TunedLens(Lens):
         return self.to_logits(h)
 
     def __len__(self) -> int:
+        """Return the number of layer translators in the lens."""
         N = len(self.layer_translators)
         if self.input_translator:
             N += 1

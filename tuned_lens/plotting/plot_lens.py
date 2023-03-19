@@ -1,3 +1,5 @@
+"""Plot a lens table for some given text and model."""
+
 from ..nn.lenses import Lens
 from ..residual_stream import ResidualStream, record_residual_stream
 from transformers import (
@@ -38,8 +40,8 @@ def plot_lens(
     newline_token: str = "Ċ",
     whitespace_token: str = "Ġ",
     whitespace_replacement: str = "_",
-    topk_diff: bool = False,
     topk: int = 10,
+    topk_diff: bool = False,
 ) -> go.Figure:
     """Plot a lens table for the given text.
 
@@ -59,7 +61,7 @@ def plot_lens(
         extra_decoder_layers: The number of extra decoder layers to apply after before
             the unembeding.
         layer_stride: The number of layers to skip between each layer displayed.
-        metric: The metric to use for the lens table.
+        statistic: The statistic to use for the lens table.
             * ce: The cross entropy between the labels and the lens predictions.
             * entropy: The entropy of the lens prediction.
             * forward_kl: The KL divergence between the model and the lens.
@@ -70,8 +72,10 @@ def plot_lens(
             this length and add an ellipsis.
         ellipsis: The string to use for the ellipsis.
         newline_replacement: The string to replace newline tokens with.
-        newline_token: The token to replace with newline_replacement.
+        newline_token: The substring to replace with newline_replacement.
         whitespace_replacement: The string to replace whitespace tokens with.
+        whitespace_token: The substring to replace with whitespace_replacement.
+        topk: The number of tokens to visualize when hovering over a cell.
         topk_diff: If true show the top k tokens where the metric has changed the from
             the previous layer.
 
@@ -195,6 +199,18 @@ def compute_statistics(
     model_logits: th.Tensor,
     targets: th.Tensor,
 ) -> PlotableStatistic:
+    """Compute a statistic for each layer in the stream.
+
+    Args:
+        statistic: The statistic to compute. One of "ce", "entropy", "kl", "kl_div".
+        hidden_lps: The stream of hidden layer log probabilities produced by a lens.
+        model_logits: The logits produced by the model.
+        targets: The target ids for the sequence.
+
+    Returns:
+        A named tuple containing the statistics value at each layer and position
+        and its name and units.
+    """
     if statistic == "ce":
         assert targets.shape == hidden_lps[-1].shape[:-1], (
             "Batch and sequence lengths of targets and log probs must match."

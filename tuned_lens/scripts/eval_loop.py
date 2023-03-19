@@ -1,3 +1,4 @@
+"""Evaluation loop for the tuned lens model."""
 from argparse import Namespace
 from datasets import Dataset
 from collections import defaultdict
@@ -13,8 +14,8 @@ from tuned_lens.stats import CalibrationError
 from tuned_lens.utils import (
     maybe_all_cat,
     maybe_all_reduce,
-    maybe_shift_labels,
-    maybe_shift_preds,
+    shift_labels,
+    shift_preds,
     pytree_map,
     pytree_stack,
     send_to_device,
@@ -32,6 +33,15 @@ def eval_loop(
     lens: Optional[TunedLens],
     nats_to_bpb_ratio: float,
 ):
+    """Trains a TunedLens model against a transformer on a dataset.
+
+    Args:
+        args: The command-line arguments see __main__.py train subcommand.
+        model: The transformer model to train.
+        data: The dataset to train on.
+        lens: The TunedLens model to train.
+        nats_to_bpb_ratio: The ratio of nats to bits per byte for the dataset.
+    """
     local_rank = dist.get_rank() if dist.is_initialized() else 0
     dl = DataLoader(
         data.shuffle(seed=args.seed),  # type: ignore[arg-type],
@@ -77,7 +87,7 @@ def eval_loop(
         shift = args.token_shift if args.token_shift is not None else 1
         final_lps = output.logits.log_softmax(dim=-1)
         final_probs = final_lps.exp()
-        labels = maybe_shift_labels(batch["input_ids"], shift)
+        labels = shift_labels(batch["input_ids"], shift)
 
         batch_output = defaultdict(dict)
         transfer_ces = th.zeros(L, L, device=final_lps.device)
@@ -95,7 +105,7 @@ def eval_loop(
                 # Note that we don't reduce the loss here, since we want to look at
                 # the full distribution of losses across tokens and samples
                 losses = th.nn.functional.cross_entropy(
-                    maybe_shift_preds(baseline_lps, shift).flatten(0, 1),
+                    shift_preds(baseline_lps, shift).flatten(0, 1),
                     labels.flatten(),
                     reduction="none",
                 )
@@ -112,9 +122,7 @@ def eval_loop(
                 )
                 h.grad = None
 
-            ll_calibration[j].update(
-                labels, maybe_shift_preds(baseline_lps.exp(), shift)
-            )
+            ll_calibration[j].update(labels, shift_preds(baseline_lps.exp(), shift))
             ll_statistics[j].update(baseline_lps, assume_normalized=True)
 
             batch_output["baseline_ce"][name] = losses
@@ -132,7 +140,7 @@ def eval_loop(
                 lens_probs = lens_lps.exp()
 
                 batch_output["lens_ce"][name] = th.nn.functional.cross_entropy(
-                    maybe_shift_preds(lens_lps, shift).flatten(0, 1),
+                    shift_preds(lens_lps, shift).flatten(0, 1),
                     labels.flatten(),
                     reduction="none",
                 )
@@ -142,7 +150,7 @@ def eval_loop(
                 batch_output["lens_kl"][name] = th.sum(
                     final_probs * (final_lps - lens_lps), dim=-1
                 )
-                tl_calibration[j].update(labels, maybe_shift_preds(lens_probs, shift))
+                tl_calibration[j].update(labels, shift_preds(lens_probs, shift))
                 tl_statistics[j].update(lens_lps, assume_normalized=True)
 
                 if args.transfer:
@@ -151,14 +159,14 @@ def eval_loop(
                     for i in range(L):
                         transfer_lps = lens(h, idx=i).log_softmax(dim=-1)
                         transfer_ces[i, j] = th.nn.functional.cross_entropy(
-                            maybe_shift_preds(transfer_lps, shift).flatten(0, 1),
+                            shift_preds(transfer_lps, shift).flatten(0, 1),
                             labels.flatten(),
                         )
                         transfer_kls[i, j] = th.sum(
                             lens_probs * (lens_lps - transfer_lps), dim=-1
                         ).mean()
 
-        final_calibration.update(labels, maybe_shift_preds(final_probs, shift))
+        final_calibration.update(labels, shift_preds(final_probs, shift))
         final_logit_stats.update(final_lps, assume_normalized=True)
         if args.residual_stats:
             # Drop the first token because it's weird
@@ -168,7 +176,7 @@ def eval_loop(
             stream_stats.update(rest)
 
         batch_output["baseline_ce"]["final"] = th.nn.functional.cross_entropy(
-            maybe_shift_preds(final_lps, shift).flatten(0, 1),
+            shift_preds(final_lps, shift).flatten(0, 1),
             labels.flatten(),
             reduction="none",
         )

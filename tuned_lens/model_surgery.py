@@ -1,3 +1,5 @@
+"""Tools for finding and modifying components in a transformer model."""
+
 from contextlib import contextmanager
 from transformers import PreTrainedModel
 from typing import Any, Generator, Optional, Type, TypeVar, Union
@@ -10,9 +12,7 @@ def get_value_for_key(obj: Any, key: str) -> Any:
 
 
 def set_value_for_key_(obj: Any, key: str, value: Any) -> None:
-    """
-    Set value in-place using `__getitem__` if `key` is numeric and `getattr` otherwise.
-    """
+    """Set value in-place if `key` is numeric and `getattr` otherwise."""
     if key.isdigit():
         obj[int(key)] = value
     else:

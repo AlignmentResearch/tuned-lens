@@ -1,3 +1,4 @@
+"""Load lens artifacts from the hub or locally storage."""
 from typing import Optional, Tuple
 from pathlib import Path
 import os
@@ -14,7 +15,7 @@ def load_lens_artifacts(
     ckpt_file: str = "params.pt",
     subfolder: str = "lens",
 ) -> Tuple[Path, Path]:
-    """First checks for lens resource locally then tries to download it from the hub
+    """First checks for lens resource locally then tries to download it from the hub.
 
     Args:
         resource_id: The id of the lens resource.
@@ -24,6 +25,8 @@ def load_lens_artifacts(
         repo_type: The type of repository to download the lens from. Defaults to
             'space'. However, this default can be overridden by setting the
             TUNED_LENS_REPO_TYPE environment variable.
+        config_file: The name of the config file in the folder contain the lens.
+        ckpt_file: The name of the checkpoint file in the folder contain the lens.
         revision: The revision of the lens to download.
         subfolder: The subfolder of the repository to download the lens from.
 

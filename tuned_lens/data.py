@@ -1,3 +1,4 @@
+"""Tools for tokenizing and manipulating text datasets."""
 from datasets import Dataset, DatasetDict
 from functools import partial
 from multiprocessing import cpu_count

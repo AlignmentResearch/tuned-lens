@@ -1,3 +1,4 @@
+"""Narest neighbors and the spearman corelation for logit vectors."""
 from typing import Optional, NamedTuple
 import math
 import torch as th
@@ -37,7 +38,9 @@ def nearest_neighbors(x: th.Tensor) -> NearestNeighbors:
     )
 
 
-def sample_neighbors(x, tau: float = 1.0, *, generator: Optional[th.Generator] = None):
+def sample_neighbors(
+    x: th.Tensor, tau: float = 1.0, *, generator: Optional[th.Generator] = None
+):
     """Sample neighbors q of logit vectors p, inversely proportional to KL(p, q)."""
     # If temperature is infinite, sample uniformly
     if not math.isfinite(tau):
