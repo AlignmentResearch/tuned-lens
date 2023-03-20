@@ -23,4 +23,5 @@ My Module Functions
    :toctree: generated/
 
    tuned_lens.nn.lenses
+   tuned_lens.nn.decoder
    tuned_lens.plotting.plot_lens

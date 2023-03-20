@@ -49,8 +49,6 @@ def plot_lens(
         model: The model to be examined.
         tokenizer: The tokenizer to use for encoding the text.
         lens: The lens use for intermediate predictions.
-
-    KWArgs:
         text: The text to use for evaluated. If not provided, the input_ids will be
             used.
         input_ids: The input IDs to use for evaluated. If not provided, the text will
@@ -58,8 +56,8 @@ def plot_lens(
         mask_input: Forbid the lens from predicting the input tokens.
         start_pos: The first token id to visualize.
         end_pos: The token id to stop visualizing before.
-        extra_decoder_layers: The number of extra decoder layers to apply after before
-            the unembeding.
+        extra_decoder_layers: The number of extra decoder layers to apply after
+            before the unembeding.
         layer_stride: The number of layers to skip between each layer displayed.
         statistic: The statistic to use for the lens table.
             * ce: The cross entropy between the labels and the lens predictions.
