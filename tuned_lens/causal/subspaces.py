@@ -1,3 +1,4 @@
+"""Provides tools for extracting causal bases from models and ablating subspaces"""
 from ..model_surgery import get_transformer_layers
 from ..nn import Decoder, TunedLens
 from ..utils import maybe_all_reduce
@@ -18,6 +19,15 @@ def ablate_subspace(
     mode: Literal["mean", "resample", "zero"] = "zero",
     orthonormal: bool = False,
 ):
+    """Context manager that ablates a subspace of activations.
+
+    Args:
+        model: A hugging face transformer model.
+        A: Either a 2D matrix whose column space is to be removed, or a 1D vector whose
+            span is to be removed.
+        layer_index: The index of the layer to ablate.
+        orthonormal: if True, `A` is assumed to be orthonormal.
+    """
     _, layers = get_transformer_layers(model)
 
     def wrapper(_, __, outputs):
