@@ -26,12 +26,11 @@ class InversionOutput:
 class Decoder(th.nn.Module):
     """Module that maps transformer hidden states to logits (and vice versa).
 
-    This class can be instantiated in two ways:
-    1. From a HuggingFace model, in which case it will extract the unembedding
-        matrix and layer norm from the model.
-    2. From scratch, in which case it will initialize the unembedding matrix
-        and layer norm with the provided `d_model` and `vocab_size` args.
-    The second option mainly exists for compatibility with PyTorch state dicts.
+    This class can be instantiated in two ways: (1) From a HuggingFace model, in which
+    case it will extract the unembedding matrix and layer norm from the model; (2) From
+    scratch, in which case it will initialize the unembedding matrix and layer norm
+    with the provided `d_model` and `vocab_size` args. The second option mainly exists
+    for compatibility with PyTorch state dicts.
     """
 
     def __init__(

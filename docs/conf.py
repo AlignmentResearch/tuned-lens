@@ -9,7 +9,7 @@
 from importlib import metadata
 
 project = "Tuned Lens"
-copyright = ("2023", "FAR AI")
+copyright = "2023, FAR AI"
 author = (
     "Nora Belrose"
     " Zach Furman,"
