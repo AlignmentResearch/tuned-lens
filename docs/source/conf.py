@@ -10,7 +10,8 @@ from importlib import metadata
 
 project = "tuned-lens"
 copyright = "2023, FAR AI"
-html_title = "Tuned Lens 🔎"
+html_title = "Tuned Lens"
+html_favicon = "_static/favicon.svg"
 author = (
     "Nora Belrose"
     " Zach Furman,"
