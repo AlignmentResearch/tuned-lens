@@ -22,8 +22,9 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v3
         with:
-          python-version: "3.9"
+          python-version: '3.9'
           cache: 'pip'
+          cache-dependency-path: pyproject.toml
       - name: Ensure no warnings
         run: |
           sphinx-build -W docs docs/_build
