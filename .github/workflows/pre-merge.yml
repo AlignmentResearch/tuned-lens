@@ -30,7 +30,7 @@ jobs:
           pip install -e ".[docs]"
       - name: Ensure no warnings
         run: |
-          python -m sphinx -W docs docs/_build
+          python -m sphinx -W docs/source docs/build
       - name: Run doc-tests
         run: |
           cd docs && make doctest
