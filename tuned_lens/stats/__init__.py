@@ -11,5 +11,5 @@ from .distance import (
     kl_divergence,
 )
 from .logit_stats import LogitStats
-from .rank import nearest_neighbors, sample_neighbors, spearmanr
+from .rank import spearmanr
 from .residual_stats import ResidualStats
