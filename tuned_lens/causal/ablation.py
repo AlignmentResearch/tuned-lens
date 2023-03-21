@@ -1,10 +1,8 @@
 from ..model_surgery import get_transformer_layers
-from ..utils import revcumsum
 from .utils import derange
 from contextlib import contextmanager
-from typing import Callable, Literal, Optional, Sequence
+from typing import Literal, Optional
 import torch as th
-import torch.nn.functional as F
 
 
 @contextmanager
@@ -68,68 +66,3 @@ def ablate_layer(
         yield model
     finally:
         handle.remove()
-
-
-@th.jit.script
-def _loo_geom_mixture_ce(logits: th.Tensor, labels: th.Tensor) -> th.Tensor:
-    """Cross entropy loss of leave-one-out geometric mixtures of a batch of logits."""
-    log_probs = logits.log_softmax(-1)
-    log_probs.diagonal().fill_(0)  # Mask out the original sample
-
-    return F.cross_entropy(
-        # Skip dividing by the number of samples, since cross_entropy will normalize
-        # the distribution anyway.
-        log_probs.mean(0).flatten(0, -2),
-        labels.flatten(),
-    )
-
-
-@th.jit.script
-def _loo_arith_mixture_ce(logits: th.Tensor, labels: th.Tensor) -> th.Tensor:
-    """Cross entropy loss of leave-one-out mixtures of a batch of logits."""
-    log_probs = logits.log_softmax(-1)
-    log_probs.diagonal().fill_(-th.inf)  # Mask out the original sample
-
-    return F.cross_entropy(
-        # Skip dividing by the number of samples, since cross_entropy will normalize
-        # the distribution anyway.
-        log_probs.logsumexp(0).flatten(0, -2),
-        labels.flatten(),
-    )
-
-
-@th.autocast("cuda", enabled=th.cuda.is_available())
-@th.no_grad()
-def resampling_probe_loss(
-    decoder: Callable[[th.Tensor], th.Tensor],
-    stream: Sequence[th.Tensor],
-    labels: th.Tensor,
-    low_memory: bool = False,
-    mean: Literal["arith", "geom"] = "geom",
-) -> list[th.Tensor]:
-    """Compute cross-entropy loss of hidden states decoded with resampling."""
-    if len(labels) < 2:
-        raise ValueError("Resampling requires at least two samples")
-    if len(stream) < 2:
-        raise ValueError("Resampling requires at least two layers")
-
-    biases = revcumsum([h_ - h for h, h_ in zip(stream[:-1], stream[1:])])
-    losses = []
-
-    mixture_fn = _loo_arith_mixture_ce if mean == "arith" else _loo_geom_mixture_ce
-    for hidden, bias in zip(stream, biases):
-        # Sequentially compute the loss for each token in the sequence
-        if low_memory:
-            token_losses = []
-            for b, h, y in zip(bias.unbind(-2), hidden.unbind(-2), labels[:, 1:].T):
-                logits = decoder(h + b[:, None])
-                token_losses.append(mixture_fn(logits, y))
-
-            losses.append(th.stack(token_losses).mean())
-
-        # Compute the loss for the entire sequence at once in parallel
-        else:
-            logits = decoder(hidden + bias[:, None])
-            losses.append(mixture_fn(logits[..., :-1, :], labels[:, 1:]))
-
-    return losses
