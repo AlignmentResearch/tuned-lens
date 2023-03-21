@@ -242,7 +242,7 @@ class TunedLens(Lens):
         # Drop unrecognized config keys
         unrecognized = set(config) - set(inspect.getfullargspec(cls).kwonlyargs)
         for key in unrecognized:
-            print(f"TunedLens.load: ignoring config key '{key}'")
+            warn(f"Ignoring config key '{key}'")
             del config[key]
 
         lens = cls(**config)

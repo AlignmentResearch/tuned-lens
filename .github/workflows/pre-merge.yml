@@ -15,6 +15,21 @@ jobs:
     - uses: pre-commit/action@v3.0.0
       with:
         extra_args: ruff --all-files
+  test-docs:
+    name: "Run build docs and tune doctests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v3
+        with:
+          version: 3.9
+          cache: 'pip'
+      - name: Ensure no warnings
+        run: |
+          sphinx-build -W docs docs/_build
+      - name: Run doc-tests
+        run: |
+          cd docs && make doctest
   build-and-test:
     name: "Build Docker image and run unit tests within it"
     runs-on: ubuntu-latest
