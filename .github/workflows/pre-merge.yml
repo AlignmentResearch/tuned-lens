@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v3
         with:
-          version: 3.9
+          python-version: "3.9"
           cache: 'pip'
       - name: Ensure no warnings
         run: |
