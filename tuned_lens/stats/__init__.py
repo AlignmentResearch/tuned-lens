@@ -1,5 +1,4 @@
 from .anomaly import fit_anomaly_detector
-from .calibration import CalibrationError
 from .dimensionality import effective_rank
 from .distance import (
     aitchison,
