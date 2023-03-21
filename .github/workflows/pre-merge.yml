@@ -27,7 +27,7 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Ensure no warnings
         run: |
-          sphinx-build -W docs docs/_build
+          python -m sphinx -W docs docs/_build
       - name: Run doc-tests
         run: |
           cd docs && make doctest
