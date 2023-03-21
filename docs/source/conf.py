@@ -8,8 +8,9 @@
 
 from importlib import metadata
 
-project = "Tuned Lens"
+project = "tuned-lens"
 copyright = "2023, FAR AI"
+html_title = "Tuned Lens 🔎"
 author = (
     "Nora Belrose"
     " Zach Furman,"
@@ -21,9 +22,6 @@ author = (
     " Jacob Steinhardt"
 )
 release = metadata.version("tuned_lens")
-
-# -- General configuration ---------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
     "sphinx.ext.napoleon",
@@ -38,11 +36,16 @@ napoleon_use_param = False
 napoleon_use_ivar = True
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["build", "Thumbs.db", ".DS_Store"]
 
-
-# -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = "furo"
 html_static_path = ["_static"]
+html_theme_options = {
+    "source_repository": "https://github.com/AlignmentResearch/tuned-lens",
+    "source_branch": "main",
+    "source_directory": "docs/source",
+    "light_css_variables": {
+        "sidebar-item-font-size": "85%",
+    },
+}
