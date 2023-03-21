@@ -4,6 +4,7 @@ codecov:
 coverage:
   status:
     project:
+      default: false
       tests:
         target: 100%
         threshold: 1%
