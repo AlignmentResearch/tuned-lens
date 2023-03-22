@@ -11,9 +11,14 @@ to peak at the iterative computations a transformer uses to compute the next tok
 
 What is a Lens?
 ~~~~~~~~~~~~~~~
-A lens into a transformer with n layers allows you to replace the last $m$ layers of the model with an `affine transformation`_ (we call these affine translators).
 
-This skips over these last few layers and lets you see the best prediction that can be made from the model's intermediate representations, i.e. the residual stream, at layer $n - m$. Since the representations may be rotated, shifted, or stretched from layer to layer it's useful to train an affine specifically on each layer. This training is what differentiates this method from simpler approaches that decode the residual stream of the network directly using the unembeding layer i.e. the `logit lens`_. We explain this process and its applications in the paper `Eliciting Latent Predictions from Transformers with the Tuned Lens`_.
+.. figure:: _static/lens_diagram.png
+  :alt: A diagram showing how a translator within the lens allows you to skip intermediate layers.
+  :width: 500
+
+A lens into a transformer with n layers allows you to replace the last :math:`m` layers of the model with an `affine transformation`_ (we call these affine translators).
+
+This skips over these last few layers and lets you see the best prediction that can be made from the model's intermediate representations, i.e. the residual stream, at layer :math:`n - m`. Since the representations may be rotated, shifted, or stretched from layer to layer it's useful to train an affine specifically on each layer. This training is what differentiates this method from simpler approaches that decode the residual stream of the network directly using the unembeding layer i.e. the `logit lens`_. We explain this process and its applications in the paper `Eliciting Latent Predictions from Transformers with the Tuned Lens`_.
 
 .. toctree::
     :maxdepth: 2

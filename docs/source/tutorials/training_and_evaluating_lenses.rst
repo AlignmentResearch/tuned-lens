@@ -2,7 +2,7 @@
     How to train and evaluate lenses on the pile
 
 ==============================
-Training and Evaluating Lenses
+Training and evaluating lenses
 ==============================
 
 **Downloading the Dataset**
