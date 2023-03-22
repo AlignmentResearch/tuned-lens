@@ -11,8 +11,10 @@ coverage:
       tuned_lens:
         target: auto
         threshold: 1%
-        if_not_found: success
-        if_ci_failed: error
+    patch:
+      tuned_lens:
+        target: 95%
+        threshold: 1%
 
 flags:
   tests:
