@@ -24,9 +24,6 @@ The reason we need to train a affine translator is because the representations m
 ### Acknowledgments
 Originally concieved by [Igor Ostrovsky](https://twitter.com/igoro) and [Stella Biderman](https://www.stellabiderman.com/) at [EleutherAI](https://www.eleuther.ai/), this library was built as a collaboration between FAR and EleutherAI researchers.
 
-> **Warning**
-> This package has not reached 1.0 yet. Expect the public interface to change regularly and without a major version bump.
-
 ## Install instructions
 ### Installing From Source
 First you will need to install the basic prerequisites into a virtual environment
@@ -66,3 +63,6 @@ If you find this library useful, please cite it as
   year={2023}
 }
 ```
+
+> **Warning**
+> This package has not reached 1.0. Expect the public interface to change regularly and without a major version bumps.
