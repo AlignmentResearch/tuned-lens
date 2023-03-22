@@ -25,7 +25,7 @@ The reason we need to train a affine translator is because the representations m
 Originally concieved by [Igor Ostrovsky](https://twitter.com/igoro) and [Stella Biderman](https://www.stellabiderman.com/) at [EleutherAI](https://www.eleuther.ai/), this library was built as a collaboration between FAR and EleutherAI researchers.
 
 ## Install instructions
-### Installing From Source
+### Installing from PyPI
 First you will need to install the basic prerequisites into a virtual environment
 * Python 3.9+
 * Pytorch 1.12.0+
@@ -35,8 +35,8 @@ then you can simply install the package using pip.
 pip install tuned-lens
 ```
 
-### Install Using Docker
-If you prefer to run the code from within a container you can use the provided docker
+### Installing the container
+If you prefer to run the training scripts from within a container you can use the provided docker
 file
 ```
 docker pull ghcr.io/alignmentresearch/tuned-lens:latest
