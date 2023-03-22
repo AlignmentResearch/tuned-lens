@@ -11,7 +11,12 @@ from importlib import metadata
 project = "tuned-lens"
 copyright = "2023, FAR AI"
 html_title = "Tuned Lens"
-html_favicon = "_static/favicon.svg"
+html_favicon = (
+    "data:image/svg+xml,"
+    "<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22>"
+    "<text y=%22.9em%22 font-size=%2290%22>🔎</text>"
+    "</svg>"
+)
 author = (
     "Nora Belrose"
     " Zach Furman,"

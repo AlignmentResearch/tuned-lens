@@ -49,6 +49,7 @@ docker run --rm tuned-lens:latest tuned-lens --help
 ## Contributing
 Make sure to install the dev dependencies and install the pre-commit hooks
 ```
+$ git clone https://github.com/AlignmentResearch/tuned-lens.git
 $ pip install -e ".[dev]"
 $ pre-commit install
 ```
