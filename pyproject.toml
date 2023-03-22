@@ -31,6 +31,7 @@ dev = [
 ]
 docs = [
     "furo",
+    "myst-parser",
     "sphinx",
     "sphinx-autodoc-typehints",
     "sphinx-rtd-theme",
