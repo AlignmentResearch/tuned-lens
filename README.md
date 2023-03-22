@@ -1,4 +1,12 @@
 # Tuned Lens 🔎
+<a target="_blank" href="https://colab.research.google.com/github/AlignmentResearch/tuned-lens/blob/main/notebooks/interactive.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+<a target="_blank" href="https://huggingface.co/spaces/AlignmentResearch/tuned-lens">
+<img src="https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm-dark.svg", alt="Open in Spaces">
+</a>
+
+
 Tools for understanding how transformer predictions are built layer-by-layer
 
 ![Using the Tuned-lens](https://user-images.githubusercontent.com/12176390/224879115-8bc95f26-68e4-4f43-9b4c-06ca5934a29d.png)
@@ -10,7 +18,7 @@ A lens into a transformer with n layers allows you to replace the last $m$ layer
 This skips over these last few layers and lets you see the best prediction that can be made from the model's intermediate representations, i.e. the residual stream, at layer $n - m$. Since the representations may be rotated, shifted, or stretched from layer to layer it's useful to train an affine specifically on each layer. This training is what differentiates this method from simpler approaches that decode the residual stream of the network directly using the unembeding layer i.e. the [logit lens](https://www.lesswrong.com/posts/AcKRB8wDpdaN6v6ru/interpreting-gpt-the-logit-lens). We explain this process and its applications in a forthcoming paper "Eliciting Latent Predictions from Transformers with the Tuned Lens".
 
 ### Acknowledgments
-Originally concieved by [Igor Ostrovsky](https://twitter.com/igoro?lang=en) and [Stella Biderman](www.stellabiderman) at [EleutherAI](www.eleuther.ai), this library was built as a collaboration between FAR and EleutherAI researchers.
+Originally concieved by [Igor Ostrovsky](https://twitter.com/igoro) and [Stella Biderman](https://www.stellabiderman.com/) at [EleutherAI](https://www.eleuther.ai/), this library was built as a collaboration between FAR and EleutherAI researchers.
 
 > **Warning**
 > This package has not reached 1.0 yet. Expect the public interface to change regularly and without a major version bump.

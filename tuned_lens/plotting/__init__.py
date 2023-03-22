@@ -1,3 +1,2 @@
-"""Tools for plotting."""
-from .interventions import plot_stimulus_response_alignment
+"""Provides tools for plotting."""
 from .plot_lens import plot_lens

@@ -1,66 +1,6 @@
-"""Narest neighbors and the spearman corelation for logit vectors."""
-from typing import Optional, NamedTuple
-import math
+"""Provides implementation of spearman corelation for logit vectors."""
+from typing import Optional
 import torch as th
-
-
-class NearestNeighbors(NamedTuple):
-    """Return type of `nearest_neighbors`."""
-
-    kl_divergences: th.Tensor
-    indices: th.Tensor
-
-
-def nearest_neighbors(x: th.Tensor) -> NearestNeighbors:
-    """Find index of the KL nearest neighbor of each logit vector in a batch.
-
-    Args:
-        x: Tensor of shape [..., N, C] where C is the number of classes and N is the
-            number of logit vectors from which neighbors are selected.
-
-    Returns:
-        A namedtuple of tensors with shape [..., N]. The first tensor contains the KL
-        divergence of each logit vector to its nearest neighbor. The second tensor
-        contains the indices of the neighbors along the penultimate dimension of `x`.
-    """
-    # Normalize logits to log probabilities
-    log_p = x.log_softmax(-1)
-
-    # Matrix of pairwise cross-entropies
-    H = -log_p.exp() @ log_p.mT
-
-    # The second smallest value in each row is the nearest neighbor
-    H_p_q, indices = H.kthvalue(2)
-    return NearestNeighbors(
-        # KL = H(P, Q) - H(P)
-        H_p_q - th.linalg.diagonal(H),
-        indices,
-    )
-
-
-def sample_neighbors(
-    x: th.Tensor, tau: float = 1.0, *, generator: Optional[th.Generator] = None
-):
-    """Sample neighbors q of logit vectors p, inversely proportional to KL(p, q)."""
-    # If temperature is infinite, sample uniformly
-    if not math.isfinite(tau):
-        return th.randperm(x.shape[0], device=x.device, generator=generator)
-
-    # Matrix of pairwise cross-entropies
-    log_p = x.log_softmax(-1)
-    H = -log_p.exp() @ log_p.mT
-
-    # If temperature is zero, sample the nearest neighbor
-    if tau == 0.0:
-        # The second smallest value in each row is the nearest neighbor
-        return H.kthvalue(2).indices
-
-    kl = H - th.linalg.diagonal(H).unsqueeze(-1)
-    th.linalg.diagonal(kl).fill_(th.inf)
-    dist = kl.neg().div(tau).softmax(-1)
-
-    samples = dist.flatten(0, -2).multinomial(1, generator=generator)
-    return samples.view(*dist.shape[:-1])
 
 
 def spearmanr(
