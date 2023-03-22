@@ -6,10 +6,10 @@ from pathlib import Path
 import json
 import abc
 
-from ._model_specific import instantiate_layer, maybe_wrap
-from ..model_surgery import get_final_layer_norm, get_transformer_layers
+from ._model_specific import instantiate_layer
 from ..load_artifacts import load_lens_artifacts
-from transformers import PreTrainedModel
+from .decoder import Unembed, UnembedConfig
+from transformers import PreTrainedModel, PretrainedConfig
 from typing import Optional, Generator, Union
 import torch as th
 
@@ -25,9 +25,7 @@ class Lens(abc.ABC, th.nn.Module):
 class LogitLens(Lens):
     """Decodes the residual stream into logits using the unembeding matrix."""
 
-    layer_norm: th.nn.LayerNorm
-    unembedding: th.nn.Linear
-    extra_layers: th.nn.Sequential
+    unembed: Unembed
 
     def __init__(
         self,
@@ -44,28 +42,7 @@ class LogitLens(Lens):
         """
         super().__init__()
 
-        self.extra_layers = th.nn.Sequential()
-
-        d_model = model.config.hidden_size
-        vocab_size = model.config.vocab_size
-        assert isinstance(d_model, int) and isinstance(vocab_size, int)
-
-        # Currently we convert the decoder to full precision
-        self.unembedding = deepcopy(model.get_output_embeddings()).float()
-        if ln := get_final_layer_norm(model):
-            self.layer_norm = deepcopy(ln).float()
-        else:
-            self.layer_norm = th.nn.Identity()
-
-        if extra_layers:
-            _, layers = get_transformer_layers(model)
-            self.extra_layers.extend(
-                [maybe_wrap(layer) for layer in layers[-extra_layers:]]
-            )
-
-        # Try to prevent finetuning the decoder
-        self.layer_norm.requires_grad_(False)
-        self.unembedding.requires_grad_(False)
+        self.unembed = Unembed(model, extra_layers=extra_layers)
 
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Decode a hidden state into logits.
@@ -74,48 +51,38 @@ class LogitLens(Lens):
             h: The hidden state to decode.
             idx: the layer of the transformer these hidden states come from.
         """
-        h = self.extra_layers(h)
-        while isinstance(h, tuple):
-            h, *_ = h
-        return self.unembedding(self.layer_norm(h))
+        del idx
+        return self.unembed.forward(h)
 
 
 class TunedLens(Lens):
     """A tuned lens for decoding hidden states into logits."""
 
-    layer_norm: th.nn.LayerNorm
-    unembedding: th.nn.Linear
-    extra_layers: th.nn.Sequential
+    unembed: Unembed
     layer_translators: th.nn.ModuleList
+    input_translator: Optional[th.nn.Linear]
 
     def __init__(
         self,
         model: Optional[PreTrainedModel] = None,
         *,
         bias: bool = True,
-        extra_layers: int = 0,
         include_input: bool = True,
-        reuse_unembedding: bool = True,
+        extra_layers: int = 0,
         # Used when saving and loading the lens
-        model_config: Optional[dict] = None,
-        d_model: Optional[int] = None,
-        num_layers: Optional[int] = None,
-        vocab_size: Optional[int] = None,
+        model_config: Optional[PretrainedConfig] = None,
+        unembed_config: Optional[UnembedConfig] = None,
     ):
         """Create a TunedLens.
 
         Args:
             model : A pertained model from the transformers library you wish to inspect.
             bias : Whether to include a bias term in the translator layers.
+            include_input : Whether to include a lens that decodes the word embeddings.
             extra_layers : The number of extra layers to apply to the hidden states
                 before decoding into logits.
-
-            include_input : Whether to include a lens that decodes the word embeddings.
-            reuse_unembedding : Weather to reuse the unembedding matrix from the model.
             model_config : The config of the model. Used for saving and loading.
-            d_model : The models hidden size. Used for saving and loading.
-            num_layers : The number of layers in the model. Used for saving and loading.
-            vocab_size : The size of the vocabulary. Used for saving and loading.
+            unembed_config : The config of the unembeding matrix. Used for saving and
 
         Raises:
             ValueError: if neither a model or d_model, num_layers, and vocab_size,
@@ -125,66 +92,32 @@ class TunedLens(Lens):
 
         self.extra_layers = th.nn.Sequential()
 
-        if (
-            model
-            is None
-            == (d_model is None or num_layers is None or vocab_size is None)
-        ):
+        # Initializing from scratch without a model
+        if not (model is None or (model_config is None and unembed_config is None)):
             raise ValueError(
-                "Must provide either a model or d_model, num_layers, and vocab_size"
+                "Must provide either a model or a model_config and unembed_config."
             )
 
-        # Initializing from scratch without a model
-        if not model:
-            assert d_model and num_layers and vocab_size
-            self.layer_norm = th.nn.LayerNorm(d_model)
-            self.unembedding = th.nn.Linear(d_model, vocab_size, bias=False)
-
+        if model is not None:
+            model_config = model.config
+            self.unembed = Unembed(model=model, extra_layers=extra_layers)
         # Use HuggingFace methods to get decoder layers
+        elif model_config is not None and unembed_config is not None:
+            assert unembed_config is not None
+            self.unembed = Unembed(config=unembed_config)
         else:
-            assert not (d_model or num_layers or vocab_size)
-            d_model = model.config.hidden_size
-            num_layers = model.config.num_hidden_layers
-            vocab_size = model.config.vocab_size
-            assert isinstance(d_model, int) and isinstance(vocab_size, int)
+            raise ValueError(
+                "Must provide either a model or a model_config and unembed_config."
+            )
 
-            model_config = model.config.to_dict()  # type: ignore[F841]
+        translator = th.nn.Linear(model_config.d_model, model_config.d_model, bias=bias)
+        translator.weight.data.zero_()
+        translator.bias.data.zero_()
 
-            # Currently we convert the decoder to full precision
-            self.unembedding = deepcopy(model.get_output_embeddings()).float()
-            if ln := get_final_layer_norm(model):
-                self.layer_norm = deepcopy(ln).float()
-            else:
-                self.layer_norm = th.nn.Identity()
+        self.input_translator = translator if include_input else None
 
-            if extra_layers:
-                _, layers = get_transformer_layers(model)
-                self.extra_layers.extend(
-                    [maybe_wrap(layer) for layer in layers[-extra_layers:]]
-                )
-
-        # Save config for later
-        config_keys = set(inspect.getfullargspec(TunedLens).kwonlyargs)
-        self.config = {k: v for k, v in locals().items() if k in config_keys}
-        del model_config
-
-        # Try to prevent finetuning the decoder
-        assert d_model and num_layers
-        self.layer_norm.requires_grad_(False)
-        self.unembedding.requires_grad_(False)
-
-        out_features = d_model if reuse_unembedding else vocab_size
-        translator = th.nn.Linear(d_model, out_features, bias=bias)
-        if not reuse_unembedding:
-            translator.weight.data = self.unembedding.weight.data.clone()
-            translator.bias.data.zero_()
-        else:
-            translator.weight.data.zero_()
-            translator.bias.data.zero_()
-
-        self.add_module("input_translator", translator if include_input else None)
         # Don't include the final layer
-        num_layers -= 1
+        num_layers = model_config.num_hidden_layers - 1
 
         self.layer_translators = th.nn.ModuleList(
             [deepcopy(translator) for _ in range(num_layers)]
@@ -219,6 +152,7 @@ class TunedLens(Lens):
         Returns:
             A TunedLens instance.
         """
+        # TODO this still needs to be refactored
         config_path, ckpt_path = load_lens_artifacts(resource_id)
         # Load config
         with open(config_path, "r") as f:
@@ -303,21 +237,10 @@ class TunedLens(Lens):
 
     def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Transform hidden state from layer `idx`."""
-        if not self.config["reuse_unembedding"]:
-            raise RuntimeError("TunedLens.transform_hidden requires reuse_unembedding")
-
         # Note that we add the translator output residually, in contrast to the formula
         # in the paper. By parametrizing it this way we ensure that weight decay
         # regularizes the transform toward the identity, not the zero transformation.
         return h + self[idx](h)
-
-    def to_logits(self, h: th.Tensor) -> th.Tensor:
-        """Decode a hidden state into logits."""
-        h = self.extra_layers(h)
-        while isinstance(h, tuple):
-            h, *_ = h
-
-        return self.unembedding(self.layer_norm(h))
 
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Transform and then decode the hidden states into logits."""
@@ -325,18 +248,12 @@ class TunedLens(Lens):
         # if any(p.requires_grad for p in self.parameters(recurse=False)):
         #     raise RuntimeError("Make sure to freeze the decoder")
 
-        # We're learning a separate unembedding for each layer
-        if not self.config["reuse_unembedding"]:
-            h_ = self.layer_norm(h)
-            return self[idx](h_)
-
         h = self.transform_hidden(h, idx)
-        return self.to_logits(h)
+        return self.unembed(h)
 
     def __len__(self) -> int:
         """Return the number of layer translators in the lens."""
         N = len(self.layer_translators)
         if self.input_translator:
             N += 1
-
         return N

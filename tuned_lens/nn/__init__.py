@@ -1,6 +1,6 @@
 """A set of PyTorch modules for transforming the residual streams of models."""
 from .decoder import (
-    Decoder,
+    Unembed,
     InversionOutput,
 )
 from .downstream_wrapper import DownstreamWrapper

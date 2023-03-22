@@ -2,7 +2,8 @@
 from dataclasses import dataclass
 from torch.autograd.functional import hessian
 from torch.distributions import Distribution
-from transformers import PreTrainedModel
+from ._model_specific import instantiate_layer
+from transformers import PreTrainedModel, PretrainedConfig
 from typing import cast, Callable, Literal, Optional
 from tuned_lens.model_surgery import get_final_layer_norm, get_transformer_layers
 from tuned_lens.stats import kl_divergence
@@ -19,30 +20,38 @@ class InversionOutput:
     kl: th.Tensor
     loss: th.Tensor
     nfev: int
-
     hessian: Optional[th.Tensor]
 
 
-class Decoder(th.nn.Module):
-    """Module that maps transformer hidden states to logits (and vice versa).
+@dataclass
+class UnembedConfig:
+    model_config: PretrainedConfig
+    extra_layers: int = 0
 
-    This class can be instantiated in two ways: (1) From a HuggingFace model, in which
-    case it will extract the unembedding matrix and layer norm from the model; (2) From
-    scratch, in which case it will initialize the unembedding matrix and layer norm
-    with the provided `d_model` and `vocab_size` args. The second option mainly exists
-    for compatibility with PyTorch state dicts.
-    """
+    @property
+    def d_model(self) -> int:
+        return self.model_config.d_model
+
+    @property
+    def vocab_size(self) -> int:
+        return self.model_config.vocab_size
+
+
+class Unembed(th.nn.Module):
+    """Module that maps transformer hidden states to logits (and vice versa)."""
+
+    config: UnembedConfig
+    transformer_layers: th.nn.ModuleList
+    layer_norm: th.nn.LayerNorm
+    unembedding: th.nn.Linear
+
+    _U_pinv: th.Tensor
 
     def __init__(
         self,
         model: Optional[PreTrainedModel] = None,
-        num_transformer_layers: int = 0,
-        *,
-        # Automatically set when model is provided
-        d_model: Optional[int] = None,
-        vocab_size: Optional[int] = None,
-        # Overridden by model if provided
-        norm_eps: float = 1e-5,
+        extra_layers: int = 0,
+        config: Optional[UnembedConfig] = None,
     ):
         """Initialize the decoder.
 
@@ -58,26 +67,43 @@ class Decoder(th.nn.Module):
             norm_eps: The epsilon value for the layer norm.
         """
         super().__init__()
-
-        self.num_transformer_layers = num_transformer_layers
         self.transformer_layers = th.nn.ModuleList()
-
         # Initializing from scratch without a model
-        if not model:
-            assert d_model and vocab_size
-            self.layer_norm = th.nn.LayerNorm(
-                d_model, elementwise_affine=False, eps=norm_eps
-            )
-            self.unembedding = th.nn.Linear(d_model, vocab_size)
+        if model and config:
+            raise ValueError("Must provide either a model xor a config.")
 
-        # Starting from a HuggingFace model
+        if model:
+            self.config = UnembedConfig(model.config, extra_layers)
+            self._init_from_model(model)
+        elif config:
+            self.config = config
+            self._init_from_config(config)
         else:
-            self.load_from_model(model)
+            raise ValueError("Must provide a config if not providing a model.")
 
         # In general we don't want to finetune the decoder
         self.requires_grad_(False)
 
-    def load_from_model(self, model: PreTrainedModel):
+    def _init_from_config(self, config: UnembedConfig):
+        """Randomly initialize the unembedding matrix and layer norm."""
+        self.config = config
+        self.layer_norm = th.nn.LayerNorm(self.config.d_model, elementwise_affine=False)
+        self.unembedding = th.nn.Linear(self.config.d_model, self.config.vocab_size)
+
+        model_type = self.config.model_config.model_type
+        self.transformer_layers.extend(
+            instantiate_layer(
+                self.config.model_config,
+                self.config.model_config.num_hidden_layers - i - 1,
+                model_type,
+            )
+            for i in range(self.config.extra_layers)
+        )
+
+        U = self.unembedding.weight.data.float()
+        self.register_buffer("_U_pinv", U.pinverse())
+
+    def _init_from_model(self, model: PreTrainedModel):
         """Load the unembedding matrix and layer norm from a HuggingFace model."""
         raw_ln = get_final_layer_norm(model)
         assert raw_ln is not None
@@ -120,12 +146,13 @@ class Decoder(th.nn.Module):
         U -= U.mean(dim=1, keepdim=True)
         self.unembedding.weight.data = U.to(raw_unembed.weight.dtype)
 
-        self.register_buffer("U_pinv", U.pinverse())
+        # We precompute the pseudo-inverse of the unembedding matrix
+        self.register_buffer("_U_pinv", U.pinverse())
 
-        if self.num_transformer_layers:
+        if self.config.extra_layers > 0:
             _, layers = get_transformer_layers(model)
             self.transformer_layers.extend(
-                layers[-self.num_transformer_layers :]  # type: ignore[arg-type]
+                layers[-self.config.extra_layers, :]  # type: ignore[arg-type]
             )
 
     def forward(self, h: th.Tensor, transform: Callable = lambda x: x) -> th.Tensor:
