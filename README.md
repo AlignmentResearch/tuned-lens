@@ -15,7 +15,7 @@ This package provides a simple interface training and evaluating __tuned lenses_
 
 
 ## What is a Lens?
-<img alt="A diagram showing how a translator within the lens allows you to skip intermediate layers." src="docs/source/_static/lens_diagram.png"  width=400\>
+<img alt="A diagram showing how a translator within the lens allows you to skip intermediate layers." src="https://user-images.githubusercontent.com/12176390/227057947-1ef56811-f91f-48ff-8d2d-ff04cc599125.png"  width=400\>
 
 A lens into a transformer with $n$ layers allows you to replace the last $m$ layers of the model with an [affine transformation](https://pytorch.org/docs/stable/generated/torch.nn.Linear.html) (we call these affine translators). Each affine translator, is trained to minimize the KL divergence between its prediction and the final output distribution of the original model. This means that after training the tuned lens allows you to skips over these last few layers and see the best prediction that can be made from the model's intermediate representations, i.e. the residual stream, at layer $n - m$.
 
