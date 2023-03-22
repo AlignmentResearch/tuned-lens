@@ -1,5 +1,5 @@
 """A set of PyTorch modules for transforming the residual streams of models."""
-from .decoder import (
+from .unembed import (
     Unembed,
     InversionOutput,
 )

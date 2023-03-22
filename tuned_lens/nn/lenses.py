@@ -8,7 +8,7 @@ import abc
 
 from ._model_specific import instantiate_layer
 from ..load_artifacts import load_lens_artifacts
-from .decoder import Unembed, UnembedConfig
+from .unembed import Unembed, UnembedConfig
 from transformers import PreTrainedModel, PretrainedConfig
 from typing import Optional, Generator, Union
 import torch as th
