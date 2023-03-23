@@ -103,7 +103,7 @@ def main(args):
             auto_wrap_policy=partial(
                 transformer_auto_wrap_policy, transformer_layer_cls={layer_cls}
             ),
-            cpu_offload=CPUOffload(offload_params=True),
+            cpu_offload=CPUOffload(offload_params=args.cpu_offload),
             device_id=local_rank,
             # This turns out to be important for training speed
             forward_prefetch=True,
@@ -113,6 +113,8 @@ def main(args):
                 buffer_dtype=th.float16,
             ),
         )
+    elif args.cpu_offload:
+        raise ValueError("CPU offload requires FSDP.")
     else:
         model.to(local_rank)
 
