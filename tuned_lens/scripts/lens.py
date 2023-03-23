@@ -118,7 +118,9 @@ def main(args):
 
     # Load tokenizer & data
     tokenizer = AutoTokenizer.from_pretrained(
-        args.tokenizer or args.model_name, use_fast=not args.slow_tokenizer
+        args.tokenizer or args.model_name,
+        use_fast=not args.slow_tokenizer,
+        revision=args.revision,
     )
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
     silence_datasets_messages()
