@@ -1,3 +1,4 @@
+"""Provides implementation of spearman corelation for logit vectors."""
 from typing import Optional
 import torch as th
 

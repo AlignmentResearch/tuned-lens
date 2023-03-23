@@ -1,3 +1,5 @@
+"""Script to train or evaluate a set of tuned lenses for a language model."""
+
 from .scripts.lens import main as lens_main
 from argparse import ArgumentParser
 from contextlib import nullcontext, redirect_stdout
@@ -7,6 +9,7 @@ import torch.distributed as dist
 
 
 def run():
+    """Run the script."""
     parser = ArgumentParser(
         description="Train or evaluate a set of tuned lenses for a language model.",
     )

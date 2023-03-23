@@ -1,3 +1,4 @@
+"""Provides a class for collecting and manipulating transformer hidden states."""
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import starmap, zip_longest

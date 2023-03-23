@@ -36,6 +36,7 @@ import torch.distributed as dist
 
 
 def main(args):
+    """The main entry point for the command line script."""
     local_rank = dist.get_rank() if dist.is_initialized() else 0
 
     # Deterministically choose a temporary cache directory shared

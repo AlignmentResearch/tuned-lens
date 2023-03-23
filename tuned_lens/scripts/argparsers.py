@@ -1,10 +1,10 @@
+"""Provides function for creating the argument parse for the CBE command."""
 from argparse import ArgumentParser
 from pathlib import Path
 
 
 def get_cbe_parser() -> ArgumentParser:
     """Return the parser for the `bases` subcommand."""
-
     parser = ArgumentParser(
         description="Train or evaluate a set of causal bases for a language model.",
         add_help=False,

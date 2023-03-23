@@ -1,3 +1,5 @@
+"""Compute online mean and covariance for residual streams."""
+
 from ..residual_stream import ResidualStream
 from typing import Optional
 import torch as th
@@ -13,6 +15,12 @@ class ResidualStats:
 
     # By default we accumulate in double precision to minimize numerical error
     def __init__(self, cov: bool = True, dtype: th.dtype = th.float64):
+        """Create a new ResidualStats object.
+
+        Args:
+            cov: Whether to compute the covariance matrix.
+            dtype: The dtype to use for calculations.
+        """
         self._mu: Optional[ResidualStream] = None
         self._M2: Optional[ResidualStream] = None
         self._mean_norm: Optional[ResidualStream] = None
@@ -100,4 +108,5 @@ class ResidualStats:
         return self._M2.map(lambda x: th.linalg.diagonal(x).div(self.n - 1).to(dtype))
 
     def __repr__(self) -> str:
+        """Return a string representation of the object."""
         return f"ResidualStats(n={self.n})"

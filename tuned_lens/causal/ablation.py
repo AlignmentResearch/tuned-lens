@@ -1,7 +1,8 @@
+"""Provides tools for ablating layers of a transformer model."""
 from ..model_surgery import get_transformer_layers
 from .utils import derange
 from contextlib import contextmanager
-from typing import Literal, Optional
+from typing import Literal
 import torch as th
 
 
@@ -12,7 +13,6 @@ def ablate_layer(
     method: Literal["resample", "mean", "zero"],
     *,
     mode: Literal["batch", "token"] = "batch",
-    target_sample: Optional[int] = None,
 ):
     """Replace residual outputs of the specified layer with dummy values.
 
@@ -24,6 +24,7 @@ def ablate_layer(
     Args:
         model: The model to modify.
         layer_index: The index of the layer to modify.
+        method: How to ablate the layer see above.
         mode: Whether to compute the mean only over the batch dimension or over the
             batch and token dimensions.
     """
@@ -44,11 +45,6 @@ def ablate_layer(
         batch_size = x.shape[0]
         if batch_size < 2:
             raise ValueError("Mean ablation requires a batch size >= 2")
-
-        nonlocal target_sample
-        if target_sample is not None:
-            x = x[None, target_sample]
-            target_sample = None
 
         if method == "resample":
             ablated = x + derange(residuals)
