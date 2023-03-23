@@ -10,7 +10,6 @@ from typing import Optional
 from tuned_lens.residual_stream import record_residual_stream
 from tuned_lens.stats import ResidualStats, LogitStats
 from tuned_lens.nn import Decoder, TunedLens
-from tuned_lens.stats import CalibrationError
 from tuned_lens.utils import (
     maybe_all_cat,
     maybe_all_reduce,
@@ -69,10 +68,7 @@ def eval_loop(
     batches = []
     transfer_batches = []
 
-    final_calibration = CalibrationError()
     grad_alignments = [[] for _ in range(L)]
-    ll_calibration = [CalibrationError() for _ in range(L)]
-    tl_calibration = [CalibrationError() for _ in range(L)]
 
     final_logit_stats = LogitStats()
     ll_statistics = [LogitStats() for _ in range(L)]
@@ -122,7 +118,6 @@ def eval_loop(
                 )
                 h.grad = None
 
-            ll_calibration[j].update(labels, shift_preds(baseline_lps.exp(), shift))
             ll_statistics[j].update(baseline_lps, assume_normalized=True)
 
             batch_output["baseline_ce"][name] = losses
@@ -150,7 +145,6 @@ def eval_loop(
                 batch_output["lens_kl"][name] = th.sum(
                     final_probs * (final_lps - lens_lps), dim=-1
                 )
-                tl_calibration[j].update(labels, shift_preds(lens_probs, shift))
                 tl_statistics[j].update(lens_lps, assume_normalized=True)
 
                 if args.transfer:
@@ -166,7 +160,6 @@ def eval_loop(
                             lens_probs * (lens_lps - transfer_lps), dim=-1
                         ).mean()
 
-        final_calibration.update(labels, shift_preds(final_probs, shift))
         final_logit_stats.update(final_lps, assume_normalized=True)
         if args.residual_stats:
             # Drop the first token because it's weird
@@ -213,15 +206,9 @@ def eval_loop(
     for stats in ll_statistics:
         stats.all_reduce_()
 
-    final_calibration.all_gather_()
-    for cal in ll_calibration:
-        cal.all_gather_()
-
     if lens:
         for stats in tl_statistics:
             stats.all_reduce_()
-        for cal in tl_calibration:
-            cal.all_gather_()
 
     if args.grad_alignment:
         grad_alignments = [maybe_all_cat(th.cat(x, dim=0)) for x in grad_alignments]
@@ -236,7 +223,3 @@ def eval_loop(
         th.save(ll_statistics, root_dir / "ll_logit_stats.pt")
         if lens:
             th.save(tl_statistics, root_dir / "tl_logit_stats.pt")
-            th.save(tl_calibration, root_dir / "tl_calibration.pt")
-
-        th.save(final_calibration, root_dir / "final_calibration.pt")
-        th.save(ll_calibration, root_dir / "ll_calibration.pt")
