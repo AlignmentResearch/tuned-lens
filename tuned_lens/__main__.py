@@ -27,6 +27,11 @@ def run():
         "suitable to be passed to the HuggingFace load_dataset function.",
     )
     parent_parser.add_argument(
+        "--cpu-offload",
+        action="store_true",
+        help="Use CPU offloading. Must be combined with --fsdp.",
+    )
+    parent_parser.add_argument(
         "--fsdp",
         action="store_true",
         help="Run the model with Fully Sharded Data Parallelism.",
