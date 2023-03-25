@@ -98,6 +98,11 @@ def run():
         'will use AutoTokenizer.from_pretrained("<model name>").',
     )
     parent_parser.add_argument(
+        "--tokenizer-class",
+        type=str,
+        help="Name of tokenizer class to use. If None, will use AutoTokenizer.",
+    )
+    parent_parser.add_argument(
         "--token-shift",
         type=int,
         default=None,
