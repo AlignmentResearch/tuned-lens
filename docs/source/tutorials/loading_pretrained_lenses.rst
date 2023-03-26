@@ -47,6 +47,7 @@ to the load method.
     temp_dir.cleanup()
 
 Note the folder structure must look as follows:
+
 .. code-block:: text
 
     path/to/folder
