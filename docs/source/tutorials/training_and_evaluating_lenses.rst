@@ -8,11 +8,11 @@ Training and evaluating lenses
 **Downloading the Dataset**
 
 The experiments in the paper were run by training a lens on the validation set of the pile.
-.. code-block:: bash
+
+.. code-block:: console
 
    wget https://the-eye.eu/public/AI/pile/val.jsonl.zst
    unzstd val.jsonl.zst
-
    wget https://the-eye.eu/public/AI/pile/test.jsonl.zst
    unzstd test.jsonl.zst
 
