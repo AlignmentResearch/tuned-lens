@@ -1,6 +1,6 @@
 # syntax = docker/dockerfile:1
 
-FROM nvidia/cuda:11.6.0-devel-ubuntu20.04 as base
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 as base
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -14,7 +14,7 @@ RUN apt update \
 
 # install pytorch
 ARG PYTORCH='1.13.1'
-ARG CUDA='cu116'
+ARG CUDA='cu118'
 
 RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; python3.9 -m pip install --no-cache-dir -U $VERSION --extra-index-url https://download.pytorch.org/whl/$CUDA
 
