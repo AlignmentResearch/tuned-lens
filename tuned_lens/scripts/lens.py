@@ -33,7 +33,6 @@ import pickle
 import shutil
 import torch as th
 import torch.distributed as dist
-import transformers
 
 
 def main(args):
@@ -60,8 +59,7 @@ def main(args):
             cache_dir=cache_dir,
             low_cpu_mem_usage=True,
             revision=args.revision,
-            torch_dtype=th.float16,
-            # torch_dtype="auto",
+            torch_dtype="auto",
         )
 
     # Make sure all ranks have loaded the model, then delete the cache
@@ -120,18 +118,11 @@ def main(args):
     else:
         model.to(local_rank)
 
-    # Load tokenizer & data
-    if args.tokenizer_class:
-        tokenizer_cls = getattr(transformers, args.tokenizer_class, None)
-        if not tokenizer_cls:
-            raise ValueError(f"Unknown tokenizer class: {args.tokenizer_class}")
-    else:
-        tokenizer_cls = AutoTokenizer
-
-    tokenizer = tokenizer_cls.from_pretrained(
+    tokenizer = AutoTokenizer.from_pretrained(
         args.tokenizer or args.model_name,
         revision=args.revision,
         use_fast=not args.slow_tokenizer,
+        tokenizer_type=args.tokenizer_class,
     )
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
     silence_datasets_messages()
