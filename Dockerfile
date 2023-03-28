@@ -13,7 +13,7 @@ RUN apt update \
 ARG PYTORCH='1.13.1'
 ARG CUDA='cu118'
 
-RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; python3 -m pip install --no-cache-dir -U $VERSION --extra-index-url https://download.pytorch.org/whl/$CUDA
+RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; python3 -m pip install --no-cache-dir -U $VERSION --extra-index-url https://download.pytorch.org/whl/nightly/$CUDA
 
 # Install requirements for tuned lens repo note this only monitors
 # the pytpoject.toml file for changes
