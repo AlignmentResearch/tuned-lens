@@ -35,10 +35,13 @@ def test_logit_lens_smoke(logit_lens):
 def test_tuned_lens_smoke(tuned_lens: TunedLens):
     randn = th.randn(1, 10, 128)
     logits_forward = tuned_lens(randn, 0)
-    logits = tuned_lens.unembedding(
-        tuned_lens.layer_norm(randn + tuned_lens[0](tuned_lens.layer_norm(randn)))
-    )
+    logits = tuned_lens.unembed(randn + tuned_lens[0](tuned_lens.layer_norm(randn)))
     assert th.allclose(logits_forward, logits)
+
+
+def test_we_can_still_load_old_lenses():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        TunedLens.from_pretrained("gpt2", cache_dir=tmpdir)
 
 
 def test_tuned_lens_save_and_load(tuned_lens):
@@ -47,6 +50,6 @@ def test_tuned_lens_save_and_load(tuned_lens):
     logits_before = tuned_lens(randn, 1)
     with tempfile.TemporaryDirectory() as tmpdir:
         tuned_lens.save(tmpdir)
-        tuned_lens = TunedLens.load(tmpdir)
+        tuned_lens = TunedLens.from_pretrained(tmpdir)
         logits_after = tuned_lens(randn, 1)
         assert th.allclose(logits_before, logits_after)

@@ -141,19 +141,23 @@ class TunedLens(Lens):
         yield from self.layer_translators
 
     @classmethod
-    def load(cls, resource_id: str, **kwargs) -> "TunedLens":
-        """Load a tuned lens from a or hugging face hub.
+    def from_pretrained(
+        cls, resource_id: str, cache_dir: Optional[str] = None, **kwargs
+    ) -> "TunedLens":
+        """Load a tuned lens from a folder or hugging face hub.
 
         Args:
             resource_id : The path to the directory containing the config and checkpoint
                 or the name of the model on the hugging face hub.
+            cache_dir : The directory to cache the artifacts in if downloaded. If None,
+                will use the default huggingface cache directory.
             **kwargs : Additional arguments to pass to torch.load.
 
         Returns:
             A TunedLens instance.
         """
         # TODO this still needs to be refactored
-        config_path, ckpt_path = load_lens_artifacts(resource_id)
+        config_path, ckpt_path = load_lens_artifacts(resource_id, cache_dir=cache_dir)
         # Load config
         with open(config_path, "r") as f:
             config = json.load(f)
