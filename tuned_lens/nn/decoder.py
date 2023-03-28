@@ -262,7 +262,7 @@ class Decoder(th.nn.Module):
             nonlocal nfev, loss, kl
             nfev += 1
 
-            opt.zero_grad()
+            opt.zero_grad(set_to_none=False)
             loss, kl = compute_loss(h_star)
 
             if not loss.isfinite():

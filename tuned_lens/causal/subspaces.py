@@ -166,7 +166,7 @@ def extract_causal_bases(
                 nonlocal energy_delta, nfev, last_energy
                 nfev += 1
 
-                opt.zero_grad()
+                opt.zero_grad(set_to_none=False)
                 v_ = project(v)
                 h_ = remove_subspace(hiddens[i], v_, mode=mode, orthonormal=True)
 
@@ -200,7 +200,7 @@ def extract_causal_bases(
                 if not loss.isfinite():
                     print("Loss is not finite")
                     loss = th.tensor(0.0, device=device)
-                    opt.zero_grad()
+                    opt.zero_grad(set_to_none=False)
 
                 return loss
 

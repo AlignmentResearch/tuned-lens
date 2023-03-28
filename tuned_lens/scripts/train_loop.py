@@ -215,7 +215,7 @@ def train_loop(
         if rem == 0:
             th.nn.utils.clip_grad_norm_(lens.parameters(), 1.0)
             opt.step()
-            opt.zero_grad()
+            opt.zero_grad(set_to_none=False)
             scheduler.step()
 
             if local_rank == 0 and args.wandb:
