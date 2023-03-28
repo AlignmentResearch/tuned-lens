@@ -118,11 +118,11 @@ def main(args):
     else:
         model.to(local_rank)
 
-    # Load tokenizer & data
     tokenizer = AutoTokenizer.from_pretrained(
         args.tokenizer or args.model_name,
-        use_fast=not args.slow_tokenizer,
         revision=args.revision,
+        use_fast=not args.slow_tokenizer,
+        tokenizer_type=args.tokenizer_class,
     )
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
     silence_datasets_messages()
