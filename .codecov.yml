@@ -1,0 +1,26 @@
+codecov:
+  require_ci_to_pass: yes
+
+coverage:
+  status:
+    project:
+      default: false
+      tests:
+        target: 90%
+        threshold: 1%
+      tuned_lens:
+        target: auto
+        threshold: 1%
+    patch:
+      tuned_lens:
+        target: 60%
+        threshold: 1%
+
+flags:
+  tests:
+    paths:
+      - tests/
+    statuses:
+  tuned_lens:
+    paths:
+      - tuned_lens/
