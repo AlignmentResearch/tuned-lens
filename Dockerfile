@@ -1,6 +1,21 @@
 # syntax = docker/dockerfile:1
 
-FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime as base
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 as base
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt update \
+    && apt install -y git tini libsndfile1-dev tesseract-ocr espeak-ng python3 python3-pip ffmpeg zstd \
+    && python3 -m pip install --upgrade --no-cache-dir pip requests
+
+# install pytorch
+ARG PYTORCH='2.0'
+ARG CUDA='cu118'
+
+RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; python3 -m pip install --no-cache-dir -U $VERSION --extra-index-url https://download.pytorch.org/whl/nightly/$CUDA
+
+# Install requirements for tuned lens repo note this only monitors
+# the pytpoject.toml file for changes
 
 FROM base as prod
 ADD . .
