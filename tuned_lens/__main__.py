@@ -4,6 +4,7 @@ from .scripts.lens import main as lens_main
 from argparse import ArgumentParser
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
+import logging
 import os
 import torch.distributed as dist
 
@@ -254,7 +255,12 @@ def run():
         dist.init_process_group("nccl")
         local_rank = int(local_rank)
 
-    # Only print on rank 0
+    # Silence HF logging messages from all but the first process. This isn't covered
+    # by the `redirect_stdout` context manager below because warnings go to stderr.
+    if local_rank != 0:
+        logging.disable(logging.CRITICAL)
+
+    # Only print to stdout on rank 0
     with nullcontext() if not local_rank else redirect_stdout(None):
         args = parser.parse_args()
 

@@ -61,7 +61,7 @@ def main(args):
             device_map={"": f"cuda:{local_rank}"},
             low_cpu_mem_usage=True,
             revision=args.revision,
-            torch_dtype="auto",
+            torch_dtype=th.float16,
         )
 
     # Make sure all ranks have loaded the model, then delete the cache
@@ -127,7 +127,7 @@ def main(args):
         args.tokenizer or args.model_name,
         revision=args.revision,
         use_fast=not args.slow_tokenizer,
-        tokenizer_type=args.tokenizer_class,
+        tokenizer_type=args.tokenizer_type,
     )
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
     silence_datasets_messages()
