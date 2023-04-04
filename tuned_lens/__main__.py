@@ -7,6 +7,7 @@ from pathlib import Path
 import logging
 import os
 import torch.distributed as dist
+import warnings
 
 
 def run():
@@ -259,6 +260,7 @@ def run():
     # by the `redirect_stdout` context manager below because warnings go to stderr.
     if local_rank != 0:
         logging.disable(logging.CRITICAL)
+        warnings.filterwarnings("ignore")
 
     # Only print to stdout on rank 0
     with nullcontext() if not local_rank else redirect_stdout(None):

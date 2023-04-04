@@ -6,6 +6,7 @@ from transformers import PreTrainedTokenizerBase
 from typing import TypeVar, Union
 import logging
 import math
+import torch.distributed as dist
 import warnings
 
 
@@ -36,9 +37,15 @@ def chunk_and_tokenize(
     Returns:
         The chunked and tokenized dataset.
     """
-    return data.map(
+    # Worker 0 is responsible for tokenizing the dataset. We use a barrier to ensure
+    # that all workers wait until the dataset has been tokenized before continuing.
+    if dist.is_initialized() and dist.get_rank() != 0:
+        dist.barrier()
+
+    processed = data.map(
         partial(_tokenize_fn, tokenizer=tokenizer, text_key=text_key),
         batched=True,
+        desc="Tokenizing",
         num_proc=num_proc,
         remove_columns=get_columns_all_equal(data),
     ).with_format(
@@ -47,6 +54,12 @@ def chunk_and_tokenize(
         # elements of the dataset to a model
         columns=["input_ids"],
     )
+
+    # Let the other workers know that the dataset has been tokenized.
+    if dist.is_initialized() and dist.get_rank() == 0:
+        dist.barrier()
+
+    return processed
 
 
 def compute_nats_to_bpb_ratio(raw: T, tokenized: T) -> float:

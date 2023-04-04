@@ -49,12 +49,10 @@ def main(args):
     if args.random_model:
         print(f"Sampling random weights for model '{args.model_name}'...")
         config = AutoConfig.from_pretrained(args.model_name, revision=args.revision)
-        model = AutoModelForCausalLM.from_config(  # type: ignore
-            config, torch_dtype=th.float16
-        )
+        model = AutoModelForCausalLM.from_config(config, torch_dtype=th.float16)
     else:
         print(f"Loading pretrained weights for '{args.model_name}'...")
-        model = AutoModelForCausalLM.from_pretrained(  # type: ignore
+        model = AutoModelForCausalLM.from_pretrained(
             args.model_name,
             cache_dir=cache_dir,
             # Force HuggingFace to directly instantiate the model on the correct device
