@@ -57,6 +57,8 @@ def main(args):
         model = AutoModelForCausalLM.from_pretrained(  # type: ignore
             args.model_name,
             cache_dir=cache_dir,
+            # Force HuggingFace to directly instantiate the model on the correct device
+            device_map={"": f"cuda:{local_rank}"},
             low_cpu_mem_usage=True,
             revision=args.revision,
             torch_dtype="auto",
@@ -73,11 +75,12 @@ def main(args):
     model.eval()
     model.requires_grad_(False)
 
+    device = th.device("cuda", local_rank)
     th.cuda.set_device(local_rank)
 
     # Can be set either in eval or in training; in eval it's required
     if getattr(args, "lens", None):
-        lens = TunedLens.load(args.lens, map_location="cpu")
+        lens = TunedLens.load(args.lens, map_location=device)
     elif args.command in ("downstream", "eval"):
         lens = None
     else:
@@ -85,10 +88,12 @@ def main(args):
             model,
             extra_layers=args.extra_layers,
             reuse_unembedding=not args.separate_unembeddings,
-        ).float()
+        ).to(
+            device=device,
+            dtype=th.float32,
+        )
 
     if lens:
-        lens = lens.to(device=th.device("cuda", local_rank))
         print(f"Using lens with config: {json.dumps(lens.config, indent=2)}")
     else:
         print("No tuned lens provided, using logit lens.")
