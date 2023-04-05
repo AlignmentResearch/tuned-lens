@@ -2,6 +2,7 @@ Data/
 notebooks/memorization.ipynb
 .ruff_cache
 lens/
+.cvsignore
 
 
 # Byte-compiled / optimized / DLL files

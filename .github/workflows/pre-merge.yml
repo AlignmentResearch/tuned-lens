@@ -7,7 +7,7 @@ on:
 
 jobs:
   pre-commit:
-    name: "Pre-commit checks"
+    name: Pre-commit checks
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -16,7 +16,7 @@ jobs:
       with:
         extra_args: ruff --all-files
   test-docs:
-    name: "Run build docs and tune doctests"
+    name: Run build docs and tune doctests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -34,8 +34,29 @@ jobs:
       - name: Run doc-tests
         run: |
           cd docs && make doctest
-  build-and-test:
-    name: "Build Docker image and run unit tests within it"
+  python-build-and-test:
+    name: Install and run tests to ensure dependencies are specific enough.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout
+      - name: Setup python
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{matrix.python-version}}
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+      - name: Install dependencies
+        run: |
+          pip install -e .[test]
+      - name: Run basic unit tests
+        run: |
+          pytest
+  docker-build-and-test:
+    name: Build Docker image and run unit tests within it. Keeping track of coverage
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
