@@ -7,16 +7,93 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedTokenizerFast,
 )
-from typing import Any, NamedTuple, cast, Literal, Optional, Sequence, Union
-import math
+from numpy.typing import NDArray
+from dataclasses import dataclass
+from typing import (
+    Iterable,
+    cast,
+    Literal,
+    Optional,
+    Sequence,
+    Union,
+)
 import numpy as np
 import plotly.graph_objects as go
 import torch as th
 import torch.nn.functional as F
 
 
+@dataclass
+class TokenFormatter:
+    """Format tokens for display in a plot."""
+
+    ellipsis: str = "…"
+    newline_replacement: str = "\\n"
+    newline_token: str = "Ċ"
+    whitespace_token: str = "Ġ"
+    whitespace_replacement: str = "_"
+    max_string_len: Optional[int] = 7
+
+    def format(self, token: str) -> str:
+        """Format a token for display in a plot."""
+        if self.max_string_len is not None and len(token) > self.max_string_len:
+            token = token[: self.max_string_len - len(self.ellipsis)] + self.ellipsis
+        token = token.replace(self.newline_token, self.newline_replacement)
+        token = token.replace(self.whitespace_token, self.whitespace_replacement)
+        return token
+
+
+@dataclass
+class StreamLabels:
+    """Contains sets of labels for each layer and position in the residual stream."""
+
+    # (n_layers x sequence_length) label for each layer and position in the stream.
+    label_strings: NDArray[np.str_] = np.zeros((0, 0), dtype=str)
+    # (n_layers x sequence_length x k) k entries to display when hovering over a cell.
+    # For example, the top k prediction from the lens at each layer.
+    hover_over_entries: Optional[NDArray[np.str_]] = None
+
+
+@dataclass
+class PloatableStreamStatistic:
+    """This class represents a stream statistic that can be visualized.
+
+    For example, the entropy of the lens predictions at each layer. This class is
+    meant to serve as an interface for the plotting code.
+    """
+
+    # The name of the statistic.
+    name: str
+    # (n_layers x sequence_length) value of the statistic at each layer and position.
+    stats: NDArray[np.float32] = np.zeros((0, 0), dtype=float)
+    # (sequence_length) labels for the sequence dimension typically the input tokens.
+    sequence_labels: NDArray[np.str_] = np.zeros((0,), dtype=str)
+    # labels for each layer and position in the stream. For example, the top 1
+    # prediction from the lens at each layer.
+    stream_labels: Optional[StreamLabels] = None
+
+    units: Optional[str] = None
+    max: Optional[float] = None
+    min: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Validate class invariants."""
+        assert len(self.stats.shape) == 2
+        assert (
+            self.stream_labels is None
+            or self.stream_labels.label_strings.shape == self.stats.shape
+        )
+        assert self.stats.shape[1] == len(self.sequence_labels)
+
+    @property
+    def num_layers(self) -> int:
+        """Return the number of layers in the stream."""
+        return self.stats.shape[0]
+
+
 Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
 Statistic = Literal["ce", "entropy", "forward_kl", "max_prob"]
+Divergence = Literal["kl", "js"]
 
 
 @th.autocast("cuda", enabled=th.cuda.is_available())
@@ -34,12 +111,7 @@ def plot_lens(
     layer_stride: int = 1,
     statistic: Statistic = "entropy",
     min_prob: float = 0.0,
-    max_string_len: Optional[int] = 7,
-    ellipsis: str = "…",
-    newline_replacement: str = "\\n",
-    newline_token: str = "Ċ",
-    whitespace_token: str = "Ġ",
-    whitespace_replacement: str = "_",
+    token_formatter: Optional[TokenFormatter] = None,
     topk: int = 10,
     topk_diff: bool = False,
 ) -> go.Figure:
@@ -66,13 +138,8 @@ def plot_lens(
             * max_prob: The probability of the most likely token.
         min_prob: At least one token must have a probability greater than this for the
             lens prediction to be displayed.
-        max_string_len: If not None, clip the string representation of the tokens to
-            this length and add an ellipsis.
-        ellipsis: The string to use for the ellipsis.
-        newline_replacement: The string to replace newline tokens with.
-        newline_token: The substring to replace with newline_replacement.
-        whitespace_replacement: The string to replace whitespace tokens with.
-        whitespace_token: The substring to replace with whitespace_replacement.
+        token_formatter: A TokenFormatter to use for formatting the tokens to be
+            used as labels.
         topk: The number of tokens to visualize when hovering over a cell.
         topk_diff: If true show the top k tokens where the metric has changed the from
             the previous layer.
@@ -90,6 +157,9 @@ def plot_lens(
 
     if input_ids.nelement() < 1:
         raise ValueError("Input must be at least 1 token long.")
+
+    if token_formatter is None:
+        token_formatter = TokenFormatter()
 
     with record_residual_stream(model) as stream:
         outputs = model(input_ids.to(model.device))
@@ -130,11 +200,7 @@ def plot_lens(
 
     # Replace whitespace and newline tokens with their respective replacements
     format_fn = np.vectorize(
-        lambda x: x.replace(whitespace_token, whitespace_replacement).replace(
-            newline_token, newline_replacement
-        )
-        if isinstance(x, str)
-        else "<unk>"
+        lambda x: token_formatter.format(x) if isinstance(x, str) else "<unk>"
     )
 
     top_strings = (
@@ -142,8 +208,6 @@ def plot_lens(
         .map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
         .map(format_fn)
     )
-
-    max_color = math.log(model.config.vocab_size)
 
     if min_prob:
         top_strings = top_strings.zip_map(
@@ -154,54 +218,87 @@ def plot_lens(
             hidden_lps,
         )
 
-    p_stat = compute_statistics(
-        statistic, hidden_lps, model_logits=model_logits, targets=targets
+    plotable_stream = compute_statistics(
+        statistic, list(hidden_lps), model_logits=model_logits, targets=targets
     )
 
-    topk_strings_and_probs = _get_topk_probs(
-        hidden_lps=hidden_lps, tokenizer=tokenizer, k=topk, topk_diff=topk_diff
+    plotable_stream.stream_labels = StreamLabels(
+        label_strings=np.vstack(list(top_strings)),
+        hover_over_entries=_get_topk_probs(
+            hidden_lps=hidden_lps, tokenizer=tokenizer, k=topk, topk_diff=topk_diff
+        ),
     )
 
     color_scale = "blues"
     color_scale = "rdbu_r"
 
     return _plot_stream(
-        color_stream=p_stat.stats.map(lambda x: x.squeeze().cpu()),
-        colorbar_label=(p_stat.name + (f" ({p_stat.units})" if p_stat.units else "")),
+        plotable_stream=plotable_stream,
         layer_stride=layer_stride,
-        top_1_strings=top_strings,
-        top_k_strings_and_probs=format_fn(topk_strings_and_probs),
-        x_labels=format_fn(tokens),
-        vmax=max_color,
-        k=topk,
         title=lens.__class__.__name__ + (f" ({model.name_or_path})"),
         colorscale=color_scale,
-        ellipsis=ellipsis,
-        max_string_len=max_string_len,
     )
 
 
-class PlotableStatistic(NamedTuple):
-    """A plotable statistic."""
+@th.autocast("cuda", enabled=th.cuda.is_available())
+@th.no_grad()
+def compare_models(
+    model_a: PreTrainedModel,
+    model_b: PreTrainedModel,
+    tokenizer: Tokenizer,
+    lens: Lens,
+    *,
+    text: Optional[str] = None,
+    input_ids: Optional[th.Tensor] = None,
+    mask_input: bool = False,
+    start_pos: int = 0,
+    end_pos: Optional[int] = None,
+    layer_stride: int = 1,
+    token_formatter: Optional[TokenFormatter] = None,
+    divergence: Divergence = "kl",
+    min_prob: float = 0.0,
+    topk: int = 10,
+    topk_diff: bool = False,
+) -> go.Figure:
+    """Compare the predictions of two models using a lens."""
+    if topk < 1:
+        raise ValueError("topk must be greater than 0")
 
-    stats: ResidualStream
-    name: str
-    units: Optional[str] = None
-    max: Optional[float] = None
-    min: Optional[float] = None
+    if text is not None:
+        input_ids = cast(th.Tensor, tokenizer.encode(text, return_tensors="pt"))
+    elif input_ids is None:
+        raise ValueError("Either text or input_ids must be provided")
+
+    if input_ids.nelement() < 1:
+        raise ValueError("Input must be at least 1 token long.")
+
+    if token_formatter is None:
+        token_formatter = TokenFormatter()
+
+    with record_residual_stream(model_a) as stream_a:
+        outputs_a = model_a(input_ids.to(model_a.device))
+
+    with record_residual_stream(model_b) as stream_b:
+        outputs_b = model_b(input_ids.to(model_b.device))
+
+    locals()
+    # Compute the divergence between the two models
+
+    # Plot these divergences
 
 
 def compute_statistics(
     statistic: Statistic,
-    hidden_lps: ResidualStream,
+    hidden_lps: Sequence[th.Tensor],
     model_logits: th.Tensor,
     targets: th.Tensor,
-) -> PlotableStatistic:
+) -> PloatableStreamStatistic:
     """Compute a statistic for each layer in the stream.
 
     Args:
         statistic: The statistic to compute. One of "ce", "entropy", "kl", "kl_div".
-        hidden_lps: The stream of hidden layer log probabilities produced by a lens.
+        hidden_lps: (n_layers x vocab) The stream of hidden layer
+        log probabilities produced by a lens.
         model_logits: The logits produced by the model.
         targets: The target ids for the sequence.
 
@@ -209,6 +306,10 @@ def compute_statistics(
         A named tuple containing the statistics value at each layer and position
         and its name and units.
     """
+
+    def collect(stream: Iterable[th.Tensor]) -> NDArray[np.float32]:
+        return np.vstack(list(map(lambda x: x.cpu().numpy(), stream)))
+
     if statistic == "ce":
         assert targets.shape == hidden_lps[-1].shape[:-1], (
             "Batch and sequence lengths of targets and log probs must match."
@@ -216,33 +317,42 @@ def compute_statistics(
         )
         num_tokens = targets.nelement()
         targets = targets.reshape(num_tokens)
-        hidden_lps = hidden_lps.map(lambda x: x.reshape(num_tokens, -1))
-        return PlotableStatistic(
+        hidden_lps = list(map(lambda x: x.reshape(num_tokens, -1), hidden_lps))
+        return PloatableStreamStatistic(
             name="Cross Entropy",
             units="nats",
-            stats=hidden_lps.map(
-                lambda hlp: F.cross_entropy(hlp, targets, reduction="none")
+            stats=collect(
+                map(
+                    lambda hlp: F.cross_entropy(hlp, targets, reduction="none"),
+                    hidden_lps,
+                )
             ),
         )
     elif statistic == "entropy":
-        return PlotableStatistic(
+        return PloatableStreamStatistic(
             name="Entropy",
             units="nats",
-            stats=hidden_lps.map(lambda hlp: -th.sum(hlp.exp() * hlp, dim=-1)),
+            stats=collect(
+                map(lambda hlp: -th.sum(hlp.exp() * hlp, dim=-1), hidden_lps)
+            ),
         )
     elif statistic == "forward_kl":
         log_probs = model_logits.log_softmax(-1)
-        return PlotableStatistic(
+        return PloatableStreamStatistic(
             name="Forward KL",
             units="nats",
-            stats=hidden_lps.map(
-                lambda hlp: th.sum(log_probs.exp() * (log_probs - hlp), dim=-1)
+            stats=collect(
+                map(
+                    lambda hlp: th.sum(log_probs.exp() * (log_probs - hlp), dim=-1),
+                    hidden_lps,
+                )
             ),
         )
     elif statistic == "max_prob":
-        return PlotableStatistic(
+        return PloatableStreamStatistic(
             name="Max Probability",
-            stats=hidden_lps.map(lambda x: x.max(-1).values.exp()),
+            units="Probability",
+            stats=collect(map(lambda x: x.max(-1).values.exp(), hidden_lps)),
         )
     else:
         raise ValueError(f"Unknown statistic: {statistic}")
@@ -290,68 +400,52 @@ def _get_topk_probs(
 
 
 def _plot_stream(
-    color_stream: ResidualStream,
-    top_k_strings_and_probs,
-    top_1_strings: ResidualStream,
-    max_string_len: Optional[int] = None,
-    ellipsis: str = "…",
-    x_labels: Sequence[str] = (),
-    colorbar_label: str = "",
+    plotable_stream: PloatableStreamStatistic,
     layer_stride: int = 1,
-    vmax: Optional[float] = None,
-    k: int = 10,
     title: str = "",
     colorscale: str = "rdbu_r",
 ) -> go.Figure:
     # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
-    x_labels = [x + "\u200c" * i for i, x in enumerate(x_labels)]
+    x_labels = [x + "\u200c" * i for i, x in enumerate(plotable_stream.sequence_labels)]
 
-    labels = ["input", *map(str, range(1, len(color_stream) - 1)), "output"]
+    labels = np.array(
+        ["input", *map(str, range(1, plotable_stream.num_layers - 1)), "output"]
+    )
 
-    if max_string_len is not None:
-        # Clip top 1 strings to a maximum length and add an ellipsis
-        top_1_strings = top_1_strings.map(
-            lambda x: [
-                s if len(s) <= max_string_len else s[:max_string_len] + ellipsis
-                for s in x
-            ]
-        )
+    color_matrix = plotable_stream.stats
+    if plotable_stream.stream_labels is not None:
+        label_strings = plotable_stream.stream_labels.label_strings
+        hover_over_entries = plotable_stream.stream_labels.hover_over_entries
+        label_strings = _stride_keep_last(label_strings, layer_stride)
+        if hover_over_entries is not None:
+            hover_over_entries = _stride_keep_last(hover_over_entries, layer_stride)
+    else:
+        label_strings = None
+        hover_over_entries = None
 
-    color_matrix = np.stack(list(color_stream))
-    top_1_strings = np.stack(list(top_1_strings))
-
-    def stride_keep_last(x: Sequence[Any], stride: int):
-        if stride == 1:
-            return x
-        elif len(x) % stride != 1:
-            return np.concatenate([x[::stride], [x[-1]]])
-        else:
-            return x[::stride]
-
-    color_matrix = stride_keep_last(color_matrix, layer_stride)
-    labels = stride_keep_last(labels, layer_stride)
-    top_1_strings = stride_keep_last(top_1_strings, layer_stride)
-    top_k_strings_and_probs = stride_keep_last(top_k_strings_and_probs, layer_stride)
+    color_matrix = _stride_keep_last(color_matrix, layer_stride)
+    labels = _stride_keep_last(labels, layer_stride)
 
     heatmap = go.Heatmap(
         colorscale=colorscale,
-        customdata=top_k_strings_and_probs,
-        text=top_1_strings,
+        customdata=hover_over_entries,
+        text=label_strings,
         texttemplate="<b>%{text}</b>",
         x=x_labels,
         y=labels,
         z=color_matrix,
         hoverlabel=dict(bgcolor="rgb(42, 42, 50)"),
         hovertemplate="<br>".join(
-            f" %{{customdata[{i}][0]}} %{{customdata[{i}][1]:.1f}}% " for i in range(k)
+            f" %{{customdata[{i}][0]}} %{{customdata[{i}][1]:.1f}}% "
+            for i in range(hover_over_entries.shape[2])
         )
         + "<extra></extra>",
         colorbar=dict(
-            title=colorbar_label,
+            title=plotable_stream.units,
             titleside="right",
         ),
-        zmax=vmax,
-        zmin=0,
+        zmax=plotable_stream.max,
+        zmin=plotable_stream.min,
     )
 
     # TODO Height needs to equal some function of Max(num_layers, topk).
@@ -364,3 +458,12 @@ def _plot_stream(
         yaxis_title="Layer",
     )
     return fig
+
+
+def _stride_keep_last(x: NDArray, stride: int):
+    if stride == 1:
+        return x
+    elif len(x) % stride != 1:
+        return np.concatenate([x[::stride], [x[-1]]])
+    else:
+        return x[::stride]
