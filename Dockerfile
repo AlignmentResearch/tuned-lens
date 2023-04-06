@@ -1,45 +1,41 @@
 # syntax = docker/dockerfile:1
 
-FROM nvidia/cuda:11.6.0-devel-ubuntu20.04 as base
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 as base
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Most of this is a hack to get python 3.9 and pip installed on ubuntu 20.04
 RUN apt update \
-    && apt install -y software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt update \
-    && apt install -y git libsndfile1-dev tesseract-ocr espeak-ng python3.9 python3.9-distutils python3-pip ffmpeg zstd \
-    && python3.9 -m pip install --upgrade --no-cache-dir pip requests
+    && apt install -y git tini libsndfile1-dev tesseract-ocr espeak-ng python3 python3-pip ffmpeg zstd \
+    && python3 -m pip install --upgrade --no-cache-dir pip requests
 
 # install pytorch
-ARG PYTORCH='1.13.1'
-ARG CUDA='cu116'
+ARG PYTORCH='2.0'
+ARG CUDA='cu118'
 
-RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; python3.9 -m pip install --no-cache-dir -U $VERSION --extra-index-url https://download.pytorch.org/whl/$CUDA
+RUN [ ${#PYTORCH} -gt 0 ] && VERSION='torch=='$PYTORCH'.*' ||  VERSION='torch'; python3 -m pip install --no-cache-dir -U $VERSION --extra-index-url https://download.pytorch.org/whl/nightly/$CUDA
 
 # Install requirements for tuned lens repo note this only monitors
 # the pytpoject.toml file for changes
 
 FROM base as prod
 ADD . .
-RUN python3.9 -m pip install .
+RUN python3 -m pip install .
 
 FROM base as test
 COPY pyproject.toml setup.cfg /workspace/
 WORKDIR /workspace
 # Have all the dependencies installed so that we can cache them
 RUN mkdir tuned_lens \
-    && python3.9 -m pip install -e ".[test]" \
-    && python3.9 -m pip uninstall -y tuned_lens \
+    && python3 -m pip install -e ".[test]" \
+    && python3 -m pip uninstall -y tuned_lens \
     && rmdir tuned_lens && rm pyproject.toml setup.cfg
 
 FROM base as dev
 COPY pyproject.toml setup.cfg /workspace/
 WORKDIR /workspace
 RUN mkdir tuned_lens \
-    && python3.9 -m pip install -e ".[dev]" \
-    && python3.9 -m pip uninstall tuned_lens \
+    && python3 -m pip install -e ".[dev]" \
+    && python3 -m pip uninstall -y tuned_lens \
     && rmdir tuned_lens && rm pyproject.toml setup.cfg
 
 
