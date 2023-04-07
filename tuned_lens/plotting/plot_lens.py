@@ -1,7 +1,6 @@
 """Plot a lens table for some given text and model."""
 
 from ..nn.lenses import Lens
-from ..residual_stream import ResidualStream, record_residual_stream
 from transformers import (
     PreTrainedModel,
     PreTrainedTokenizer,
@@ -48,7 +47,9 @@ class StreamLabels:
     """Contains sets of labels for each layer and position in the residual stream."""
 
     # (n_layers x sequence_length) label for each layer and position in the stream.
-    label_strings: NDArray[np.str_] = np.zeros((0, 0), dtype=str)
+    label_strings: NDArray[np.str_]
+    # (sequence_length) labels for the sequence dimension typically the input tokens.
+    sequence_labels: NDArray[np.str_]
     # (n_layers x sequence_length x k) k entries to display when hovering over a cell.
     # For example, the top k prediction from the lens at each layer.
     hover_over_entries: Optional[NDArray[np.str_]] = None
@@ -66,8 +67,6 @@ class PloatableStreamStatistic:
     name: str
     # (n_layers x sequence_length) value of the statistic at each layer and position.
     stats: NDArray[np.float32] = np.zeros((0, 0), dtype=float)
-    # (sequence_length) labels for the sequence dimension typically the input tokens.
-    sequence_labels: NDArray[np.str_] = np.zeros((0,), dtype=str)
     # labels for each layer and position in the stream. For example, the top 1
     # prediction from the lens at each layer.
     stream_labels: Optional[StreamLabels] = None
@@ -79,11 +78,10 @@ class PloatableStreamStatistic:
     def __post_init__(self) -> None:
         """Validate class invariants."""
         assert len(self.stats.shape) == 2
-        assert (
-            self.stream_labels is None
-            or self.stream_labels.label_strings.shape == self.stats.shape
+        assert self.stream_labels is None or (
+            self.stream_labels.label_strings.shape == self.stats.shape
+            and self.stream_labels.sequence_labels.shape[0] == self.stats.shape[1]
         )
-        assert self.stats.shape[1] == len(self.sequence_labels)
 
     @property
     def num_layers(self) -> int:
@@ -161,71 +159,49 @@ def plot_lens(
     if token_formatter is None:
         token_formatter = TokenFormatter()
 
-    with record_residual_stream(model) as stream:
-        outputs = model(input_ids.to(model.device))
-
-    tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())
-    model_logits = outputs.logits[..., start_pos:end_pos, :]
-    stream = stream.map(lambda x: x[..., start_pos:end_pos, :])
-    targets = th.cat(
-        (input_ids, th.full_like(input_ids[..., -1:], tokenizer.eos_token_id)),
-        dim=-1,
-    )
-    t_start_pos = start_pos if start_pos < 0 else start_pos + 1
-    if end_pos is None:
-        t_end_pos = None
-    elif end_pos < 0:
-        t_end_pos = end_pos
-    else:
-        t_end_pos = end_pos + 1
-
-    targets = targets[..., t_start_pos:t_end_pos]
-    tokens = tokens[start_pos:end_pos]
-
-    def decode_tl(h, i):
-        logits = lens.forward(h, i)
-        if mask_input:
-            logits[..., input_ids] = -th.finfo(h.dtype).max
-
-        return logits.log_softmax(dim=-1)
-
-    hidden_lps = stream.zip_map(
-        decode_tl,
-        range(len(stream) - 1),
-    )
-    # Add model predictions
-    hidden_lps.layers.append(
-        outputs.logits.log_softmax(dim=-1)[..., start_pos:end_pos, :]
-    )
-
     # Replace whitespace and newline tokens with their respective replacements
     format_fn = np.vectorize(
         lambda x: token_formatter.format(x) if isinstance(x, str) else "<unk>"
     )
 
-    top_strings = (
-        hidden_lps.map(lambda x: x.argmax(-1).squeeze().cpu().tolist())
-        .map(tokenizer.convert_ids_to_tokens)  # type: ignore[arg-type]
-        .map(format_fn)
+    stream_lps, model_logits, targets, tokens = _get_stream_lps_from_lens(
+        lens=lens,
+        model=model,
+        tokenizer=tokenizer,
+        input_ids=input_ids,
+        start_pos=start_pos,
+        end_pos=end_pos,
+        mask_input=mask_input,
     )
 
+    top_strings = []
+    for lps in stream_lps:
+        ids = lps.argmax(-1).squeeze().cpu().tolist()
+        tokens = tokenizer.convert_ids_to_tokens(ids)
+        top_strings.append(format_fn(tokens))
+
     if min_prob:
-        top_strings = top_strings.zip_map(
-            lambda strings, log_probs: [
+        top_strings = [
+            [
                 s if lp.max() > np.log(min_prob) else ""
                 for s, lp in zip(strings, log_probs)
-            ],
-            hidden_lps,
-        )
+            ]
+            for strings, log_probs in zip(top_strings, stream_lps)
+        ]
 
     plotable_stream = compute_statistics(
-        statistic, list(hidden_lps), model_logits=model_logits, targets=targets
+        statistic, list(stream_lps), model_logits=model_logits, targets=targets
     )
 
     plotable_stream.stream_labels = StreamLabels(
         label_strings=np.vstack(list(top_strings)),
+        sequence_labels=np.array(format_fn(tokens)),
         hover_over_entries=_get_topk_probs(
-            hidden_lps=hidden_lps, tokenizer=tokenizer, k=topk, topk_diff=topk_diff
+            stream_lps=stream_lps,
+            tokenizer=tokenizer,
+            formatter=token_formatter,
+            k=topk,
+            topk_diff=topk_diff,
         ),
     )
 
@@ -275,21 +251,61 @@ def compare_models(
     if token_formatter is None:
         token_formatter = TokenFormatter()
 
-    with record_residual_stream(model_a) as stream_a:
-        outputs_a = model_a(input_ids.to(model_a.device))
-
-    with record_residual_stream(model_b) as stream_b:
-        outputs_b = model_b(input_ids.to(model_b.device))
-
     locals()
-    # Compute the divergence between the two models
-
     # Plot these divergences
+
+
+def _get_stream_lps_from_lens(
+    *,
+    lens: Lens,
+    model: PreTrainedModel,
+    tokenizer: Tokenizer,
+    input_ids: th.IntTensor,
+    start_pos: int,
+    end_pos: Optional[int],
+    mask_input: bool,
+):
+    outputs = model(input_ids.to(model.device), output_hidden_states=True)
+
+    # Slice arrays the specified range
+    tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())
+    model_logits = outputs.logits[..., start_pos:end_pos, :]
+    stream = [h[..., start_pos:end_pos, :] for h in outputs.hidden_states]
+    targets = th.cat(
+        (input_ids, th.full_like(input_ids[..., -1:], tokenizer.eos_token_id)),
+        dim=-1,
+    )
+
+    # Adjust start and end positions for the targets accounting for negative indices
+    t_start_pos = start_pos if start_pos < 0 else start_pos + 1
+    if end_pos is None:
+        t_end_pos = None
+    elif end_pos < 0:
+        t_end_pos = end_pos
+    else:
+        t_end_pos = end_pos + 1
+
+    targets = targets[..., t_start_pos:t_end_pos]
+    tokens = tokens[start_pos:end_pos]
+
+    # Create the stream of log probabilities from the lens
+    stream_lps = []
+    for i, h in enumerate(stream[:-1]):
+        logits = lens.forward(h, i)
+
+        if mask_input:
+            logits[..., input_ids] = -th.finfo(h.dtype).max
+
+        stream_lps.append(logits.log_softmax(dim=-1))
+
+    # Add model predictions
+    stream_lps.append(model_logits.log_softmax(dim=-1)[..., start_pos:end_pos, :])
+    return stream_lps, model_logits, targets, tokens
 
 
 def compute_statistics(
     statistic: Statistic,
-    hidden_lps: Sequence[th.Tensor],
+    stream_lps: Sequence[th.Tensor],
     model_logits: th.Tensor,
     targets: th.Tensor,
 ) -> PloatableStreamStatistic:
@@ -297,7 +313,7 @@ def compute_statistics(
 
     Args:
         statistic: The statistic to compute. One of "ce", "entropy", "kl", "kl_div".
-        hidden_lps: (n_layers x vocab) The stream of hidden layer
+        stream_lps: (n_layers x vocab) The stream of hidden layer
         log probabilities produced by a lens.
         model_logits: The logits produced by the model.
         targets: The target ids for the sequence.
@@ -311,20 +327,20 @@ def compute_statistics(
         return np.vstack(list(map(lambda x: x.cpu().numpy(), stream)))
 
     if statistic == "ce":
-        assert targets.shape == hidden_lps[-1].shape[:-1], (
+        assert targets.shape == stream_lps[-1].shape[:-1], (
             "Batch and sequence lengths of targets and log probs must match."
-            f"Got {targets.shape} and {hidden_lps[-1].shape[:-1]} respectively."
+            f"Got {targets.shape} and {stream_lps[-1].shape[:-1]} respectively."
         )
         num_tokens = targets.nelement()
         targets = targets.reshape(num_tokens)
-        hidden_lps = list(map(lambda x: x.reshape(num_tokens, -1), hidden_lps))
+        stream_lps = list(map(lambda x: x.reshape(num_tokens, -1), stream_lps))
         return PloatableStreamStatistic(
             name="Cross Entropy",
             units="nats",
             stats=collect(
                 map(
                     lambda hlp: F.cross_entropy(hlp, targets, reduction="none"),
-                    hidden_lps,
+                    stream_lps,
                 )
             ),
         )
@@ -333,7 +349,7 @@ def compute_statistics(
             name="Entropy",
             units="nats",
             stats=collect(
-                map(lambda hlp: -th.sum(hlp.exp() * hlp, dim=-1), hidden_lps)
+                map(lambda hlp: -th.sum(hlp.exp() * hlp, dim=-1), stream_lps)
             ),
         )
     elif statistic == "forward_kl":
@@ -344,7 +360,7 @@ def compute_statistics(
             stats=collect(
                 map(
                     lambda hlp: th.sum(log_probs.exp() * (log_probs - hlp), dim=-1),
-                    hidden_lps,
+                    stream_lps,
                 )
             ),
         )
@@ -352,49 +368,41 @@ def compute_statistics(
         return PloatableStreamStatistic(
             name="Max Probability",
             units="Probability",
-            stats=collect(map(lambda x: x.max(-1).values.exp(), hidden_lps)),
+            stats=collect(map(lambda x: x.max(-1).values.exp(), stream_lps)),
         )
     else:
         raise ValueError(f"Unknown statistic: {statistic}")
 
 
 def _get_topk_probs(
-    hidden_lps: ResidualStream,
+    stream_lps: Sequence[th.FloatTensor],
     tokenizer: Tokenizer,
+    formatter: TokenFormatter,
     k: int,
     topk_diff: bool,
 ):
-    probs = hidden_lps.map(lambda x: x.exp() * 100)
-    if topk_diff:
-        probs = probs.pairwise_map(lambda x, y: y - x)
-    probs = th.stack(list(probs)).squeeze(1)
+    precents = [x.exp() * 100 for x in stream_lps]
 
     if topk_diff:
-        topk = probs.abs().topk(k, dim=-1)
-        topk_values = probs.gather(
-            -1, topk.indices
-        )  # get the topk values but include negative values
-    else:
-        # Get the top-k tokens & probabilities for each
-        topk = probs.topk(k, dim=-1)
-        topk_values = topk.values
+        raise NotImplementedError("topk_diff not implemented")
 
+    precents = th.stack(list(precents)).squeeze(1)
+
+    # Get the top-k tokens & probabilities for each
+    topk = precents.topk(k, dim=-1)
+
+    topk_values = topk.values
     # reshape topk_ind from (layers, seq, k) to (layers*seq*k), convert_ids_to_tokens,
     # then reshape back to (layers, seq, k)
-    topk_ind = tokenizer.convert_ids_to_tokens(topk.indices.reshape(-1).tolist())
-    topk_ind = np.array(topk_ind).reshape(topk.indices.shape)
+    topk_tokens = tokenizer.convert_ids_to_tokens(topk.indices.reshape(-1).tolist())
+    topk_tokens = np.array(topk_tokens).reshape(topk.indices.shape)
 
-    topk_strings_and_probs = np.stack((topk_ind, topk_values.cpu()), axis=-1)
-    if topk_diff:
-        # add a new bottom row of "N/A" for topk_strings_and_probs because we don't
-        # have a "previous" layer to compare to
-        topk_strings_and_probs = np.concatenate(
-            (
-                np.full((1, topk_strings_and_probs.shape[1], k, 2), "N/A"),
-                topk_strings_and_probs,
-            ),
-            axis=0,
-        )
+    def format_fn(token: str, percent: float):
+        return f"{formatter.format(token)} %{percent:.2f}"
+
+    format_fn = np.vectorize(format_fn)
+
+    topk_strings_and_probs = format_fn(topk_tokens, topk_values.cpu().numpy())
 
     return topk_strings_and_probs
 
@@ -405,23 +413,29 @@ def _plot_stream(
     title: str = "",
     colorscale: str = "rdbu_r",
 ) -> go.Figure:
-    # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
-    x_labels = [x + "\u200c" * i for i, x in enumerate(plotable_stream.sequence_labels)]
-
     labels = np.array(
         ["input", *map(str, range(1, plotable_stream.num_layers - 1)), "output"]
     )
 
     color_matrix = plotable_stream.stats
+
     if plotable_stream.stream_labels is not None:
         label_strings = plotable_stream.stream_labels.label_strings
         hover_over_entries = plotable_stream.stream_labels.hover_over_entries
         label_strings = _stride_keep_last(label_strings, layer_stride)
+        # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
+        x_labels = [
+            x + "\u200c" * i
+            for i, x in enumerate(plotable_stream.stream_labels.sequence_labels)
+        ]
+
         if hover_over_entries is not None:
             hover_over_entries = _stride_keep_last(hover_over_entries, layer_stride)
+            print(hover_over_entries)
     else:
         label_strings = None
         hover_over_entries = None
+        x_labels = None
 
     color_matrix = _stride_keep_last(color_matrix, layer_stride)
     labels = _stride_keep_last(labels, layer_stride)
@@ -436,8 +450,7 @@ def _plot_stream(
         z=color_matrix,
         hoverlabel=dict(bgcolor="rgb(42, 42, 50)"),
         hovertemplate="<br>".join(
-            f" %{{customdata[{i}][0]}} %{{customdata[{i}][1]:.1f}}% "
-            for i in range(hover_over_entries.shape[2])
+            f" %{{customdata[{i}]}}" for i in range(hover_over_entries.shape[2])
         )
         + "<extra></extra>",
         colorbar=dict(
