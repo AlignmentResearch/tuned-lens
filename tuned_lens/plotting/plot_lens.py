@@ -164,7 +164,7 @@ def plot_lens(
         lambda x: token_formatter.format(x) if isinstance(x, str) else "<unk>"
     )
 
-    stream_lps, model_logits, targets, tokens = _get_stream_lps_from_lens(
+    stream_lps, model_logits, targets, input_tokens = _get_stream_lps_from_lens(
         lens=lens,
         model=model,
         tokenizer=tokenizer,
@@ -195,7 +195,7 @@ def plot_lens(
 
     plotable_stream.stream_labels = StreamLabels(
         label_strings=np.vstack(list(top_strings)),
-        sequence_labels=np.array(format_fn(tokens)),
+        sequence_labels=format_fn(input_tokens),
         hover_over_entries=_get_topk_probs(
             stream_lps=stream_lps,
             tokenizer=tokenizer,
@@ -268,7 +268,7 @@ def _get_stream_lps_from_lens(
     outputs = model(input_ids.to(model.device), output_hidden_states=True)
 
     # Slice arrays the specified range
-    tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())
+    input_tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze().tolist())
     model_logits = outputs.logits[..., start_pos:end_pos, :]
     stream = [h[..., start_pos:end_pos, :] for h in outputs.hidden_states]
     targets = th.cat(
@@ -286,7 +286,7 @@ def _get_stream_lps_from_lens(
         t_end_pos = end_pos + 1
 
     targets = targets[..., t_start_pos:t_end_pos]
-    tokens = tokens[start_pos:end_pos]
+    input_tokens = np.array(input_tokens[start_pos:end_pos])
 
     # Create the stream of log probabilities from the lens
     stream_lps = []
@@ -300,7 +300,7 @@ def _get_stream_lps_from_lens(
 
     # Add model predictions
     stream_lps.append(model_logits.log_softmax(dim=-1)[..., start_pos:end_pos, :])
-    return stream_lps, model_logits, targets, tokens
+    return stream_lps, model_logits, targets, input_tokens
 
 
 def compute_statistics(
@@ -431,7 +431,6 @@ def _plot_stream(
 
         if hover_over_entries is not None:
             hover_over_entries = _stride_keep_last(hover_over_entries, layer_stride)
-            print(hover_over_entries)
     else:
         label_strings = None
         hover_over_entries = None
