@@ -187,7 +187,7 @@ def plot_lens(
     )
 
     plotable_stream.stream_labels = StreamLabels(
-        label_strings=np.vstack(list(top_strings)),
+        label_strings=np.array(top_strings),
         sequence_labels=format_fn(input_tokens),
         hover_over_entries=_get_topk_probs(
             stream_lps=stream_lps,
@@ -217,7 +217,7 @@ def compare_models(
     lens: Lens,
     *,
     text: Optional[str] = None,
-    input_ids: Optional[th.Tensor] = None,
+    input_ids: Optional[th.IntTensor] = None,
     mask_input: bool = False,
     start_pos: int = 0,
     end_pos: Optional[int] = None,
@@ -243,7 +243,7 @@ def compare_models(
     if token_formatter is None:
         token_formatter = TokenFormatter()
 
-    stream_lps_a, model_logits_a, targets_a, input_tokens = _get_stream_lps_from_lens(
+    stream_lps_a, _, _, input_tokens = _get_stream_lps_from_lens(
         lens=lens,
         model=model_a,
         tokenizer=tokenizer,
@@ -253,7 +253,7 @@ def compare_models(
         mask_input=mask_input,
     )
 
-    stream_lps_b, model_logits_b, targets_b, _ = _get_stream_lps_from_lens(
+    stream_lps_b, _, _, _ = _get_stream_lps_from_lens(
         lens=lens,
         model=model_b,
         tokenizer=tokenizer,
@@ -263,20 +263,35 @@ def compare_models(
         mask_input=mask_input,
     )
 
-    color_scale = "blues"
+    format_fn = np.vectorize(
+        lambda x: token_formatter.format(x) if isinstance(x, str) else "<unk>"
+    )
+
+    color_scale = "rdbu_r"
 
     if divergence == "kl":
         stream_lps_a = th.vstack(stream_lps_a)
         stream_lps_b = th.vstack(stream_lps_b)
         kl_div = th.sum(stream_lps_a.exp() * (stream_lps_a - stream_lps_b), dim=-1)
         kl_div.squeeze_()
+
+        top_strings = []
+        for lps_a, lps_b in zip(stream_lps_a, stream_lps_b):
+            kls = lps_a.exp() * (lps_a - lps_b)
+            ids = kls.argmax(-1).squeeze().cpu().tolist()
+            tokens = tokenizer.convert_ids_to_tokens(ids)
+            top_strings.append(format_fn(tokens))
     else:
         raise ValueError("Unknown divergence")
 
     plotable_stream = PloatableStreamStatistic(
-        name="KL(Model_A||Model_B)",
+        name="KL(Model A | Model B)",
         units="Nats",
         stats=kl_div.cpu().numpy(),
+        stream_labels=StreamLabels(
+            label_strings=np.array(top_strings),
+            sequence_labels=format_fn(input_tokens),
+        ),
         min=0,
         max=None,
     )
@@ -284,10 +299,7 @@ def compare_models(
     return _plot_stream(
         plotable_stream=plotable_stream,
         layer_stride=layer_stride,
-        title=(
-            lens.__class__.__name__
-            + (f" ({model_a.name_or_path}, {model_b.name_or_path})")
-        ),
+        title=("Model Comparison"),
         colorscale=color_scale,
     )
 
@@ -460,7 +472,7 @@ def _plot_stream(
         y=labels,
         z=color_matrix,
         colorbar=dict(
-            title=plotable_stream.units,
+            title=f"{plotable_stream.name} ({plotable_stream.units})",
             titleside="right",
         ),
         zmax=plotable_stream.max,
