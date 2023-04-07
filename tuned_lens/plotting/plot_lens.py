@@ -8,14 +8,7 @@ from transformers import (
 )
 from numpy.typing import NDArray
 from dataclasses import dataclass
-from typing import (
-    Iterable,
-    cast,
-    Literal,
-    Optional,
-    Sequence,
-    Union,
-)
+from typing import Iterable, cast, Literal, Optional, Sequence, Union, Dict, Any
 import numpy as np
 import plotly.graph_objects as go
 import torch as th
@@ -190,7 +183,7 @@ def plot_lens(
         ]
 
     plotable_stream = compute_statistics(
-        statistic, list(stream_lps), model_logits=model_logits, targets=targets
+        statistic, stream_lps, model_logits=model_logits, targets=targets
     )
 
     plotable_stream.stream_labels = StreamLabels(
@@ -205,7 +198,6 @@ def plot_lens(
         ),
     )
 
-    color_scale = "blues"
     color_scale = "rdbu_r"
 
     return _plot_stream(
@@ -251,8 +243,53 @@ def compare_models(
     if token_formatter is None:
         token_formatter = TokenFormatter()
 
-    locals()
-    # Plot these divergences
+    stream_lps_a, model_logits_a, targets_a, input_tokens = _get_stream_lps_from_lens(
+        lens=lens,
+        model=model_a,
+        tokenizer=tokenizer,
+        input_ids=input_ids,
+        start_pos=start_pos,
+        end_pos=end_pos,
+        mask_input=mask_input,
+    )
+
+    stream_lps_b, model_logits_b, targets_b, _ = _get_stream_lps_from_lens(
+        lens=lens,
+        model=model_b,
+        tokenizer=tokenizer,
+        input_ids=input_ids,
+        start_pos=start_pos,
+        end_pos=end_pos,
+        mask_input=mask_input,
+    )
+
+    color_scale = "blues"
+
+    if divergence == "kl":
+        stream_lps_a = th.vstack(stream_lps_a)
+        stream_lps_b = th.vstack(stream_lps_b)
+        kl_div = th.sum(stream_lps_a.exp() * (stream_lps_a - stream_lps_b), dim=-1)
+        kl_div.squeeze_()
+    else:
+        raise ValueError("Unknown divergence")
+
+    plotable_stream = PloatableStreamStatistic(
+        name="KL(Model_A||Model_B)",
+        units="Nats",
+        stats=kl_div.cpu().numpy(),
+        min=0,
+        max=None,
+    )
+
+    return _plot_stream(
+        plotable_stream=plotable_stream,
+        layer_stride=layer_stride,
+        title=(
+            lens.__class__.__name__
+            + (f" ({model_a.name_or_path}, {model_b.name_or_path})")
+        ),
+        colorscale=color_scale,
+    )
 
 
 def _get_stream_lps_from_lens(
@@ -419,6 +456,19 @@ def _plot_stream(
 
     color_matrix = plotable_stream.stats
 
+    heatmap_kwargs: Dict[str, Any] = dict(
+        y=labels,
+        z=color_matrix,
+        colorbar=dict(
+            title=plotable_stream.units,
+            titleside="right",
+        ),
+        zmax=plotable_stream.max,
+        zmin=plotable_stream.min,
+    )
+
+    figure_width = 500
+
     if plotable_stream.stream_labels is not None:
         label_strings = plotable_stream.stream_labels.label_strings
         hover_over_entries = plotable_stream.stream_labels.hover_over_entries
@@ -429,43 +479,37 @@ def _plot_stream(
             for i, x in enumerate(plotable_stream.stream_labels.sequence_labels)
         ]
 
+        figure_width = 200 + 80 * len(x_labels)
+
+        heatmap_kwargs.update(
+            colorscale=colorscale,
+            customdata=hover_over_entries,
+            text=label_strings,
+            texttemplate="<b>%{text}</b>",
+            x=x_labels,
+        )
+
         if hover_over_entries is not None:
             hover_over_entries = _stride_keep_last(hover_over_entries, layer_stride)
-    else:
-        label_strings = None
-        hover_over_entries = None
-        x_labels = None
+            heatmap_kwargs.update(
+                hoverlabel=dict(bgcolor="rgb(42, 42, 50)"),
+                hovertemplate="<br>".join(
+                    f" %{{customdata[{i}]}}" for i in range(hover_over_entries.shape[2])
+                )
+                + "<extra></extra>",
+            )
 
     color_matrix = _stride_keep_last(color_matrix, layer_stride)
     labels = _stride_keep_last(labels, layer_stride)
 
-    heatmap = go.Heatmap(
-        colorscale=colorscale,
-        customdata=hover_over_entries,
-        text=label_strings,
-        texttemplate="<b>%{text}</b>",
-        x=x_labels,
-        y=labels,
-        z=color_matrix,
-        hoverlabel=dict(bgcolor="rgb(42, 42, 50)"),
-        hovertemplate="<br>".join(
-            f" %{{customdata[{i}]}}" for i in range(hover_over_entries.shape[2])
-        )
-        + "<extra></extra>",
-        colorbar=dict(
-            title=plotable_stream.units,
-            titleside="right",
-        ),
-        zmax=plotable_stream.max,
-        zmin=plotable_stream.min,
-    )
+    heatmap = go.Heatmap(**heatmap_kwargs)
 
     # TODO Height needs to equal some function of Max(num_layers, topk).
     # Ignore for now. Works until k=18
     fig = go.Figure(heatmap).update_layout(
         title_text=title,
         title_x=0.5,
-        width=200 + 80 * len(x_labels),
+        width=figure_width,
         xaxis_title="Input",
         yaxis_title="Layer",
     )
