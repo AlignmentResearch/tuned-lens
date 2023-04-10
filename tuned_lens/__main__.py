@@ -1,11 +1,8 @@
 """Script to train or evaluate a set of tuned lenses for a language model."""
 
-from .scripts.lens import main as lens_main
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
-import os
-import torch.distributed as dist
 
 
 def run():
@@ -47,6 +44,12 @@ def run():
         "--no-cache",
         action="store_true",
         help="Don't permanently cache the model on disk.",
+    )
+    parent_parser.add_argument(
+        "--num-gpus",
+        type=int,
+        default=1,
+        help="Number of GPUs to use for training.",
     )
     parent_parser.add_argument(
         "--per-gpu-batch-size",
@@ -245,23 +248,35 @@ def run():
         action="store_true",
         help="Evaluate how well probes transfer to other layers.",
     )
-
     args = parser.parse_args()
 
-    # Support both distributed and non-distributed training
-    local_rank = os.environ.get("LOCAL_RANK")
-    if local_rank is not None:
-        dist.init_process_group("nccl")
-        local_rank = int(local_rank)
+    if args.command is None:
+        parser.print_help()
+        exit(1)
+
+    if args.num_gpus > 1:
+        import torch.multiprocessing as mp
+
+        mp.spawn(_run_worker, args=(args,), nprocs=args.num_gpus)
+    else:
+        _run_worker(0, args)
+
+
+def _run_worker(local_rank: int, args: Namespace):
+    # Import here and not at the top to speed up the launch worker
+    from .scripts.lens import main as lens_main
+
+    # Support both single-GPU and multi-GPU training
+    if args.num_gpus > 1:
+        import os
+        import torch.distributed as dist
+
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = "29400"
+        dist.init_process_group("nccl", rank=local_rank, world_size=args.num_gpus)
 
     # Only print on rank 0
     with nullcontext() if not local_rank else redirect_stdout(None):
-        args = parser.parse_args()
-
-        if args.command is None:
-            parser.print_help()
-            exit(1)
-
         if args.sweep:
             ckpt_range = eval(f"range({args.sweep})")
             output_root = args.output

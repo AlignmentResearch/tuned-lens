@@ -122,7 +122,7 @@ def main(args):
         args.tokenizer or args.model_name,
         revision=args.revision,
         use_fast=not args.slow_tokenizer,
-        tokenizer_type=args.tokenizer_class,
+        tokenizer_type=args.tokenizer_type,
     )
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
     silence_datasets_messages()
