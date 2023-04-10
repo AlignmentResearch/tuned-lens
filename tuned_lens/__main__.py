@@ -257,12 +257,13 @@ def run():
     if args.num_gpus > 1:
         import torch.multiprocessing as mp
 
-        mp.spawn(_run_worker, args=(args,), nprocs=args.num_gpus)
+        # TODO: Dynamically find an open port
+        mp.spawn(_run_worker, args=(args, 7295), nprocs=args.num_gpus)
     else:
         _run_worker(0, args)
 
 
-def _run_worker(local_rank: int, args: Namespace):
+def _run_worker(local_rank: int, args: Namespace, port: int = -1):
     # Import here and not at the top to speed up the launch worker
     from .scripts.lens import main as lens_main
 
@@ -272,7 +273,7 @@ def _run_worker(local_rank: int, args: Namespace):
         import torch.distributed as dist
 
         os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "29400"
+        os.environ["MASTER_PORT"] = str(port)
         dist.init_process_group("nccl", rank=local_rank, world_size=args.num_gpus)
 
     # Only print on rank 0
