@@ -30,12 +30,13 @@ class TokenFormatter:
 
     def __post_init__(self) -> None:
         """Post init hook to vectorize the format function."""
-        self.vectorized_format = np.vectorize(
-            lambda x: self.format(x) if isinstance(x, str) else "<unk>"
-        )
+        self.vectorized_format = np.vectorize(self.format)
 
     def format(self, token: str) -> str:
         """Format a token for display in a plot."""
+        if not isinstance(token, str):
+            return "<unk>"
+
         if self.max_string_len is not None and len(token) > self.max_string_len:
             token = token[: self.max_string_len - len(self.ellipsis)] + self.ellipsis
         token = token.replace(self.newline_token, self.newline_replacement)
@@ -177,7 +178,7 @@ class TrajectoryStatistic:
         Returns:
             The plotly heatmap figure.
         """
-        heatmap = self.heat_map(layer_stride, colorscale)
+        heatmap = self.heatmap(layer_stride, colorscale)
         figure_width = 200 + token_width * self.stats.shape[1]
 
         fig = go.Figure(heatmap).update_layout(
@@ -321,26 +322,20 @@ class PredictionTrajectory:
             input_ids=input_ids_np,
         )
 
-    def _get_topk_probs(
+    def _get_topk_tokens_and_values(
         self,
-        formatter: TokenFormatter,
         k: int,
-        topk_diff: bool = False,
-    ):
-        percents = self.probs * 100
-
-        if self.tokenizer is None:
-            raise ValueError("tokenizer must be specified to get topk tokens")
-
-        if topk_diff:
-            raise NotImplementedError("topk_diff not implemented")
+        sort_by: NDArray[np.float32],
+        values: NDArray[np.float32],
+    ) -> NDArray[np.str_]:
 
         # Get the top-k tokens & probabilities for each
-        topk_inds = np.argpartition(percents, -k, axis=-1)[..., -k:]
-        topk_values = np.take_along_axis(percents, topk_inds, axis=-1)
+        topk_inds = np.argpartition(sort_by, -k, axis=-1)[..., -k:]
+        topk_sort_by = np.take_along_axis(sort_by, topk_inds, axis=-1)
+        topk_values = np.take_along_axis(values, topk_inds, axis=-1)
 
         # Ensure that the top-k tokens are sorted by probability
-        sorted_top_k_inds = np.argsort(-topk_values, axis=-1)
+        sorted_top_k_inds = np.argsort(-topk_sort_by, axis=-1)
         topk_inds = np.take_along_axis(topk_inds, sorted_top_k_inds, axis=-1)
         topk_values = np.take_along_axis(topk_values, sorted_top_k_inds, axis=-1)
 
@@ -349,54 +344,115 @@ class PredictionTrajectory:
         topk_tokens = self.tokenizer.convert_ids_to_tokens(topk_inds.flatten().tolist())
         topk_tokens = np.array(topk_tokens).reshape(topk_inds.shape)
 
-        def format_fn(token: str, percent: float):
-            return f"{formatter.format(token)} {percent:.2f}%"
+        return topk_tokens, topk_values
 
-        format_fn = np.vectorize(format_fn)
-
-        topk_strings_and_probs = format_fn(topk_tokens, topk_values)
-        return topk_strings_and_probs
-
-    def _get_stream_labels(
+    def largest_prob_labels(
         self,
         formatter: Optional[TokenFormatter] = None,
         min_prob: np.float_ = np.finfo(np.float32).eps,
         topk: int = 10,
     ) -> StreamLabels:
+        """Labels for the prediction trajectory based on the most probable tokens.
 
+        Args:
+            formatter : The formatter to use for formatting the tokens.
+            min_prob : The minimum probability for a token to used as a label.
+            topk : The number of top tokens to include in the hover over menu.
+
+        Raises:
+            ValueError: If the tokenizer is not set.
+
+        Returns:
+            a set of stream labels that can be applied to a trajectory statistic.
+        """
         if self.tokenizer is None:
-            raise ValueError("Tokenizer must be set to get stream labels.")
+            raise ValueError("Tokenizer must be set to get labels.")
 
         if formatter is None:
             formatter = TokenFormatter()
 
         input_tokens = self.tokenizer.convert_ids_to_tokens(self.input_ids.tolist())
 
-        top_strings = []
-        for lps in self.log_probs:
-            ids = np.argmax(lps, axis=-1).tolist()
-            tokens = self.tokenizer.convert_ids_to_tokens(ids)
-            top_strings.append(formatter.vectorized_format(tokens))
+        entry_format_fn = np.vectorize(
+            lambda token, percent: f"{formatter.format(token)} {percent:.2f}%"
+        )
 
-        top_strings = [
-            [
-                s if lp.max() > np.log(min_prob) else ""
-                for s, lp in zip(strings, log_probs)
-            ]
-            for strings, log_probs in zip(top_strings, self.log_probs)
-        ]
+        topk_tokens, topk_probs = self._get_topk_tokens_and_values(
+            k=topk, sort_by=self.log_probs, values=self.probs
+        )
+
+        top_tokens = topk_tokens[..., 0]
+        top_probs = topk_probs[..., 0]
+
+        label_strings = np.where(
+            top_probs > min_prob, formatter.vectorized_format(top_tokens), ""
+        )
 
         return StreamLabels(
-            label_strings=np.array(top_strings),
+            label_strings=label_strings,
             sequence_labels=formatter.vectorized_format(input_tokens),
-            hover_over_entries=self._get_topk_probs(
-                formatter=formatter,
-                k=topk,
-            ),
+            hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
+        )
+
+    def largest_delta_in_prob_labels(
+        self,
+        other: "PredictionTrajectory",
+        formatter: Optional[TokenFormatter] = None,
+        min_prob_delta: np.float_ = np.finfo(np.float32).eps,
+        topk: int = 10,
+    ) -> StreamLabels:
+        """Labels for a trajectory statistic based on the largest change in probability.
+
+        Args:
+            other : The other prediction trajectory to compare to.
+            formatter : A TokenFormatter to use for formatting the labels.
+            min_prob_delta : The minimum change in probability to include a label.
+            topk : The number of top tokens to include in the hover over menu.
+
+        Raises:
+            ValueError: If the tokenizer is not set.
+
+        Returns:
+            A set of stream labels that can be added to a trajectory statistic.
+        """
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer must be set to get labels.")
+
+        if formatter is None:
+            formatter = TokenFormatter()
+
+        input_tokens = self.tokenizer.convert_ids_to_tokens(self.input_ids.tolist())
+
+        entry_format_fn = np.vectorize(
+            lambda token, percent: f"{formatter.format(token)} Δ{percent:.2f}%"
+        )
+
+        deltas = other.probs - self.probs
+
+        topk_tokens, topk_deltas = self._get_topk_tokens_and_values(
+            k=topk, sort_by=np.abs(deltas), values=deltas
+        )
+
+        top_tokens = topk_tokens[..., 0]
+        top_deltas = topk_deltas[..., 0]
+
+        label_strings = np.where(
+            np.abs(top_deltas) > min_prob_delta,
+            formatter.vectorized_format(top_tokens),
+            "",
+        )
+
+        return StreamLabels(
+            label_strings=label_strings,
+            sequence_labels=formatter.vectorized_format(input_tokens),
+            hover_over_entries=entry_format_fn(topk_tokens, 100 * topk_deltas),
         )
 
     def cross_entropy(self, **kwargs) -> TrajectoryStatistic:
-        """The cross entropy of the predictions to the targets."""
+        """The cross entropy of the predictions to the targets.
+
+        **kwargs are passed to largest_prob_labels.
+        """
         if self.targets is None:
             raise ValueError("Cannot compute cross entropy without targets.")
 
@@ -408,111 +464,131 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Cross Entropy",
             units="nats",
-            stream_labels=self._get_stream_labels(**kwargs) if self.tokenizer else None,
+            stream_labels=self.largest_prob_labels(**kwargs)
+            if self.tokenizer
+            else None,
             stats=-self.log_probs[:, np.arange(self.num_tokens), self.targets],
         )
 
     def entropy(self, **kwargs) -> TrajectoryStatistic:
-        """The entropy of the predictions."""
+        """The entropy of the predictions.
+
+        **kwargs are passed to largest_prob_labels.
+        """
         return TrajectoryStatistic(
             name="Entropy",
             units="nats",
-            stream_labels=self._get_stream_labels() if self.tokenizer else None,
+            stream_labels=self.largest_prob_labels(**kwargs)
+            if self.tokenizer
+            else None,
             stats=-np.sum(np.exp(self.log_probs) * self.log_probs, axis=-1),
         )
 
     def forward_kl(self, **kwargs) -> TrajectoryStatistic:
-        """KL divergence of the lens predictions to the model predictions."""
+        """KL divergence of the lens predictions to the model predictions.
+
+        **kwargs are passed to largest_prob_labels.
+        """
         model_log_probs = self.model_log_probs.reshape(
             1, self.num_tokens, self.vocab_size
         )
         return TrajectoryStatistic(
             name="Forward KL",
             units="nats",
-            stream_labels=self._get_stream_labels(**kwargs) if self.tokenizer else None,
+            stream_labels=self.largest_prob_labels(**kwargs)
+            if self.tokenizer
+            else None,
             stats=np.sum(
                 np.exp(model_log_probs) * (model_log_probs - self.log_probs), axis=-1
             ),
         )
 
-    def max_probability(self) -> TrajectoryStatistic:
-        """Max probability of the among the predictions."""
+    def max_probability(self, **kwargs) -> TrajectoryStatistic:
+        """Max probability of the among the predictions.
+
+        **kwargs are passed to largest_prob_labels.
+        """
         return TrajectoryStatistic(
             name="Max Probability",
-            units="Probability",
-            stream_labels=self._get_stream_labels() if self.tokenizer else None,
-            stats=self.log_probs.max(-1).values.exp(),
+            units="prob",
+            stream_labels=self.largest_prob_labels() if self.tokenizer else None,
+            stats=np.exp(self.log_probs.max(-1)),
         )
 
-    def kl_divergence(self, other: "PredictionTrajectory") -> TrajectoryStatistic:
-        """Compute the KL divergence between self and other prediction trajectory."""
-        kl_div = np.sum(self.probs * (self.log_probs - other.log_probs), axis=-1)
+    def kl_divergence(
+        self, other: "PredictionTrajectory", **kwargs
+    ) -> TrajectoryStatistic:
+        """Compute the KL divergence between self and other prediction trajectory.
 
-        # top_strings = []
-        # for lps_a, lps_b in zip(lps_a, lps_b):
-        #     kls = lps_a.exp() * (lps_a - lps_b)
-        #     ids = kls.argmax(-1).squeeze().cpu().tolist()
-        #     tokens = tokenizer.convert_ids_to_tokens(ids)
-        #     top_strings.append(formatter.vectorized_format(tokens))
+        Args:
+            other : The other prediction trajectory to compare to.
+            **kwargs: are passed to largest_delta_in_prob_labels.
+
+        Returns:
+            A TrajectoryStatistic with the KL divergence between self and other.
+        """
+        kl_div = np.sum(self.probs * (self.log_probs - other.log_probs), axis=-1)
 
         return TrajectoryStatistic(
             name="KL(Self | Other)",
             units="nats",
-            stats=kl_div.cpu().numpy(),
-            # stream_labels=StreamLabels(
-            #     label_strings=np.array(top_strings),
-            #     sequence_labels=formatter.vectorized_format(input_tokens),
-            # ),
+            stats=kl_div,
+            stream_labels=self.largest_delta_in_prob_labels(other, **kwargs)
+            if self.tokenizer
+            else None,
             min=0,
             max=None,
         )
 
-    def js_divergence(self, other: "PredictionTrajectory") -> TrajectoryStatistic:
-        """Compute the JS divergence between self and other prediction trajectory."""
+    def js_divergence(
+        self, other: "PredictionTrajectory", **kwargs
+    ) -> TrajectoryStatistic:
+        """Compute the JS divergence between self and other prediction trajectory.
+
+        Args:
+            other : The other prediction trajectory to compare to.
+            **kwargs: are passed to largest_delta_in_prob_labels.
+
+        Returns:
+            A TrajectoryStatistic with the JS divergence between self and other.
+        """
         js_div = 0.5 * np.sum(
             self.probs * (self.log_probs - other.log_probs), axis=-1
         ) + 0.5 * np.sum(self.probs * (self.log_probs - self.log_probs), axis=-1)
 
-        # top_strings = []
-        # for lps_a, lps_b in zip(lps_a, lps_b):
-        #     kls = 0.5*(lps_a.exp() * (lps_a - lps_b)) + 0.5*(lps_b.exp() * (lps_b -
-        # lps_a))
-        #     ids = kls.argmax(-1).squeeze().cpu().tolist()
-        #     tokens = tokenizer.convert_ids_to_tokens(ids)
-        #     top_strings.append(formatter.vectorized_format(tokens))
-
         return TrajectoryStatistic(
             name="JS(Self | Other)",
             units="nats",
-            stats=js_div.cpu().numpy(),
-            # stream_labels=StreamLabels(
-            #     label_strings=np.array(top_strings),
-            #     sequence_labels=formatter.vectorized_format(input_tokens),
-            # ),
+            stats=js_div,
+            stream_labels=self.largest_delta_in_prob_labels(other, **kwargs)
+            if self.tokenizer
+            else None,
             min=0,
             max=None,
         )
 
-    def total_variation(self, other: "PredictionTrajectory") -> TrajectoryStatistic:
-        """Total variation distance between self and other prediction trajectory."""
-        t_var = np.abs(self.probs - other.probs).max(axis=-1)
-        t_var.squeeze_()
+    def total_variation(
+        self, other: "PredictionTrajectory", **kwargs
+    ) -> TrajectoryStatistic:
+        """Total variation distance between self and other prediction trajectory.
 
-        # top_strings = []
-        # for lps_a, lps_b in zip(lps_a, lps_b):
-        #     diffs = (lps_a.exp() - lps_b.exp()).abs()
-        #     max_diff_ids = diffs.argmax(-1).squeeze().cpu().tolist()
-        #     tokens = tokenizer.convert_ids_to_tokens(max_diff_ids)
-        #     top_strings.append(formatter.vectorized_format(tokens))
+        Args:
+            other : The other prediction trajectory to compare to.
+            **kwargs: are passed to largest_delta_in_prob_labels.
+
+        Returns:
+            A TrajectoryStatistic with the total variational distance between
+            self and other.
+        """
+        t_var = np.abs(self.probs - other.probs).max(axis=-1)
 
         return TrajectoryStatistic(
             name="TV(Self | Other)",
-            units="nats",
-            stats=t_var.cpu().numpy(),
-            # stream_labels=StreamLabels(
-            #     label_strings=np.array(top_strings),
-            #     sequence_labels=formatter.vectorized_format(input_tokens),
-            # ),
+            units="prob",
+            stats=t_var,
+            stream_labels=self.largest_delta_in_prob_labels(other, **kwargs)
+            if self.tokenizer
+            else None,
             min=0,
             max=1,
         )
