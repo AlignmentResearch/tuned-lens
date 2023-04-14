@@ -18,6 +18,32 @@ Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
 
 
 @dataclass
+class TokenFormatter:
+    """Format tokens for display in a plot."""
+
+    ellipsis: str = "…"
+    newline_replacement: str = "\\n"
+    newline_token: str = "Ċ"
+    whitespace_token: str = "Ġ"
+    whitespace_replacement: str = "_"
+    max_string_len: Optional[int] = 7
+
+    def __post_init__(self) -> None:
+        """Post init hook to vectorize the format function."""
+        self.vectorized_format = np.vectorize(
+            lambda x: self.format(x) if isinstance(x, str) else "<unk>"
+        )
+
+    def format(self, token: str) -> str:
+        """Format a token for display in a plot."""
+        if self.max_string_len is not None and len(token) > self.max_string_len:
+            token = token[: self.max_string_len - len(self.ellipsis)] + self.ellipsis
+        token = token.replace(self.newline_token, self.newline_replacement)
+        token = token.replace(self.whitespace_token, self.whitespace_replacement)
+        return token
+
+
+@dataclass
 class StreamLabels:
     """Contains sets of labels for each layer and position in the residual stream."""
 
@@ -65,23 +91,23 @@ class TrajectoryStatistic:
         """Return the number of layers in the stream."""
         return self.stats.shape[0]
 
-    def plot(
+    def heatmap(
         self,
-        title: str = "",
         layer_stride: int = 1,
         colorscale: str = "rdbu_r",
-        figure_width: int = 500,
-    ) -> go.Figure:
-        """Produce a heatmap plot of the statistic.
+        **kwargs,
+    ) -> go.Heatmap:
+        """Returns a Plotly Heatmap object for this statistic.
 
         Args:
-            title : The title of the plot.
-            layer_stride : The number of layers to between each layer we plot.
+            layer_stride : The number of layers to between each layer plotted.
             colorscale : The colorscale to use for the heatmap.
-            figure_width : The width of the figure in pixels.
+            **kwargs : Additional keyword arguments to pass to the Heatmap constructor.
 
         Returns:
-            The plotly heatmap figure.
+            A plotly Heatmap where the x-axis is the sequence dimension, the y-axis is
+            the layer dimension, and the color of each cell is the value of
+            the statistic.
         """
         labels = np.array(["input", *map(str, range(1, self.num_layers - 1)), "output"])
 
@@ -108,8 +134,6 @@ class TrajectoryStatistic:
                 for i, x in enumerate(self.stream_labels.sequence_labels)
             ]
 
-            figure_width = 200 + 80 * len(x_labels)
-
             heatmap_kwargs.update(
                 colorscale=colorscale,
                 customdata=hover_over_entries,
@@ -132,10 +156,30 @@ class TrajectoryStatistic:
         color_matrix = _stride_keep_last(color_matrix, layer_stride)
         labels = _stride_keep_last(labels, layer_stride)
 
-        heatmap = go.Heatmap(**heatmap_kwargs)
+        heatmap_kwargs.update(kwargs)
+        return go.Heatmap(**heatmap_kwargs)
 
-        # TODO Height needs to equal some function of Max(num_layers, topk).
-        # Ignore for now. Works until k=18
+    def plot(
+        self,
+        title: str = "",
+        layer_stride: int = 1,
+        colorscale: str = "rdbu_r",
+        token_width: int = 80,
+    ) -> go.Figure:
+        """Produce a heatmap plot of the statistic.
+
+        Args:
+            title : The title of the plot.
+            layer_stride : The number of layers to between each layer we plot.
+            colorscale : The colorscale to use for the heatmap.
+            token_width : The width of each token in the plot.
+
+        Returns:
+            The plotly heatmap figure.
+        """
+        heatmap = self.heat_map(layer_stride, colorscale)
+        figure_width = 200 + token_width * self.stats.shape[1]
+
         fig = go.Figure(heatmap).update_layout(
             title_text=title,
             title_x=0.5,
@@ -155,6 +199,7 @@ class PredictionTrajectory:
     log_probs: NDArray[np.float32]
     input_ids: NDArray[np.int64]
     targets: Optional[NDArray[np.int64]] = None
+    tokenizer: Optional[Tokenizer] = None
 
     def __post_init__(self) -> None:
         """Validate class invariants."""
@@ -203,6 +248,7 @@ class PredictionTrajectory:
         lens: Lens,
         model: PreTrainedModel,
         input_ids: Sequence[int],
+        tokenizer: Optional[Tokenizer] = None,
         targets: Optional[Sequence[int]] = None,
         start_pos: int = 0,
         end_pos: Optional[int] = None,
@@ -213,6 +259,7 @@ class PredictionTrajectory:
         Args:
             lens : The lens to use for constructing the latent predictions.
             model : The model to get the predictions from.
+            tokenizer : The tokenizer to use for decoding the predictions.
             input_ids : The input ids to pass to the model.
             targets : The targets for
             start_pos : The start position of the slice across the sequence dimension.
@@ -237,6 +284,7 @@ class PredictionTrajectory:
         )
         stream = [h[..., start_pos:end_pos, :] for h in outputs.hidden_states]
 
+        input_ids_np = np.array(input_ids[start_pos:end_pos])
         targets_np = (
             np.array(targets[start_pos:end_pos]) if targets is not None else None
         )
@@ -247,7 +295,7 @@ class PredictionTrajectory:
             logits = lens.forward(h, i)
 
             if mask_input:
-                logits[..., input_ids] = -th.finfo(h.dtype).max
+                logits[..., input_ids_np] = -th.finfo(h.dtype).max
 
             traj_log_probs.append(
                 logits.log_softmax(dim=-1).squeeze().detach().cpu().numpy()
@@ -267,40 +315,87 @@ class PredictionTrajectory:
         traj_log_probs.append(trunc_model_log_probs)
 
         return cls(
+            tokenizer=tokenizer,
             log_probs=np.array(traj_log_probs),
             targets=targets_np,
-            input_ids=input_ids_th.detach().cpu().numpy(),
+            input_ids=input_ids_np,
         )
 
-    # def get_stream_labels() -> StreamLabels:
-    #     top_strings = []
-    #     for lps in pred_trajectory.log_probs:
-    #         ids = lps.argmax(-1).squeeze().cpu().tolist()
-    #         tokens = tokenizer.convert_ids_to_tokens(ids)
-    #         top_strings.append(formatter.vectorized_format(tokens))
+    def _get_topk_probs(
+        self,
+        formatter: TokenFormatter,
+        k: int,
+        topk_diff: bool = False,
+    ):
+        percents = self.probs * 100
 
-    #     if min_prob:
-    #         top_strings = [
-    #             [
-    #                 s if lp.max() > np.log(min_prob) else ""
-    #                 for s, lp in zip(strings, log_probs)
-    #             ]
-    #             for strings, log_probs in zip(top_strings, pred_trajectory.log_probs)
-    #         ]
+        if self.tokenizer is None:
+            raise ValueError("tokenizer must be specified to get topk tokens")
 
-    #     plotable_stream.stream_labels = StreamLabels(
-    #         label_strings=np.array(top_strings),
-    #         sequence_labels=format_fn(input_tokens),
-    #         hover_over_entries=_get_topk_probs(
-    #             stream_lps=stream_lps,
-    #             tokenizer=tokenizer,
-    #             formatter=formatter,
-    #             k=topk,
-    #             topk_diff=topk_diff,
-    #         ),
-    #     )
+        if topk_diff:
+            raise NotImplementedError("topk_diff not implemented")
 
-    def cross_entropy(self) -> TrajectoryStatistic:
+        # Get the top-k tokens & probabilities for each
+        topk_inds = np.argpartition(percents, -k, axis=-1)[..., -k:]
+        topk_values = np.take_along_axis(percents, topk_inds, axis=-1)
+
+        # Ensure that the top-k tokens are sorted by probability
+        sorted_top_k_inds = np.argsort(-topk_values, axis=-1)
+        topk_inds = np.take_along_axis(topk_inds, sorted_top_k_inds, axis=-1)
+        topk_values = np.take_along_axis(topk_values, sorted_top_k_inds, axis=-1)
+
+        # reshape topk_ind from (layers, seq, k) to (layers*seq*k),
+        # convert_ids_to_tokens, then reshape back to (layers, seq, k)
+        topk_tokens = self.tokenizer.convert_ids_to_tokens(topk_inds.flatten().tolist())
+        topk_tokens = np.array(topk_tokens).reshape(topk_inds.shape)
+
+        def format_fn(token: str, percent: float):
+            return f"{formatter.format(token)} {percent:.2f}%"
+
+        format_fn = np.vectorize(format_fn)
+
+        topk_strings_and_probs = format_fn(topk_tokens, topk_values)
+        return topk_strings_and_probs
+
+    def _get_stream_labels(
+        self,
+        formatter: Optional[TokenFormatter] = None,
+        min_prob: np.float_ = np.finfo(np.float32).eps,
+        topk: int = 10,
+    ) -> StreamLabels:
+
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer must be set to get stream labels.")
+
+        if formatter is None:
+            formatter = TokenFormatter()
+
+        input_tokens = self.tokenizer.convert_ids_to_tokens(self.input_ids.tolist())
+
+        top_strings = []
+        for lps in self.log_probs:
+            ids = np.argmax(lps, axis=-1).tolist()
+            tokens = self.tokenizer.convert_ids_to_tokens(ids)
+            top_strings.append(formatter.vectorized_format(tokens))
+
+        top_strings = [
+            [
+                s if lp.max() > np.log(min_prob) else ""
+                for s, lp in zip(strings, log_probs)
+            ]
+            for strings, log_probs in zip(top_strings, self.log_probs)
+        ]
+
+        return StreamLabels(
+            label_strings=np.array(top_strings),
+            sequence_labels=formatter.vectorized_format(input_tokens),
+            hover_over_entries=self._get_topk_probs(
+                formatter=formatter,
+                k=topk,
+            ),
+        )
+
+    def cross_entropy(self, **kwargs) -> TrajectoryStatistic:
         """The cross entropy of the predictions to the targets."""
         if self.targets is None:
             raise ValueError("Cannot compute cross entropy without targets.")
@@ -313,20 +408,20 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Cross Entropy",
             units="nats",
-            stats=self.log_probs[
-                :, np.arange(self.num_tokens), self.targets
-            ],  # TODO not sure if this is correct
+            stream_labels=self._get_stream_labels(**kwargs) if self.tokenizer else None,
+            stats=-self.log_probs[:, np.arange(self.num_tokens), self.targets],
         )
 
-    def entropy(self) -> TrajectoryStatistic:
+    def entropy(self, **kwargs) -> TrajectoryStatistic:
         """The entropy of the predictions."""
         return TrajectoryStatistic(
             name="Entropy",
             units="nats",
+            stream_labels=self._get_stream_labels() if self.tokenizer else None,
             stats=-np.sum(np.exp(self.log_probs) * self.log_probs, axis=-1),
         )
 
-    def forward_kl(self) -> TrajectoryStatistic:
+    def forward_kl(self, **kwargs) -> TrajectoryStatistic:
         """KL divergence of the lens predictions to the model predictions."""
         model_log_probs = self.model_log_probs.reshape(
             1, self.num_tokens, self.vocab_size
@@ -334,6 +429,7 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Forward KL",
             units="nats",
+            stream_labels=self._get_stream_labels(**kwargs) if self.tokenizer else None,
             stats=np.sum(
                 np.exp(model_log_probs) * (model_log_probs - self.log_probs), axis=-1
             ),
@@ -344,6 +440,7 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Max Probability",
             units="Probability",
+            stream_labels=self._get_stream_labels() if self.tokenizer else None,
             stats=self.log_probs.max(-1).values.exp(),
         )
 
@@ -359,7 +456,7 @@ class PredictionTrajectory:
         #     top_strings.append(formatter.vectorized_format(tokens))
 
         return TrajectoryStatistic(
-            name="KL(Model A | Model B)",
+            name="KL(Self | Other)",
             units="nats",
             stats=kl_div.cpu().numpy(),
             # stream_labels=StreamLabels(
@@ -385,7 +482,7 @@ class PredictionTrajectory:
         #     top_strings.append(formatter.vectorized_format(tokens))
 
         return TrajectoryStatistic(
-            name="JS(Model A | Model B)",
+            name="JS(Self | Other)",
             units="nats",
             stats=js_div.cpu().numpy(),
             # stream_labels=StreamLabels(
@@ -409,7 +506,7 @@ class PredictionTrajectory:
         #     top_strings.append(formatter.vectorized_format(tokens))
 
         return TrajectoryStatistic(
-            name="TV(Model A | Model B)",
+            name="TV(Self | Other)",
             units="nats",
             stats=t_var.cpu().numpy(),
             # stream_labels=StreamLabels(
@@ -419,65 +516,6 @@ class PredictionTrajectory:
             min=0,
             max=1,
         )
-
-
-@dataclass
-class TokenFormatter:
-    """Format tokens for display in a plot."""
-
-    ellipsis: str = "…"
-    newline_replacement: str = "\\n"
-    newline_token: str = "Ċ"
-    whitespace_token: str = "Ġ"
-    whitespace_replacement: str = "_"
-    max_string_len: Optional[int] = 7
-
-    def __post_init__(self) -> None:
-        """Post init hook to vectorize the format function."""
-        self.vectorized_format = np.vectorize(
-            lambda x: self.format(x) if isinstance(x, str) else "<unk>"
-        )
-
-    def format(self, token: str) -> str:
-        """Format a token for display in a plot."""
-        if self.max_string_len is not None and len(token) > self.max_string_len:
-            token = token[: self.max_string_len - len(self.ellipsis)] + self.ellipsis
-        token = token.replace(self.newline_token, self.newline_replacement)
-        token = token.replace(self.whitespace_token, self.whitespace_replacement)
-        return token
-
-
-def _get_topk_probs(
-    stream_lps: Sequence[th.FloatTensor],
-    tokenizer: Tokenizer,
-    formatter: TokenFormatter,
-    k: int,
-    topk_diff: bool,
-):
-    precents = [x.exp() * 100 for x in stream_lps]
-
-    if topk_diff:
-        raise NotImplementedError("topk_diff not implemented")
-
-    precents = th.stack(list(precents)).squeeze(1)
-
-    # Get the top-k tokens & probabilities for each
-    topk = precents.topk(k, dim=-1)
-
-    topk_values = topk.values
-    # reshape topk_ind from (layers, seq, k) to (layers*seq*k), convert_ids_to_tokens,
-    # then reshape back to (layers, seq, k)
-    topk_tokens = tokenizer.convert_ids_to_tokens(topk.indices.reshape(-1).tolist())
-    topk_tokens = np.array(topk_tokens).reshape(topk.indices.shape)
-
-    def format_fn(token: str, percent: float):
-        return f"{formatter.format(token)} {percent:.2f}%"
-
-    format_fn = np.vectorize(format_fn)
-
-    topk_strings_and_probs = format_fn(topk_tokens, topk_values.cpu().numpy())
-
-    return topk_strings_and_probs
 
 
 def _stride_keep_last(x: NDArray, stride: int):
