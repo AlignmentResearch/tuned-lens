@@ -114,6 +114,9 @@ class TrajectoryStatistic:
 
         color_matrix = self.stats
 
+        color_matrix = _stride_keep_last(color_matrix, layer_stride)
+        labels = _stride_keep_last(labels, layer_stride)
+
         heatmap_kwargs: Dict[str, Any] = dict(
             y=labels,
             z=color_matrix,
@@ -127,7 +130,6 @@ class TrajectoryStatistic:
 
         if self.stream_labels is not None:
             label_strings = self.stream_labels.label_strings
-            hover_over_entries = self.stream_labels.hover_over_entries
             label_strings = _stride_keep_last(label_strings, layer_stride)
             # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
             x_labels = [
@@ -137,15 +139,17 @@ class TrajectoryStatistic:
 
             heatmap_kwargs.update(
                 colorscale=colorscale,
-                customdata=hover_over_entries,
                 text=label_strings,
                 texttemplate="<b>%{text}</b>",
                 x=x_labels,
             )
 
-            if hover_over_entries is not None:
-                hover_over_entries = _stride_keep_last(hover_over_entries, layer_stride)
+            if self.stream_labels.hover_over_entries is not None:
+                hover_over_entries = _stride_keep_last(
+                    self.stream_labels.hover_over_entries, layer_stride
+                )
                 heatmap_kwargs.update(
+                    customdata=hover_over_entries,
                     hoverlabel=dict(bgcolor="rgb(42, 42, 50)"),
                     hovertemplate="<br>".join(
                         f" %{{customdata[{i}]}}"
@@ -153,9 +157,6 @@ class TrajectoryStatistic:
                     )
                     + "<extra></extra>",
                 )
-
-        color_matrix = _stride_keep_last(color_matrix, layer_stride)
-        labels = _stride_keep_last(labels, layer_stride)
 
         heatmap_kwargs.update(kwargs)
         return go.Heatmap(**heatmap_kwargs)
