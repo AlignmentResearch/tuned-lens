@@ -45,7 +45,7 @@ class TokenFormatter:
 
 
 @dataclass
-class StreamLabels:
+class TrajectoryLabels:
     """Contains sets of labels for each layer and position in the residual stream."""
 
     # (n_layers x sequence_length) label for each layer and position in the stream.
@@ -71,7 +71,7 @@ class TrajectoryStatistic:
     stats: NDArray[np.float32] = np.zeros((0, 0), dtype=float)
     # labels for each layer and position in the stream. For example, the top 1
     # prediction from the lens at each layer.
-    stream_labels: Optional[StreamLabels] = None
+    labels: Optional[TrajectoryLabels] = None
     # The units of the statistic.
     units: Optional[str] = None
     # The maximum value of the statistic.
@@ -82,9 +82,9 @@ class TrajectoryStatistic:
     def __post_init__(self) -> None:
         """Validate class invariants."""
         assert len(self.stats.shape) == 2
-        assert self.stream_labels is None or (
-            self.stream_labels.label_strings.shape == self.stats.shape
-            and self.stream_labels.sequence_labels.shape[0] == self.stats.shape[1]
+        assert self.labels is None or (
+            self.labels.label_strings.shape == self.stats.shape
+            and self.labels.sequence_labels.shape[0] == self.stats.shape[1]
         )
 
     @property
@@ -128,13 +128,12 @@ class TrajectoryStatistic:
             zmin=self.min,
         )
 
-        if self.stream_labels is not None:
-            label_strings = self.stream_labels.label_strings
+        if self.labels is not None:
+            label_strings = self.labels.label_strings
             label_strings = _stride_keep_last(label_strings, layer_stride)
             # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
             x_labels = [
-                x + "\u200c" * i
-                for i, x in enumerate(self.stream_labels.sequence_labels)
+                x + "\u200c" * i for i, x in enumerate(self.labels.sequence_labels)
             ]
 
             heatmap_kwargs.update(
@@ -144,9 +143,9 @@ class TrajectoryStatistic:
                 x=x_labels,
             )
 
-            if self.stream_labels.hover_over_entries is not None:
+            if self.labels.hover_over_entries is not None:
                 hover_over_entries = _stride_keep_last(
-                    self.stream_labels.hover_over_entries, layer_stride
+                    self.labels.hover_over_entries, layer_stride
                 )
                 heatmap_kwargs.update(
                     customdata=hover_over_entries,
@@ -352,7 +351,7 @@ class PredictionTrajectory:
         formatter: Optional[TokenFormatter] = None,
         min_prob: np.float_ = np.finfo(np.float32).eps,
         topk: int = 10,
-    ) -> StreamLabels:
+    ) -> TrajectoryLabels:
         """Labels for the prediction trajectory based on the most probable tokens.
 
         Args:
@@ -389,7 +388,7 @@ class PredictionTrajectory:
             top_probs > min_prob, formatter.vectorized_format(top_tokens), ""
         )
 
-        return StreamLabels(
+        return TrajectoryLabels(
             label_strings=label_strings,
             sequence_labels=formatter.vectorized_format(input_tokens),
             hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
@@ -401,7 +400,7 @@ class PredictionTrajectory:
         formatter: Optional[TokenFormatter] = None,
         min_prob_delta: np.float_ = np.finfo(np.float32).eps,
         topk: int = 10,
-    ) -> StreamLabels:
+    ) -> TrajectoryLabels:
         """Labels for a trajectory statistic based on the largest change in probability.
 
         Args:
@@ -443,7 +442,7 @@ class PredictionTrajectory:
             "",
         )
 
-        return StreamLabels(
+        return TrajectoryLabels(
             label_strings=label_strings,
             sequence_labels=formatter.vectorized_format(input_tokens),
             hover_over_entries=entry_format_fn(topk_tokens, 100 * topk_deltas),
@@ -465,9 +464,7 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Cross Entropy",
             units="nats",
-            stream_labels=self.largest_prob_labels(**kwargs)
-            if self.tokenizer
-            else None,
+            labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
             stats=-self.log_probs[:, np.arange(self.num_tokens), self.targets],
         )
 
@@ -479,9 +476,7 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Entropy",
             units="nats",
-            stream_labels=self.largest_prob_labels(**kwargs)
-            if self.tokenizer
-            else None,
+            labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
             stats=-np.sum(np.exp(self.log_probs) * self.log_probs, axis=-1),
         )
 
@@ -496,9 +491,7 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Forward KL",
             units="nats",
-            stream_labels=self.largest_prob_labels(**kwargs)
-            if self.tokenizer
-            else None,
+            labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
             stats=np.sum(
                 np.exp(model_log_probs) * (model_log_probs - self.log_probs), axis=-1
             ),
@@ -512,7 +505,7 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Max Probability",
             units="prob",
-            stream_labels=self.largest_prob_labels() if self.tokenizer else None,
+            labels=self.largest_prob_labels() if self.tokenizer else None,
             stats=np.exp(self.log_probs.max(-1)),
         )
 
@@ -534,7 +527,7 @@ class PredictionTrajectory:
             name="KL(Self | Other)",
             units="nats",
             stats=kl_div,
-            stream_labels=self.largest_delta_in_prob_labels(other, **kwargs)
+            labels=self.largest_delta_in_prob_labels(other, **kwargs)
             if self.tokenizer
             else None,
             min=0,
@@ -561,7 +554,7 @@ class PredictionTrajectory:
             name="JS(Self | Other)",
             units="nats",
             stats=js_div,
-            stream_labels=self.largest_delta_in_prob_labels(other, **kwargs)
+            labels=self.largest_delta_in_prob_labels(other, **kwargs)
             if self.tokenizer
             else None,
             min=0,
@@ -587,7 +580,7 @@ class PredictionTrajectory:
             name="TV(Self | Other)",
             units="prob",
             stats=t_var,
-            stream_labels=self.largest_delta_in_prob_labels(other, **kwargs)
+            labels=self.largest_delta_in_prob_labels(other, **kwargs)
             if self.tokenizer
             else None,
             min=0,
