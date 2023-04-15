@@ -1,7 +1,4 @@
 """Provides tools for plotting."""
-from .plot_lens import (
-    PredictionTrajectory,
-    TokenFormatter,
-    TrajectoryStatistic,
-    TrajectoryLabels,
-)
+from .prediction_trajectory import PredictionTrajectory
+from .trajectory_plotting import TrajectoryLabels, TrajectoryStatistic
+from .token_formatter import TokenFormatter
