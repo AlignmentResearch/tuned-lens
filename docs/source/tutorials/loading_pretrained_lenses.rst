@@ -18,8 +18,8 @@ and its corresponding tokenizer using the hugging face API.
 >>> from tuned_lens import TunedLens
 >>> from transformers import AutoModelForCausalLM
 >>> device = torch.device('cpu')
->>> model = AutoModelForCausalLM.from_pretrained('EleutherAI/pythia-160m-deduped')
->>> tuned_lens = TunedLens.load("pythia-160m-deduped", map_location=device)
+>>> model = AutoModelForCausalLM.from_pretrained('EleutherAI/pythia-160m-deduped-v0')
+>>> tuned_lens = TunedLens.load("pythia-160m-deduped-v0", map_location=device)
 
 If you want to load from your own code space you can override the default
 by providing the correct environment variables see :ref:`tuned\_lens.load\_artifacts`.
