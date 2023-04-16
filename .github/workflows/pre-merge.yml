@@ -32,7 +32,7 @@ jobs:
           sudo apt install -y pandoc
       - name: Install python dependences
         run: |
-          pip install -e ".[docs, tests]"
+          pip install -e ".[docs, tests, notebooks]"
       - name: Ensure no warnings
         run: |
           python -m sphinx -W docs/source docs/build
