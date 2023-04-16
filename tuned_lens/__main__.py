@@ -12,7 +12,7 @@ from .scripts.eval_loop import cli_args as eval_cli_args
 
 
 class SharedCliArgs:
-    """Type hinting for CLI args used for both training and evaluation"""
+    """Type hinting for CLI args used for both training and evaluation."""
     model_name: str
     dataset: Optional[List[str]]
     cpu_offload: bool

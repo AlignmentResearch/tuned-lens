@@ -23,7 +23,7 @@ import torch.distributed as dist
 
 
 class CliArgs(SharedCliArgs):
-    """Type hinting for CLI args"""
+    """Type hinting for CLI args."""
     constant: bool
     extra_layers: int
     lasso: float

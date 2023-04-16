@@ -25,7 +25,7 @@ import torch.distributed as dist
 
 
 class CliArgs(SharedCliArgs):
-    """Type hinting for CLI args"""
+    """Type hinting for CLI args."""
     lens: Path
     grad_alignment: bool
     limit: int
