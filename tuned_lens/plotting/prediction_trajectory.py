@@ -287,7 +287,12 @@ class PredictionTrajectory:
     def cross_entropy(self, **kwargs) -> TrajectoryStatistic:
         """The cross entropy of the predictions to the targets.
 
-        **kwargs are passed to largest_prob_labels.
+        Args:
+            **kwargs: are passed to largest_prob_labels.
+
+        Returns:
+            A TrajectoryStatistic with the cross entropy of the predictions to the
+            targets.
         """
         if self.targets is None:
             raise ValueError("Cannot compute cross entropy without targets.")
@@ -307,7 +312,11 @@ class PredictionTrajectory:
     def entropy(self, **kwargs) -> TrajectoryStatistic:
         """The entropy of the predictions.
 
-        **kwargs are passed to largest_prob_labels.
+        Args:
+            **kwargs: are passed to largest_prob_labels.
+
+        Returns:
+            A TrajectoryStatistic with the entropy of the predictions.
         """
         return TrajectoryStatistic(
             name="Entropy",
@@ -319,7 +328,12 @@ class PredictionTrajectory:
     def forward_kl(self, **kwargs) -> TrajectoryStatistic:
         """KL divergence of the lens predictions to the model predictions.
 
-        **kwargs are passed to largest_prob_labels.
+        Args:
+            **kwargs: are passed to largest_prob_labels.
+
+        Returns:
+            A TrajectoryStatistic with the KL divergence of the lens predictions to the
+            final output of the model.
         """
         model_log_probs = self.model_log_probs.reshape(
             1, self.num_tokens, self.vocab_size
@@ -336,12 +350,16 @@ class PredictionTrajectory:
     def max_probability(self, **kwargs) -> TrajectoryStatistic:
         """Max probability of the among the predictions.
 
-        **kwargs are passed to largest_prob_labels.
+        Args:
+            **kwargs: are passed to largest_prob_labels.
+
+        Returns:
+            A TrajectoryStatistic with the max probability of the among the predictions.
         """
         return TrajectoryStatistic(
             name="Max Probability",
             units="probs",
-            labels=self.largest_prob_labels() if self.tokenizer else None,
+            labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
             stats=np.exp(self.log_probs.max(-1)),
         )
 
