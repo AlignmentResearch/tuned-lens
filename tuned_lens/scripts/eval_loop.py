@@ -57,7 +57,8 @@ cli_args: List[Arg] = [
         "options": {
             "type": arg_types["limit"],
             "default": None,
-            "help": "Number of batches to evaluate on. If None, will use the entire dataset.",
+            "help": "Number of batches to evaluate on. If None, will use the entire "
+                    "dataset.",
         },
     },
     {

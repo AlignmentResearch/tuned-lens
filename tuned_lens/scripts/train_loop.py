@@ -78,7 +78,8 @@ cli_args: List[Arg] = [
         "options": {
             "type": arg_types["lr_scale"],
             "default": 1.0,
-            "help": "The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this factor.",
+            "help": "The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this "
+                    "factor.",
         },
     },
     {
@@ -156,7 +157,8 @@ cli_args: List[Arg] = [
         "options": {
             "type": arg_types["warmup_steps"],
             "default": None,
-            "help": "Number of warmup steps. Defaults to min(0.1 * num_steps, 1000) for Adam and 0 for SGD.",
+            "help": "Number of warmup steps. Defaults to min(0.1 * num_steps, 1000) "
+                    "for Adam and 0 for SGD.",
         },
     },
     {
