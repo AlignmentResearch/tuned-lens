@@ -38,6 +38,7 @@ docs = [
 test = [
     "pytest-skip-slow",
     "pytest-cov",
+    "nbmake",
     "pytest",
     "mock",
 ]

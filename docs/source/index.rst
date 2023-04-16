@@ -12,7 +12,7 @@ API Reference
 
     tuned_lens.nn.lenses
     tuned_lens.nn.decoder
-    tuned_lens.plotting.plot_lens
+    tuned_lens.plotting
     tuned_lens.load_artifacts
 
 .. toctree::
