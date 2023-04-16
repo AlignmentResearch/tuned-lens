@@ -51,9 +51,6 @@ tuned-lens = "tuned_lens.__main__:run"
 [tool.setuptools.packages.find]
 namespaces = false
 
-[tool.pytest.ini_options]
-addini = "slow : mark tests as slow these will be skipped by default"
-
 [tool.ruff]
 # Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.
 select = ["E", "F", "D"]

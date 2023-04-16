@@ -32,7 +32,7 @@ class PredictionTrajectory:
     """
 
     # The log probabilities of the predictions for each hidden layer + the models logits
-    # Shape: (num_layers + 1, seq_len, vocab_size)
+    # Shape: (num_layers, seq_len, vocab_size)
     log_probs: NDArray[np.float32]
     input_ids: NDArray[np.int64]
     targets: Optional[NDArray[np.int64]] = None
@@ -340,7 +340,7 @@ class PredictionTrajectory:
         """
         return TrajectoryStatistic(
             name="Max Probability",
-            units="prob",
+            units="probs",
             labels=self.largest_prob_labels() if self.tokenizer else None,
             stats=np.exp(self.log_probs.max(-1)),
         )
@@ -414,7 +414,7 @@ class PredictionTrajectory:
 
         return TrajectoryStatistic(
             name="TV(Self | Other)",
-            units="prob",
+            units="probs",
             stats=t_var,
             labels=self.largest_delta_in_prob_labels(other, **kwargs)
             if self.tokenizer
