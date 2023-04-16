@@ -34,7 +34,6 @@ docs = [
     "sphinx",
     "sphinx-autodoc-typehints",
     "sphinx-rtd-theme",
-    "pandoc",
     "nbsphinx",
 ]
 test = [
