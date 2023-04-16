@@ -1,12 +1,14 @@
 """Evaluation loop for the tuned lens model."""
 from argparse import Namespace
+from pathlib import Path
 from datasets import Dataset
 from collections import defaultdict
 from itertools import islice
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel
-from typing import Optional
+from typing import List, Optional
+from tuned_lens.__main__ import Arg
 from tuned_lens.residual_stream import record_residual_stream
 from tuned_lens.stats import ResidualStats, LogitStats
 from tuned_lens.nn import Decoder, TunedLens
@@ -21,6 +23,43 @@ from tuned_lens.utils import (
 )
 import torch as th
 import torch.distributed as dist
+
+cli_args: List[Arg] = [
+    {
+        "name_or_flags": ["--lens"],
+        "options": {
+            "type": Path,
+            "help": "Directory containing the tuned lens to evaluate.",
+            "nargs": "?",
+        },
+    },
+    {
+        "name_or_flags": ["--grad-alignment"],
+        "options": {"action": "store_true", "help": "Evaluate gradient alignment."},
+    },
+    {
+        "name_or_flags": ["--limit"],
+        "options": {
+            "type": int,
+            "default": None,
+            "help": "Number of batches to evaluate on. If None, will use the entire dataset.",
+        },
+    },
+    {
+        "name_or_flags": ["-o", "--output"],
+        "options": {
+            "type": Path,
+            "help": "JSON file to save the eval results to.",
+        },
+    },
+    {
+        "name_or_flags": ["--transfer"],
+        "options": {
+            "action": "store_true",
+            "help": "Evaluate how well probes transfer to other layers.",
+        },
+    },
+]
 
 
 @th.autocast("cuda", enabled=th.cuda.is_available())
