@@ -27,13 +27,18 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install dependences
         run: |
-          pip install -e ".[docs]"
+          pip install -e ".[docs, tests]"
       - name: Ensure no warnings
         run: |
           python -m sphinx -W docs/source docs/build
       - name: Run doc-tests
         run: |
           cd docs && make doctest
+      - name: Test the tutorial notebooks
+        run: |
+          python -m ipykernel install --name tuned-lens \
+          pytest --nbmake docs/source/tutorials/*.ipynb --overwrite \
+            --nbmake-kernel=tuned-lens \
   python-build-and-test:
     name: Install and run tests to ensure dependencies are specific enough.
     runs-on: ubuntu-latest
@@ -72,17 +77,7 @@ jobs:
           context: .
           target: test
           tags: unit_test_img:latest
-      - name: Test tutorial notebooks
-        run: |
-          docker run \
-            -v $PWD:/workspace \
-            --pull=never \
-            --rm unit_test_img:latest \
-            python3 -m ipykernel install --name tuned-lens \
-            && pytest --nbmake docs/source/tutorials/*.ipynb \
-            --overwrite \
-            --nbmake-kernel=tuned-lens \
-      - name: Run tests
+      - name: Run unit tests
         run: |
           docker run \
             -v $PWD:/workspace \
