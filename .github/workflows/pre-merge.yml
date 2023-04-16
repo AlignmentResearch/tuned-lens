@@ -30,9 +30,9 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y pandoc
-      - name: Install python dependences
+      - name: Install python dependencies
         run: |
-          pip install -e ".[docs, tests, notebooks]"
+          pip install -e .[docs, test, notebooks]
       - name: Ensure no warnings
         run: |
           python -m sphinx -W docs/source docs/build
