@@ -32,7 +32,9 @@ shared_cli_args: List[Arg] = [
             "type": str,
             "default": ("the_pile", "all"),
             "nargs": "*",
-            "help": "Name of dataset to use. Can either be a local .jsonl file or a name suitable to be passed to the HuggingFace load_dataset function.",
+            "help": "Name of dataset to use. Can either be a local .jsonl file or a "
+                    "name suitable to be passed to the HuggingFace load_dataset "
+                    "function.",
         },
     },
     {
@@ -84,7 +86,8 @@ shared_cli_args: List[Arg] = [
         "name_or_flags": ["--residual-stats"],
         "options": {
             "action": "store_true",
-            "help": "Save means and covariance matrices for states in the residual stream.",
+            "help": "Save means and covariance matrices for states in the residual "
+                    "stream.",
         },
     },
     {
@@ -139,7 +142,8 @@ shared_cli_args: List[Arg] = [
         "name_or_flags": ["--tokenizer"],
         "options": {
             "type": str,
-            "help": "Name of pretrained tokenizer to use from the Huggingface Hub. If None, will use AutoTokenizer.from_pretrained('<model name>').",
+            "help": "Name of pretrained tokenizer to use from the Huggingface Hub. If "
+                    "None, will use AutoTokenizer.from_pretrained('<model name>').",
         },
     },
     {
@@ -154,7 +158,8 @@ shared_cli_args: List[Arg] = [
         "options": {
             "type": int,
             "default": None,
-            "help": "How to shift the labels wrt the input tokens (1 = next token, 0 = current token, -1 = previous token, etc.)",
+            "help": "How to shift the labels wrt the input tokens (1 = next token, 0 = "
+                    "current token, -1 = previous token, etc.)",
         },
     },
 ]
