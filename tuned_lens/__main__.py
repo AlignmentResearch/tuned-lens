@@ -35,7 +35,7 @@ class SharedCliArgs:
 
 
 class Arg(TypedDict):
-    """An argparse argument"""
+    """An argparse argument."""
     name_or_flags: List[str]
     options: dict
 
