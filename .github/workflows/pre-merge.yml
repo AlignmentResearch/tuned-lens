@@ -42,7 +42,7 @@ jobs:
       - name: Test the tutorial notebooks
         run: |
           python -m ipykernel install --user --name tuned-lens
-          pytest --nbmake docs/source/tutorials/*.ipynb \
+          python -m pytest --nbmake docs/source/tutorials/*.ipynb \
             --nbmake-kernel=tuned-lens
   python-build-and-test:
     name: Install and run tests to ensure dependencies are specific enough.
