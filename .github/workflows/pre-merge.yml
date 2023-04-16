@@ -78,7 +78,7 @@ jobs:
             -v $PWD:/workspace \
             --pull=never \
             --rm unit_test_img:latest \
-            python3 -m pip install ipykernel --name tuned-lens \
+            python3 -m ipykernel install --name tuned-lens \
             && pytest --nbmake docs/source/tutorials/*.ipynb \
             --overwrite \
             --nbmake-kernel=tuned-lens \
