@@ -1,5 +1,4 @@
 """Provides Sub command for downstream evaluation."""
-from argparse import Namespace
 from collections import defaultdict
 from pathlib import Path
 from datasets import Dataset
@@ -24,6 +23,7 @@ print "{}":\n\n"""
 
 
 class CliArgs(SharedCliArgs):
+    """Type hinting for CLI args"""
     lens: Path
     injection: bool
     incorrect_fewshot: bool

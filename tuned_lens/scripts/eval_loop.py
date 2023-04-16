@@ -1,5 +1,4 @@
 """Evaluation loop for the tuned lens model."""
-from argparse import Namespace
 from pathlib import Path
 from datasets import Dataset
 from collections import defaultdict
@@ -26,6 +25,7 @@ import torch.distributed as dist
 
 
 class CliArgs(SharedCliArgs):
+    """Type hinting for CLI args"""
     lens: Path
     grad_alignment: bool
     limit: int

@@ -1,5 +1,4 @@
 """Training loop for training a TunedLens model against a transformer on a dataset."""
-from argparse import Namespace
 from collections import defaultdict
 from typing import List, Optional, get_type_hints
 from pathlib import Path
@@ -24,6 +23,7 @@ import torch.distributed as dist
 
 
 class CliArgs(SharedCliArgs):
+    """Type hinting for CLI args"""
     constant: bool
     extra_layers: int
     lasso: float
