@@ -12,7 +12,7 @@ from .scripts.eval_loop import cli_args as eval_cli_args
 
 
 class Arg(TypedDict):
-    """An argparse argument"""
+    """An argparse argument."""
     name_or_flags: List[str]
     options: dict
 
