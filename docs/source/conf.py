@@ -36,6 +36,7 @@ extensions = [
     "sphinx_autodoc_typehints",
     "sphinx.ext.doctest",
     "myst_parser",
+    "nbsphinx",
 ]
 
 napoleon_google_docstring = True

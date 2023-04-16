@@ -78,7 +78,7 @@ jobs:
             -v $PWD:/workspace \
             --pull=never \
             --rm unit_test_img:latest \
-            pytest --nbmake docs/tutorials/*.ipynb --overwrite
+            pytest --nbmake docs/source/tutorials/*.ipynb --overwrite
       - name: Confirm tutorial notebooks have not changed
         run: |
           git diff --exit-code docs/tutorials
