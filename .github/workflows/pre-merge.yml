@@ -36,8 +36,8 @@ jobs:
           cd docs && make doctest
       - name: Test the tutorial notebooks
         run: |
-          python -m ipykernel install --name tuned-lens \
-          pytest --nbmake docs/source/tutorials/*.ipynb --overwrite \
+          python -m ipykernel install --name tuned-lens
+          pytest --nbmake docs/source/tutorials/*.ipynb \
             --nbmake-kernel=tuned-lens \
   python-build-and-test:
     name: Install and run tests to ensure dependencies are specific enough.
