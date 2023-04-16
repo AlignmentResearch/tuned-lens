@@ -1,7 +1,7 @@
 """Training loop for training a TunedLens model against a transformer on a dataset."""
 from argparse import Namespace
 from collections import defaultdict
-from typing import List
+from typing import List, Optional, get_type_hints
 from pathlib import Path
 from datasets import Dataset
 from itertools import islice
@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup
 from tuned_lens import TunedLens
-from tuned_lens.__main__ import Arg
+from tuned_lens.__main__ import Arg, SharedCliArgs
 from tuned_lens.residual_stream import ResidualStream
 from tuned_lens.utils import (
     maybe_all_reduce,
@@ -22,6 +22,29 @@ from tuned_lens.utils import (
 import torch as th
 import torch.distributed as dist
 
+
+class CliArgs(SharedCliArgs):
+    constant: bool
+    extra_layers: int
+    lasso: float
+    lens: Path
+    lr_scale: float
+    momentum: float
+    num_steps: int
+    optimizer: str
+    output: Path
+    pre_ln: bool
+    resume: Path
+    separate_unembeddings: bool
+    tokens_per_step: int
+    wandb: str
+    warmup_steps: Optional[int]
+    weight_decay: float
+    zero: bool
+
+
+arg_types = get_type_hints(CliArgs)
+
 cli_args: List[Arg] = [
     {
         "name_or_flags": ["--constant"],
@@ -30,7 +53,7 @@ cli_args: List[Arg] = [
     {
         "name_or_flags": ["--extra-layers"],
         "options": {
-            "type": int,
+            "type": arg_types["extra_layers"],
             "default": 0,
             "help": "Number of extra decoder layers.",
         },
@@ -38,7 +61,7 @@ cli_args: List[Arg] = [
     {
         "name_or_flags": ["--lasso"],
         "options": {
-            "type": float,
+            "type": arg_types["lasso"],
             "default": 0.0,
             "help": "LASSO (L1) regularization strength.",
         },
@@ -46,14 +69,14 @@ cli_args: List[Arg] = [
     {
         "name_or_flags": ["--lens"],
         "options": {
-            "type": Path,
+            "type": arg_types["lens"],
             "help": "Directory containing a lens to warm-start training.",
         },
     },
     {
         "name_or_flags": ["--lr-scale"],
         "options": {
-            "type": float,
+            "type": arg_types["lr_scale"],
             "default": 1.0,
             "help": "The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this factor.",
         },
@@ -61,19 +84,23 @@ cli_args: List[Arg] = [
     {
         "name_or_flags": ["--momentum"],
         "options": {
-            "type": float,
+            "type": arg_types["momentum"],
             "default": 0.9,
             "help": "Momentum coefficient for SGD, or beta1 for Adam.",
         },
     },
     {
         "name_or_flags": ["--num-steps"],
-        "options": {"type": int, "default": 250, "help": "Number of training steps."},
+        "options": {
+            "type": arg_types["num_steps"],
+            "default": 250,
+            "help": "Number of training steps.",
+        },
     },
     {
         "name_or_flags": ["--optimizer"],
         "options": {
-            "type": str,
+            "type": arg_types["optimizer"],
             "default": "sgd",
             "choices": ("adam", "sgd"),
             "help": "The type of optimizer to use.",
@@ -82,7 +109,7 @@ cli_args: List[Arg] = [
     {
         "name_or_flags": ["-o", "--output"],
         "options": {
-            "type": Path,
+            "type": arg_types["output"],
             "required": True,
             "help": "File to save the lenses to. Defaults to the model name.",
         },
@@ -90,37 +117,44 @@ cli_args: List[Arg] = [
     {
         "name_or_flags": ["--pre-ln"],
         "options": {
+            "type": arg_types["pre_ln"],
             "action": "store_true",
             "help": "Apply layer norm before, and not after, each probe.",
         },
     },
     {
         "name_or_flags": ["--resume"],
-        "options": {"type": Path, "help": "File to resume training from."},
+        "options": {
+            "type": arg_types["resume"],
+            "help": "File to resume training from.",
+        },
     },
     {
         "name_or_flags": ["--separate-unembeddings"],
         "options": {
-            "action": "store_true",
+            "type": arg_types["separate_unembeddings"],
             "help": "Learn a separate unembedding for each layer.",
         },
     },
     {
         "name_or_flags": ["--tokens-per-step"],
         "options": {
-            "type": int,
+            "type": arg_types["tokens_per_step"],
             "default": 2**18,
             "help": "Number of tokens per step.",
         },
     },
     {
         "name_or_flags": ["--wandb"],
-        "options": {"type": str, "help": "Name of run in Weights & Biases."},
+        "options": {
+            "type": arg_types["wandb"],
+            "help": "Name of run in Weights & Biases.",
+        },
     },
     {
         "name_or_flags": ["--warmup-steps"],
         "options": {
-            "type": int,
+            "type": arg_types["warmup_steps"],
             "default": None,
             "help": "Number of warmup steps. Defaults to min(0.1 * num_steps, 1000) for Adam and 0 for SGD.",
         },
@@ -128,20 +162,23 @@ cli_args: List[Arg] = [
     {
         "name_or_flags": ["--weight-decay"],
         "options": {
-            "type": float,
+            "type": arg_types["weight_decay"],
             "default": 1e-3,
             "help": "Weight decay coefficient.",
         },
     },
     {
         "name_or_flags": ["--zero"],
-        "options": {"action": "store_true", "help": "Use ZeroRedundancyOptimizer."},
+        "options": {
+            "type": arg_types["zero"],
+            "help": "Use ZeroRedundancyOptimizer.",
+        },
     },
 ]
 
 
 def train_loop(
-    args: Namespace,
+    args: CliArgs,
     model: th.nn.Module,
     data: Dataset,
     lens: TunedLens,

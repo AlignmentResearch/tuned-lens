@@ -1,6 +1,6 @@
 """Script to train or evaluate a set of tuned lenses for a language model."""
 
-from typing import List, TypedDict
+from typing import List, Optional, TypedDict, get_type_hints
 from .scripts.lens import main as lens_main
 from argparse import ArgumentParser
 from contextlib import nullcontext, redirect_stdout
@@ -12,24 +12,48 @@ from .scripts.downstream import cli_args as downstream_cli_args
 from .scripts.eval_loop import cli_args as eval_cli_args
 
 
+class SharedCliArgs:
+    model_name: str
+    dataset: Optional[List[str]]
+    cpu_offload: bool
+    fsdp: bool
+    loss: str
+    no_cache: bool
+    per_gpu_batch_size: int
+    random_model: bool
+    residual_stats: bool
+    revision: str
+    seed: int
+    slow_tokenizer: bool
+    split: str
+    sweep: str
+    task: List[str]
+    text_column: str
+    tokenizer: str
+    tokenizer_type: str
+    token_shift: int
+
+
 class Arg(TypedDict):
     name_or_flags: List[str]
     options: dict
 
+
+arg_types = get_type_hints(SharedCliArgs)
 
 # Arguments shared by train and eval; see https://stackoverflow.com/a/56595689.
 shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["model_name"],
         "options": {
-            "type": str,
+            "type": arg_types["model_name"],
             "help": "Name of model to use in the Huggingface Hub.",
         },
     },
     {
         "name_or_flags": ["dataset"],
         "options": {
-            "type": str,
+            "type": arg_types["dataset"],
             "default": ("the_pile", "all"),
             "nargs": "*",
             "help": "Name of dataset to use. Can either be a local .jsonl file or a name suitable to be passed to the HuggingFace load_dataset function.",
@@ -38,6 +62,7 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--cpu-offload"],
         "options": {
+            "type": arg_types["cpu_offload"],
             "action": "store_true",
             "help": "Use CPU offloading. Must be combined with --fsdp.",
         },
@@ -45,6 +70,7 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--fsdp"],
         "options": {
+            "type": arg_types["fsdp"],
             "action": "store_true",
             "help": "Run the model with Fully Sharded Data Parallelism.",
         },
@@ -52,7 +78,7 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--loss"],
         "options": {
-            "type": str,
+            "type": arg_types["loss"],
             "default": "kl",
             "choices": ("ce", "kl"),
             "help": "Loss function to use.",
@@ -61,6 +87,7 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--no-cache"],
         "options": {
+            "type": arg_types["no_cache"],
             "action": "store_true",
             "help": "Don't permanently cache the model on disk.",
         },
@@ -68,7 +95,7 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--per-gpu-batch-size"],
         "options": {
-            "type": int,
+            "type": arg_types["per_gpu_batch_size"],
             "default": 1,
             "help": "Number of samples to try to fit on a GPU at once.",
         },
@@ -76,6 +103,7 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--random-model"],
         "options": {
+            "type": arg_types["random_model"],
             "action": "store_true",
             "help": "Use a randomly initialized model instead of pretrained weights.",
         },
@@ -83,6 +111,7 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--residual-stats"],
         "options": {
+            "type": arg_types["residual_stats"],
             "action": "store_true",
             "help": "Save means and covariance matrices for states in the residual stream.",
         },
@@ -90,7 +119,7 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--revision"],
         "options": {
-            "type": str,
+            "type": arg_types["revision"],
             "default": "main",
             "help": "Git revision to use for pretrained models.",
         },
@@ -98,31 +127,38 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--seed"],
         "options": {
-            "type": int,
+            "type": arg_types["seed"],
             "default": 42,
             "help": "Random seed for data shuffling.",
         },
     },
     {
         "name_or_flags": ["--slow-tokenizer"],
-        "options": {"action": "store_true", "help": "Use a slow tokenizer."},
+        "options": {
+            "type": arg_types["slow_tokenizer"],
+            "action": "store_true",
+            "help": "Use a slow tokenizer.",
+        },
     },
     {
         "name_or_flags": ["--split"],
         "options": {
-            "type": str,
+            "type": arg_types["split"],
             "default": "validation",
             "help": "Split of the dataset to use.",
         },
     },
     {
         "name_or_flags": ["--sweep"],
-        "options": {"type": str, "help": "Range of checkpoints to sweep over"},
+        "options": {
+            "type": arg_types["sweep"],
+            "help": "Range of checkpoints to sweep over",
+        },
     },
     {
         "name_or_flags": ["--task"],
         "options": {
-            "type": str,
+            "type": arg_types["task"],
             "nargs": "+",
             "help": "lm-eval task to run the model on.",
         },
@@ -130,7 +166,7 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--text-column"],
         "options": {
-            "type": str,
+            "type": arg_types["text_column"],
             "default": "text",
             "help": "Column of the dataset containing text to run the model on.",
         },
@@ -138,21 +174,21 @@ shared_cli_args: List[Arg] = [
     {
         "name_or_flags": ["--tokenizer"],
         "options": {
-            "type": str,
+            "type": arg_types["tokenizer"],
             "help": "Name of pretrained tokenizer to use from the Huggingface Hub. If None, will use AutoTokenizer.from_pretrained('<model name>').",
         },
     },
     {
         "name_or_flags": ["--tokenizer-type"],
         "options": {
-            "type": str,
+            "type": arg_types["tokenizer_type"],
             "help": "Name of tokenizer class to use. If None, will use AutoTokenizer.",
         },
     },
     {
         "name_or_flags": ["--token-shift"],
         "options": {
-            "type": int,
+            "type": arg_types["token_shift"],
             "default": None,
             "help": "How to shift the labels wrt the input tokens (1 = next token, 0 = current token, -1 = previous token, etc.)",
         },
