@@ -4,7 +4,6 @@ from typing import List, TypedDict
 from .scripts.lens import main as lens_main
 from argparse import ArgumentParser
 from contextlib import nullcontext, redirect_stdout
-from pathlib import Path
 import os
 import torch.distributed as dist
 from .scripts.train_loop import cli_args as train_cli_args
@@ -13,6 +12,7 @@ from .scripts.eval_loop import cli_args as eval_cli_args
 
 
 class Arg(TypedDict):
+    """An argparse argument"""
     name_or_flags: List[str]
     options: dict
 
