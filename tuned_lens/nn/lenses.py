@@ -6,7 +6,6 @@ from pathlib import Path
 import json
 import abc
 
-from ._model_specific import instantiate_layer
 from ..load_artifacts import load_lens_artifacts
 from .unembed import Unembed, UnembedConfig
 from transformers import PreTrainedModel, PretrainedConfig
@@ -142,7 +141,11 @@ class TunedLens(Lens):
 
     @classmethod
     def from_pretrained(
-        cls, resource_id: str, cache_dir: Optional[str] = None, **kwargs
+        cls,
+        resource_id: str,
+        cache_dir: Optional[str] = None,
+        revision: Optional[str] = None,
+        **kwargs,
     ) -> "TunedLens":
         """Load a tuned lens from a folder or hugging face hub.
 
@@ -151,31 +154,21 @@ class TunedLens(Lens):
                 or the name of the model on the hugging face hub.
             cache_dir : The directory to cache the artifacts in if downloaded. If None,
                 will use the default huggingface cache directory.
+            revision : The git revision to use if downloading from the hub.
             **kwargs : Additional arguments to pass to torch.load.
 
         Returns:
             A TunedLens instance.
         """
-        # TODO this still needs to be refactored
-        config_path, ckpt_path = load_lens_artifacts(resource_id, cache_dir=cache_dir)
+        config_path, ckpt_path = load_lens_artifacts(
+            resource_id, cache_dir=cache_dir, revision=revision
+        )
         # Load config
         with open(config_path, "r") as f:
             config = json.load(f)
 
         # Load parameters
         state = th.load(ckpt_path, **kwargs)
-
-        # Backwards compatibility we really need to stop renaming things
-        keys = list(state.keys())
-        for key in keys:
-            for old_key in ["probe", "adapter"]:
-                if old_key in key:
-                    warn(
-                        f"Loading a checkpoint with a '{old_key}' key. "
-                        "This is deprecated and may be removed in a future version. "
-                    )
-                    new_key = key.replace(old_key, "translator")
-                    state[new_key] = state.pop(key)
 
         # Drop unrecognized config keys
         unrecognized = set(config) - set(inspect.getfullargspec(cls).kwonlyargs)
@@ -184,28 +177,6 @@ class TunedLens(Lens):
             del config[key]
 
         lens = cls(**config)
-
-        if num_extras := config.get("extra_layers"):
-            # This is sort of a hack but AutoConfig doesn't appear to have a from_dict
-            # for some reason.
-            from transformers.models.auto import CONFIG_MAPPING
-
-            model_conf_dict = config.get("model_config")
-            del model_conf_dict["torch_dtype"]
-            assert model_conf_dict, "Need a 'model_config' entry to load extra layers"
-
-            model_type = model_conf_dict["model_type"]
-            config_cls = CONFIG_MAPPING[model_type]
-            model_config = config_cls.from_dict(model_conf_dict)
-
-            lens.extra_layers = th.nn.Sequential(
-                *[
-                    instantiate_layer(
-                        model_config, model_config.num_hidden_layers - i - 1, model_type
-                    )
-                    for i in range(num_extras)
-                ]
-            )
 
         lens.load_state_dict(state)
         return lens
