@@ -1,4 +1,5 @@
-from tuned_lens.nn.lenses import TunedLens, LogitLens
+from tuned_lens.nn.unembed import Unembed
+from tuned_lens.nn.lenses import TunedLens, TunedLensConfig, LogitLens
 import transformers as trf
 
 import tempfile
@@ -8,23 +9,53 @@ import mock
 
 
 @pytest.fixture
-def logit_lens():
-    model = mock.MagicMock(trf.PreTrainedModel)
-    model.config = mock.MagicMock(trf.PretrainedConfig)
-    model.config.hidden_size = 128
-    model.config.num_layers = 3
-    model.config.vocab_size = 100
-    model.get_output_embeddings = mock.MagicMock(return_value=th.nn.Linear(128, 100))
-
-    with mock.patch("tuned_lens.model_surgery.get_final_layer_norm") as get_final_ln:
-        get_final_ln.return_value = th.nn.LayerNorm(128)
-
-    return LogitLens(model)
+def model_config():
+    config = mock.MagicMock(trf.PretrainedConfig)
+    config.hidden_size = 128
+    config.vocab_size = 100
+    config.num_hidden_layers = 3
+    return config
 
 
 @pytest.fixture
-def tuned_lens():
-    return TunedLens(d_model=128, num_layers=3, vocab_size=100)
+def model(model_config):
+    model = mock.MagicMock(trf.PreTrainedModel)
+    model.config = model_config
+    model.get_output_embeddings = mock.MagicMock(return_value=th.nn.Linear(128, 100))
+    return model
+
+
+@pytest.fixture
+def unembed():
+    mock_unembed = mock.MagicMock(Unembed)
+    W = th.randn(100, 128)
+    mock_unembed.forward = lambda x: th.matmul(x, W.T)
+    return mock_unembed
+
+
+@pytest.fixture
+def logit_lens(unembed):
+    logit_lens = LogitLens(unembed)
+    return logit_lens
+
+
+@pytest.fixture
+def tuned_lens_config():
+    return TunedLensConfig(
+        base_model_name_or_path="test-model",
+        d_model=128,
+        num_hidden_layers=3,
+        bias=True,
+    )
+
+
+@pytest.fixture
+def tuned_lens(tuned_lens_config, unembed):
+    tuned_lens = TunedLens(
+        unembed,
+        tuned_lens_config,
+    )
+    return tuned_lens
 
 
 def test_logit_lens_smoke(logit_lens):
@@ -32,24 +63,29 @@ def test_logit_lens_smoke(logit_lens):
     logit_lens(randn, 0)
 
 
-def test_tuned_lens_smoke(tuned_lens: TunedLens):
+def test_tuned_lens_init_from_model(model):
+    tuned_lens = TunedLens.init_from_model(model)
+    assert tuned_lens.config.base_model_name_or_path == "test-model"
+    assert tuned_lens.config.d_model == 128
+    assert tuned_lens.config.num_hidden_layers == 3
+    assert tuned_lens.config.bias
+
+
+def test_tuned_lens_forward(tuned_lens: TunedLens):
     randn = th.randn(1, 10, 128)
-    logits_forward = tuned_lens(randn, 0)
-    logits = tuned_lens.unembed(randn + tuned_lens[0](tuned_lens.layer_norm(randn)))
+    logits_forward = tuned_lens.forward(randn, 0)
+    logits = tuned_lens.unembed.forward(
+        randn + tuned_lens[0](randn)
+    )  # TODO check if this is right
     assert th.allclose(logits_forward, logits)
 
 
-def test_we_can_still_load_old_lenses():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        TunedLens.from_pretrained("gpt2", cache_dir=tmpdir)
-
-
-def test_tuned_lens_save_and_load(tuned_lens):
+def test_tuned_lens_save_and_load(unembed: Unembed, tuned_lens: TunedLens):
     randn = th.randn(1, 10, 128)
 
     logits_before = tuned_lens(randn, 1)
     with tempfile.TemporaryDirectory() as tmpdir:
         tuned_lens.save(tmpdir)
-        tuned_lens = TunedLens.from_pretrained(tmpdir)
+        tuned_lens = TunedLens.from_unembed_and_pretrained(unembed, tmpdir)
         logits_after = tuned_lens(randn, 1)
         assert th.allclose(logits_before, logits_after)

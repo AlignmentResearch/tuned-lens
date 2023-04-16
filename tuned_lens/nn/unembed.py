@@ -2,8 +2,7 @@
 from dataclasses import dataclass
 from torch.autograd.functional import hessian
 from torch.distributions import Distribution
-from ._model_specific import instantiate_layer
-from transformers import PreTrainedModel, PretrainedConfig
+from transformers import PreTrainedModel
 from typing import cast, Callable, Literal, Optional
 from tuned_lens.model_surgery import get_final_layer_norm, get_transformer_layers
 from tuned_lens.stats import kl_divergence
@@ -23,24 +22,9 @@ class InversionOutput:
     hessian: Optional[th.Tensor]
 
 
-@dataclass
-class UnembedConfig:
-    model_config: PretrainedConfig
-    extra_layers: int = 0
-
-    @property
-    def d_model(self) -> int:
-        return self.model_config.d_model
-
-    @property
-    def vocab_size(self) -> int:
-        return self.model_config.vocab_size
-
-
 class Unembed(th.nn.Module):
     """Module that maps transformer hidden states to logits (and vice versa)."""
 
-    config: UnembedConfig
     transformer_layers: th.nn.ModuleList
     layer_norm: th.nn.LayerNorm
     unembedding: th.nn.Linear
@@ -49,62 +33,19 @@ class Unembed(th.nn.Module):
 
     def __init__(
         self,
-        model: Optional[PreTrainedModel] = None,
+        model: PreTrainedModel,
         extra_layers: int = 0,
-        config: Optional[UnembedConfig] = None,
     ):
         """Initialize the decoder.
 
         Args:
             model: A HuggingFace model from which to extract the unembedding matrix.
-            num_transformer_layers: To leave at the end of the transformer.
-
-        Automatically set if the model is provided.
-
-        KWArgs:
-            d_model: The dimensionality of the hidden states.
-            vocab_size: The size of the vocabulary.
-            norm_eps: The epsilon value for the layer norm.
+            extra_layers: To leave at the end of the transformer.
         """
         super().__init__()
         self.transformer_layers = th.nn.ModuleList()
         # Initializing from scratch without a model
-        if model and config:
-            raise ValueError("Must provide either a model xor a config.")
 
-        if model:
-            self.config = UnembedConfig(model.config, extra_layers)
-            self._init_from_model(model)
-        elif config:
-            self.config = config
-            self._init_from_config(config)
-        else:
-            raise ValueError("Must provide a config if not providing a model.")
-
-        # In general we don't want to finetune the decoder
-        self.requires_grad_(False)
-
-    def _init_from_config(self, config: UnembedConfig):
-        """Randomly initialize the unembedding matrix and layer norm."""
-        self.config = config
-        self.layer_norm = th.nn.LayerNorm(self.config.d_model, elementwise_affine=False)
-        self.unembedding = th.nn.Linear(self.config.d_model, self.config.vocab_size)
-
-        model_type = self.config.model_config.model_type
-        self.transformer_layers.extend(
-            instantiate_layer(
-                self.config.model_config,
-                self.config.model_config.num_hidden_layers - i - 1,
-                model_type,
-            )
-            for i in range(self.config.extra_layers)
-        )
-
-        U = self.unembedding.weight.data.float()
-        self.register_buffer("_U_pinv", U.pinverse())
-
-    def _init_from_model(self, model: PreTrainedModel):
-        """Load the unembedding matrix and layer norm from a HuggingFace model."""
         raw_ln = get_final_layer_norm(model)
         assert raw_ln is not None
 
@@ -149,11 +90,19 @@ class Unembed(th.nn.Module):
         # We precompute the pseudo-inverse of the unembedding matrix
         self.register_buffer("_U_pinv", U.pinverse())
 
-        if self.config.extra_layers > 0:
+        if extra_layers > 0:
             _, layers = get_transformer_layers(model)
             self.transformer_layers.extend(
                 layers[-self.config.extra_layers, :]  # type: ignore[arg-type]
             )
+
+        # In general we don't want to finetune the decoder
+        self.requires_grad_(False)
+
+    def unembedding_hash(self) -> int:
+        """Hash the unmbedding matrix to identify the model."""
+        parameter = self.unembedding.weight.data
+        return hash(str(parameter.detach().cpu().numpy()))
 
     def forward(self, h: th.Tensor, transform: Callable = lambda x: x) -> th.Tensor:
         """Convert hidden states into logits."""
