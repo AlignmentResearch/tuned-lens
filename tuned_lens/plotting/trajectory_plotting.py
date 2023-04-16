@@ -31,7 +31,7 @@ class TrajectoryStatistic:
     # The name of the statistic.
     name: str
     # (n_layers x sequence_length) value of the statistic at each layer and position.
-    stats: NDArray[np.float32] = np.zeros((0, 0), dtype=float)
+    stats: NDArray[np.float32]
     # labels for each layer and position in the stream. For example, the top 1
     # prediction from the lens at each layer.
     labels: Optional[TrajectoryLabels] = None
