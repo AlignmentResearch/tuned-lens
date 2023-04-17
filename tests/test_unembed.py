@@ -42,16 +42,16 @@ def correctness(model_str: str):
     if U.bias is not None:
         U.bias.data.normal_()
 
-    decoder = Unembed(model)
+    unembed = Unembed(model)
     ln_f = get_final_layer_norm(model)
 
     x = th.randn(1, 1, config.hidden_size)
     y = U(ln_f(x)).log_softmax(-1)  # type: ignore[attr-defined]
 
-    th.testing.assert_close(y, decoder(x).log_softmax(-1))
+    th.testing.assert_close(y, unembed(x).log_softmax(-1))
 
-    x_hat = decoder.back_translate(x, tol=1e-5)
-    th.testing.assert_close(y.exp(), decoder(x_hat).softmax(-1), atol=5e-4, rtol=0.01)
+    x_hat = unembed.back_translate(x, tol=1e-5)
+    th.testing.assert_close(y.exp(), unembed(x_hat).softmax(-1), atol=5e-4, rtol=0.01)
 
 
 @pytest.mark.slow

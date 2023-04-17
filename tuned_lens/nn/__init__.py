@@ -4,4 +4,4 @@ from .unembed import (
     InversionOutput,
 )
 from .downstream_wrapper import DownstreamWrapper
-from .lenses import TunedLens, LogitLens
+from .lenses import Lens, TunedLens, LogitLens

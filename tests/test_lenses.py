@@ -30,6 +30,7 @@ def unembed():
     mock_unembed = mock.MagicMock(Unembed)
     W = th.randn(100, 128)
     mock_unembed.forward = lambda x: th.matmul(x, W.T)
+    mock_unembed.unembedding_hash.return_value = 42
     return mock_unembed
 
 
@@ -64,7 +65,9 @@ def test_logit_lens_smoke(logit_lens):
 
 
 def test_tuned_lens_init_from_model(model):
-    tuned_lens = TunedLens.init_from_model(model)
+    with mock.patch("tuned_lens.model_surgery.get_final_layer_norm") as mock_get_ln_f:
+        mock_get_ln_f.return_value = th.nn.LayerNorm(128)
+        tuned_lens = TunedLens.init_from_model(model)
     assert tuned_lens.config.base_model_name_or_path == "test-model"
     assert tuned_lens.config.d_model == 128
     assert tuned_lens.config.num_hidden_layers == 3

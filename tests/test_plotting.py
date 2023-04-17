@@ -1,4 +1,4 @@
-from tuned_lens.nn.lenses import TunedLens, LogitLens
+from tuned_lens.nn.lenses import LogitLens
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tuned_lens.plotting import plot_lens
 import torch as th
@@ -7,7 +7,7 @@ import torch as th
 def test_plot_logit_lens():
     pythia_125M_model = AutoModelForCausalLM.from_pretrained("EleutherAI/pythia-125m")
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-125m")
-    pythia_125M_lens = TunedLens(pythia_125M_model)
+    pythia_125M_lens = LogitLens.init_from_model(pythia_125M_model)
     pythia_125M_lens.attn_translators = th.nn.ModuleList()
     text = "Never gonna give you up, never gonna let you down,"
     text += " never gonna run around and desert you"
@@ -16,18 +16,11 @@ def test_plot_logit_lens():
     # plot logit lens
     plot_lens(
         pythia_125M_model,
-        lens=LogitLens(pythia_125M_model),
-        input_ids=input_ids,
-        tokenizer=tokenizer,
-    )
-    # plot w/ tuned lens
-    plot_lens(
-        pythia_125M_model,
         input_ids=input_ids,
         tokenizer=tokenizer,
         lens=pythia_125M_lens,
     )
-    # plot w/ tuned lens and last layer output
+    # plot logit lens and last layer output
     plot_lens(
         pythia_125M_model,
         input_ids=input_ids,

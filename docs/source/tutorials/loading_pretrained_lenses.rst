@@ -12,35 +12,39 @@ Loading a pre-trained lens
 First check if there is a pre-trained lens available in our spaces' `pre-trained lenses folder`_.
 
 Once you have found a lens that you want to use, you can load it using the simply load it
-and its corresponding tokenizer using the hugging face API.
+and its corresponding tokenizer using the hugging face API. A tuned lens is always associated with
+a model that was used to train it so first load the model and then the lens.
 
 >>> import torch
 >>> from tuned_lens import TunedLens
 >>> from transformers import AutoModelForCausalLM
 >>> device = torch.device('cpu')
 >>> model = AutoModelForCausalLM.from_pretrained('EleutherAI/pythia-160m-deduped')
->>> tuned_lens = TunedLens.load("pythia-160m-deduped", map_location=device)
+>>> tuned_lens = TunedLens.from_model_and_pretrained(model, "pythia-160m-deduped", map_location=device)
 
 If you want to load from your own code space you can override the default
 by providing the correct environment variables see :ref:`tuned\_lens.load\_artifacts`.
 
 **From the a local folder**
 
-If you have trained a lens and want to load it for inference simply pass the folder
-to the load method.
+If you have trained a lens and want to load it for inference simply pass the
+model used to train it and the folder you saved it to.
 
 .. testsetup::
 
     from tuned_lens import TunedLens
     from tempfile import TemporaryDirectory
-    lens = TunedLens(d_model=128, num_layers=3, vocab_size=100)
+    from transformers import AutoModelForCausalLM
+    model = AutoModelForCausalLM.from_pretrained('EleutherAI/pythia-160m-deduped')
     temp_dir = TemporaryDirectory()
     directory_path = temp_dir.name
 
 .. doctest::
 
+    >>> lens = TunedLens.init_from_model(model)
+    >>> # Do some thing
     >>> lens.save(directory_path)
-    >>> lens = TunedLens.load(directory_path)
+    >>> lens = TunedLens.from_model_and_pretrained(model, directory_path)
 
 .. testcleanup::
 

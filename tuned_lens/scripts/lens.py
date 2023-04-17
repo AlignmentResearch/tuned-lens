@@ -77,7 +77,7 @@ def main(args):
 
     # Can be set either in eval or in training; in eval it's required
     if getattr(args, "lens", None):
-        lens = TunedLens.load(args.lens, map_location="cpu")
+        lens = TunedLens.from_model_and_pretrained(model, args.lens, map_location="cpu")
     elif args.command in ("downstream", "eval"):
         lens = None
     else:

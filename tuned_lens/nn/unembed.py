@@ -12,7 +12,7 @@ import torch as th
 
 @dataclass
 class InversionOutput:
-    """Output of `Decoder.invert`."""
+    """Output of `Unemebd.invert`."""
 
     preimage: th.Tensor
     grad_norm: th.Tensor
@@ -36,7 +36,7 @@ class Unembed(th.nn.Module):
         model: PreTrainedModel,
         extra_layers: int = 0,
     ):
-        """Initialize the decoder.
+        """Initialize unmebed.
 
         Args:
             model: A HuggingFace model from which to extract the unembedding matrix.
@@ -96,7 +96,7 @@ class Unembed(th.nn.Module):
                 layers[-self.config.extra_layers, :]  # type: ignore[arg-type]
             )
 
-        # In general we don't want to finetune the decoder
+        # In general we don't want to finetune the unembed operation.
         self.requires_grad_(False)
 
     def unembedding_hash(self) -> int:
@@ -155,15 +155,15 @@ class Unembed(th.nn.Module):
         transform: Callable = lambda x: x,
         weight: Optional[th.Tensor] = None,
     ) -> InversionOutput:
-        """Project logits onto the image of the decoder, returning the preimage.
+        """Project logits onto the image of the unemebed operation.
 
         When the hidden state dimension is smaller than the vocabulary size, the
-        decoder cannot perfectly represent arbitrary logits, since its image is
-        restricted to a subspace; this phenomenon is known as the softmax bottleneck
+        unembed operation cannot perfectly represent arbitrary logits, since its image
+        is restricted to a subspace; this phenomenon is known as the softmax bottleneck
         (cf. https://arxiv.org/abs/1711.03953). Because of this, the inverse can only
         be approximate in general. Here, we use gradient-based optimization to find a
         hidden state that minimizes the KL divergence from the target distribution p to
-        the decoder output q: h* = argmin KL(p || q).
+        unembeded logits q(h): h* = argmin_h KL(p || q(h)).
 
         Args:
             logits: Tensor of shape `[..., vocab_size]` containing logits to invert.

@@ -17,9 +17,32 @@ import torch as th
 class Lens(abc.ABC, th.nn.Module):
     """Abstract base class for all Lens."""
 
+    unembed: Unembed
+
+    def __init__(self, unembed: Unembed):
+        """Create a Lens.
+
+        Args:
+            unembed: The unembed operation to use.
+        """
+        super().__init__()
+
+        self.unembed = unembed
+
+    @abc.abstractmethod
+    def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
+        """Convert a hidden state to the final hidden just before the unembeding.
+
+        Args:
+            h: The hidden state to convert.
+            idx: The layer of the transformer these hidden states come from.
+        """
+        ...
+
     @abc.abstractmethod
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Decode hidden states into logits."""
+        ...
 
 
 class LogitLens(Lens):
@@ -36,9 +59,7 @@ class LogitLens(Lens):
         Args:
             unembed: The unembed operation to use.
         """
-        super().__init__()
-
-        self.unembed = unembed
+        super().__init__(unembed)
 
     @classmethod
     def init_from_model(
@@ -55,6 +76,11 @@ class LogitLens(Lens):
         """
         unembed = Unembed(model, extra_layers)
         return cls(unembed)
+
+    def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
+        """For the LogitLens, this is the identity function."""
+        del idx
+        return h
 
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Decode a hidden state into logits.
@@ -121,7 +147,7 @@ class TunedLens(Lens):
             unembed: The unembed operation to use.
             config: The configuration for this lens.
         """
-        super().__init__()
+        super().__init__(unembed)
 
         self.config = config
         unembed_hash = unembed.unembedding_hash()
@@ -132,8 +158,6 @@ class TunedLens(Lens):
             )
         else:
             config.unemebd_hash = unembed_hash
-
-        self.unembed = unembed
 
         translator = th.nn.Linear(config.d_model, config.d_model, bias=config.bias)
         translator.weight.data.zero_()
@@ -266,7 +290,6 @@ class TunedLens(Lens):
         state_dict = self.layer_translators.state_dict()
 
         th.save(state_dict, path / ckpt)
-
         with open(path / config, "w") as f:
             json.dump(self.config.to_dict(), f)
 

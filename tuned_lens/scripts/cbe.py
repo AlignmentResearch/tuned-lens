@@ -5,9 +5,8 @@ from itertools import islice
 from torch.utils.data import DataLoader
 from transformers import PreTrainedModel
 from tqdm.auto import tqdm
-from typing import Optional
 from tuned_lens.causal import ablate_subspace, extract_causal_bases
-from tuned_lens.nn import Decoder, TunedLens
+from tuned_lens.nn import Lens
 from tuned_lens.utils import maybe_all_reduce, send_to_device
 import torch as th
 import torch.distributed as dist
@@ -84,7 +83,7 @@ def extract_bases(
     args: Namespace,
     model: PreTrainedModel,
     data: Dataset,
-    lens: Optional[TunedLens],
+    lens: Lens,
 ):
     """Sub command for extracting causal basis from a model and lens."""
     local_rank = dist.get_rank() if dist.is_initialized() else 0
@@ -98,12 +97,11 @@ def extract_bases(
 
     basis_iter = extract_causal_bases(
         # Unfortunately I can't get this to work in half precision
-        lens.float() if lens else Decoder(model).float(),
+        lens.float(),
         [x.float() for x in outputs.hidden_states[:-1]],
         k=args.k,
         labels=batch["input_ids"] if args.loss == "ce" else None,
         mode=args.mode,
-        no_translator=args.no_translator,
     )
     for i, basis in enumerate(basis_iter):
         if local_rank == 0:
