@@ -1,4 +1,4 @@
-from tuned_lens.nn import Decoder
+from tuned_lens.nn import Unembed
 import transformers as tr
 import pytest
 import torch as th
@@ -42,7 +42,7 @@ def correctness(model_str: str):
     if U.bias is not None:
         U.bias.data.normal_()
 
-    decoder = Decoder(model)
+    decoder = Unembed(model)
     ln_f = get_final_layer_norm(model)
 
     x = th.randn(1, 1, config.hidden_size)
@@ -55,7 +55,7 @@ def correctness(model_str: str):
 
 
 @pytest.mark.slow
-def test_correctness_slow():
+def test_correctness_of_back_translate_gpt_j():
     correctness("EleutherAI/gpt-j-6B")
 
 
@@ -69,5 +69,5 @@ def test_correctness_slow():
         "gpt2",
     ],
 )
-def test_correctness(model_str: str):
+def test_correctness_of_back_translate(model_str: str):
     correctness(model_str)
