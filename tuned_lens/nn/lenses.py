@@ -180,12 +180,14 @@ class TunedLens(Lens):
     def init_from_model(
         cls,
         model: PreTrainedModel,
+        revision: Optional[str] = None,
         bias: bool = True,
     ) -> "TunedLens":
         """Create a lens from a pretrained model.
 
         Args:
             model: The model to create the lens from.
+            revision: The git revision of the model to use.
             bias: Whether to use a bias in the linear translators.
 
         Returns:
@@ -194,7 +196,7 @@ class TunedLens(Lens):
         unembed = Unembed(model)
         config = TunedLensConfig(
             base_model_name_or_path=model.config.name_or_path,
-            base_model_revision=model.config.revision,
+            base_model_revision=revision,
             d_model=model.config.hidden_size,
             num_hidden_layers=model.config.num_hidden_layers,
             bias=bias,

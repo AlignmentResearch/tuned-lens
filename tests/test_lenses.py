@@ -77,9 +77,7 @@ def test_tuned_lens_init_from_model(model):
 def test_tuned_lens_forward(tuned_lens: TunedLens):
     randn = th.randn(1, 10, 128)
     logits_forward = tuned_lens.forward(randn, 0)
-    logits = tuned_lens.unembed.forward(
-        randn + tuned_lens[0](randn)
-    )  # TODO check if this is right
+    logits = tuned_lens.unembed.forward(randn + tuned_lens[0](randn))
     assert th.allclose(logits_forward, logits)
 
 
