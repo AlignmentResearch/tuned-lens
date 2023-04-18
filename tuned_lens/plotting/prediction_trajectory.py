@@ -402,7 +402,7 @@ class PredictionTrajectory:
         """
         js_div = 0.5 * np.sum(
             self.probs * (self.log_probs - other.log_probs), axis=-1
-        ) + 0.5 * np.sum(self.probs * (self.log_probs - self.log_probs), axis=-1)
+        ) + 0.5 * np.sum(other.probs * (other.log_probs - self.log_probs), axis=-1)
 
         return TrajectoryStatistic(
             name="JS(Self | Other)",
