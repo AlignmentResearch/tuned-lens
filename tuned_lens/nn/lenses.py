@@ -208,7 +208,7 @@ class TunedLens(Lens):
         yield from self.layer_translators
 
     @classmethod
-    def load(cls, resource_id: str, revision: str = "v0.0.4", **kwargs) -> "TunedLens":
+    def load(cls, resource_id: str, revision: str = "v0.0.5", **kwargs) -> "TunedLens":
         """Load a tuned lens from a or hugging face hub.
 
         Args:
