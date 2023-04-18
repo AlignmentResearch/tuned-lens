@@ -18,8 +18,9 @@ def logit_lens():
 
     with mock.patch("tuned_lens.model_surgery.get_final_layer_norm") as get_final_ln:
         get_final_ln.return_value = th.nn.LayerNorm(128)
+        logit_lens = LogitLens(model)
 
-    return LogitLens(model)
+    return logit_lens
 
 
 @pytest.fixture
