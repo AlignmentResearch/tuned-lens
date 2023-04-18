@@ -1,18 +1,19 @@
 """Training loop for training a TunedLens model against a transformer on a dataset."""
-from argparse import Namespace
 from collections import defaultdict
 import enum
-from typing import List, Optional
+from typing import Optional
 from pathlib import Path
 from datasets import Dataset
 from itertools import islice
+
+from simple_parsing import field
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup
 from tuned_lens import TunedLens
-from tuned_lens.__main__ import Arg
+from tuned_lens.__main__ import CliArgs as MainCliArgs
 from tuned_lens.residual_stream import ResidualStream
 from tuned_lens.utils import (
     maybe_all_reduce,
@@ -23,8 +24,6 @@ from tuned_lens.utils import (
 import torch as th
 import torch.distributed as dist
 from dataclasses import dataclass
-from pathlib import Path
-from typing import List
 
 
 class OptimizerOption(enum.Enum):
@@ -33,17 +32,10 @@ class OptimizerOption(enum.Enum):
 
 
 @dataclass
-class Args:
-    lens: Optional[Path]
-    """Directory containing a lens to warm-start training."""
+class CliArgs(MainCliArgs):
+    """Type hinting for CLI args."""
 
-    resume: Optional[Path]
-    """File to resume training from."""
-
-    wandb: Optional[str]
-    """Name of run in Weights & Biases."""
-
-    constant: bool = False
+    constant: Optional[bool] = field(action="store_true")
     """Train only the bias term."""
 
     extra_layers: int = 0
@@ -51,6 +43,9 @@ class Args:
 
     lasso: float = 0.0
     """LASSO (L1) regularization strength."""
+
+    lens: Path = field()
+    """Directory containing a lens to warm-start training."""
 
     lr_scale: float = 1.0
     """The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this factor."""
@@ -64,14 +59,23 @@ class Args:
     optimizer: OptimizerOption = OptimizerOption.SGD
     """The type of optimizer to use."""
 
-    pre_ln: bool = False
+    output: Path = field(alias=["-o"])
+    """File to save the lenses to. Defaults to the model name."""
+
+    pre_ln: Optional[bool] = field(action="store_true")
     """Apply layer norm before, and not after, each probe."""
 
-    separate_unembeddings: bool = False
+    resume: Optional[Path] = None
+    """File to resume training from."""
+
+    separate_unembeddings: Optional[bool] = field(action="store_true")
     """Learn a separate unembedding for each layer."""
 
     tokens_per_step: int = 2**18
     """Number of tokens per step."""
+
+    wandb: Optional[str] = None
+    """Name of run in Weights & Biases."""
 
     warmup_steps: Optional[int] = None
     """Number of warmup steps. Defaults to min(0.1 * num_steps, 1000) for Adam and 0
@@ -80,12 +84,12 @@ class Args:
     weight_decay: float = 1e-3
     """Weight decay coefficient."""
 
-    zero: bool = False
+    zero: Optional[bool] = field(action="store_true")
     """Use ZeroRedundancyOptimizer."""
 
 
 def train_loop(
-    args: Args,
+    args: CliArgs,
     model: th.nn.Module,
     data: Dataset,
     lens: TunedLens,

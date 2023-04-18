@@ -1,14 +1,15 @@
 """Evaluation loop for the tuned lens model."""
-from argparse import Namespace
 from pathlib import Path
 from datasets import Dataset
 from collections import defaultdict
 from itertools import islice
+
+from simple_parsing import field
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel
-from typing import List, Optional
-from tuned_lens.__main__ import Arg
+from typing import Optional
+from tuned_lens.__main__ import CliArgs as MainCliArgs
 from tuned_lens.residual_stream import record_residual_stream
 from tuned_lens.stats import ResidualStats, LogitStats
 from tuned_lens.nn import Decoder, TunedLens
@@ -27,24 +28,29 @@ from dataclasses import dataclass
 
 
 @dataclass
-class Args:
-    lens: Optional[List[Path]]
+class CliArgs(MainCliArgs):
+    """Type hinting for CLI args."""
+
+    lens: Optional[Path] = field(nargs="?")
     """Directory containing the tuned lens to evaluate."""
 
-    grad_alignment: bool = False
+    grad_alignment: Optional[bool] = field(action="store_true")
     """Evaluate gradient alignment."""
 
     limit: Optional[int] = None
     """Number of batches to evaluate on. If None, will use the entire dataset."""
 
-    transfer: bool = False
+    output: Optional[Path] = field(alias=["-o"])
+    """JSON file to save the eval results to."""
+
+    transfer: Optional[bool] = field(action="store_true")
     """Evaluate how well probes transfer to other layers."""
 
 
 @th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
 def eval_loop(
-    args: Args,
+    args: CliArgs,
     model: PreTrainedModel,
     data: Dataset,
     lens: Optional[TunedLens],

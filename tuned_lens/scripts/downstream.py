@@ -1,14 +1,14 @@
 """Provides Sub command for downstream evaluation."""
-from argparse import Namespace
 from collections import defaultdict
 from pathlib import Path
 from datasets import Dataset
 from hashlib import md5
+from simple_parsing import field
 from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizerBase
-from typing import Iterable, List, MutableSequence, Optional
+from typing import Iterable, MutableSequence, Optional
 from tuned_lens.nn import DownstreamWrapper, TunedLens
-from tuned_lens.__main__ import Arg
+from tuned_lens.__main__ import CliArgs as MainCliArgs
 from tuned_lens.utils import maybe_all_gather_lists
 import os
 import random
@@ -25,14 +25,16 @@ print "{}":\n\n"""
 
 
 @dataclass
-class Args:
-    lens: Optional[List[Path]]
+class CliArgs(MainCliArgs):
+    """Type hinting for CLI args."""
+
+    lens: Optional[Path] = field(nargs="?")
     """Directory containing the tuned lens to evaluate."""
 
-    injection: bool = False
+    injection: Optional[bool] = field(action="store_true")
     """Simulate a prompt injection attack."""
 
-    incorrect_fewshot: bool = False
+    incorrect_fewshot: Optional[bool] = field(action="store_true")
     """Permute the fewshot labels."""
 
     num_shots: int = 0
@@ -41,11 +43,14 @@ class Args:
     limit: int = 500
     """Number of samples to evaluate on."""
 
+    output: Optional[Path] = field(alias=["-o"])
+    """Folder to save the results to."""
+
 
 @th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
 def downstream_loop(
-    args: Args,
+    args: CliArgs,
     model: th.nn.Module,
     lens: TunedLens,
     tokenizer: PreTrainedTokenizerBase,
