@@ -80,10 +80,7 @@ def get_final_layer_norm(model: tr.AutoModelForCausalLM):
 
 
 def get_transformer_layers(model: th.nn.Module) -> tuple[str, th.nn.ModuleList]:
-    """Get "the" list of transformer layers from a model.
-
-    This is operationalized as the unique `nn.ModuleList` that contains
-    more than half of all the parameters in the model, if it exists.
+    """Get the decoder layers from a model.
 
     Args:
         model: The model to search.
@@ -94,16 +91,30 @@ def get_transformer_layers(model: th.nn.Module) -> tuple[str, th.nn.ModuleList]:
     Raises:
         ValueError: If no such list exists.
     """
-    total_params = sum(p.numel() for p in model.parameters())
-    for name, module in model.named_modules():
-        if isinstance(module, th.nn.ModuleList):
-            module_params = sum(p.numel() for p in module.parameters())
-            if module_params > total_params / 2:
-                return name, module
+    if not hasattr(model, "base_model"):
+        raise ValueError("Model does not have a `base_model` attribute.")
 
-    raise ValueError(
-        "Could not find suitable `ModuleList`; is this an encoder-decoder model?"
-    )
+    path_to_layers = ["base_model"]
+    base_model = model.base_model
+    if isinstance(base_model, tr.models.opt.modeling_opt.OPTModel):
+        path_to_layers += ["decoder", "layers"]
+    elif isinstance(base_model, tr.models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
+        path_to_layers += ["layers"]
+    elif isinstance(
+        base_model,
+        (
+            tr.models.bloom.modeling_bloom.BloomModel,
+            tr.models.gpt2.modeling_gpt2.GPT2Model,
+            tr.models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+            tr.models.gptj.modeling_gptj.GPTJModel,
+        ),
+    ):
+        path_to_layers += ["h"]
+    else:
+        raise NotImplementedError(f"Unknown model type {type(base_model)}")
+
+    path_to_layers = ".".join(path_to_layers)
+    return path_to_layers, get_key_path(model, path_to_layers)
 
 
 @contextmanager
