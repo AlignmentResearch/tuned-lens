@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Union
 
 from ..nn.lenses import Lens
+from ..stats import js_divergence, kl_divergence
 from .token_formatter import TokenFormatter
 from .trajectory_plotting import TrajectoryStatistic, TrajectoryLabels
 
@@ -375,7 +376,7 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the KL divergence between self and other.
         """
-        kl_div = np.sum(self.probs * (self.log_probs - other.log_probs), axis=-1)
+        kl_div = kl_divergence(self.log_probs, other.log_probs, dim=-1)
 
         return TrajectoryStatistic(
             name="KL(Self | Other)",
@@ -400,9 +401,7 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the JS divergence between self and other.
         """
-        js_div = 0.5 * np.sum(
-            self.probs * (self.log_probs - other.log_probs), axis=-1
-        ) + 0.5 * np.sum(self.probs * (self.log_probs - self.log_probs), axis=-1)
+        js_div = js_divergence(self.log_probs, other.log_probs, dim=-1)
 
         return TrajectoryStatistic(
             name="JS(Self | Other)",
