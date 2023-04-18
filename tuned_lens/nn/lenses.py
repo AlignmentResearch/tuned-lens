@@ -208,18 +208,19 @@ class TunedLens(Lens):
         yield from self.layer_translators
 
     @classmethod
-    def load(cls, resource_id: str, **kwargs) -> "TunedLens":
+    def load(cls, resource_id: str, revision: str = "v0.0.4", **kwargs) -> "TunedLens":
         """Load a tuned lens from a or hugging face hub.
 
         Args:
             resource_id : The path to the directory containing the config and checkpoint
                 or the name of the model on the hugging face hub.
+            revision : The git revision of the lens to load from the hub.
             **kwargs : Additional arguments to pass to torch.load.
 
         Returns:
             A TunedLens instance.
         """
-        config_path, ckpt_path = load_lens_artifacts(resource_id)
+        config_path, ckpt_path = load_lens_artifacts(resource_id, revision=revision)
         # Load config
         with open(config_path, "r") as f:
             config = json.load(f)
