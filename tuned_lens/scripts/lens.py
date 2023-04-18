@@ -28,6 +28,10 @@ from tuned_lens.scripts import (
     eval_loop,
     train_loop,
 )
+from train_loop import TrainingLoop
+from eval_loop import EvaluationLoop
+from downstream import DownstreamLoop
+from tuned_lens.__main__ import Main
 import json
 import pickle
 import shutil
@@ -35,7 +39,7 @@ import torch as th
 import torch.distributed as dist
 
 
-def main(args):
+def main(args: Main):
     """The main entry point for the command line script."""
     local_rank = dist.get_rank() if dist.is_initialized() else 0
 
@@ -75,16 +79,18 @@ def main(args):
 
     th.cuda.set_device(local_rank)
 
+    lens = None
+
     # Can be set either in eval or in training; in eval it's required
-    if getattr(args, "lens", None):
-        lens = TunedLens.load(args.lens, map_location="cpu")
-    elif args.command in ("downstream", "eval"):
+    if args.command.lens:
+        lens = TunedLens.load(str(args.command.lens), map_location="cpu")
+    elif isinstance(args.command, (EvaluationLoop, DownstreamLoop)):
         lens = None
-    else:
+    elif isinstance(args.command, TrainingLoop):
         lens = TunedLens(
             model,
-            extra_layers=args.extra_layers,
-            reuse_unembedding=not args.separate_unembeddings,
+            extra_layers=args.command.extra_layers,
+            reuse_unembedding=not args.command.separate_unembeddings,
         ).float()
 
     if lens:
@@ -122,7 +128,7 @@ def main(args):
         args.tokenizer or args.model_name,
         revision=args.revision,
         use_fast=not args.slow_tokenizer,
-        tokenizer_type=args.tokenizer_class,
+        tokenizer_type=args.tokenizer_type,
     )
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
     silence_datasets_messages()
@@ -149,7 +155,7 @@ def main(args):
         processed = processed.shard(dist.get_world_size(), local_rank)
 
     if args.command == "train":
-        train_loop(args, model, processed, lens, float(nats_to_bpb))
+        train_loop(args.command, model, processed, lens, float(nats_to_bpb))
     elif args.command == "eval":
         eval_loop(args, model, processed, lens, float(nats_to_bpb))
     else:

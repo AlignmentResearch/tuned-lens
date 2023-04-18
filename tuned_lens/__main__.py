@@ -1,15 +1,15 @@
 """Script to train or evaluate a set of tuned lenses for a language model."""
 
 import enum
-from typing import List, Optional
+from typing import List, Optional, Union
 from .scripts.lens import main as lens_main
 from contextlib import nullcontext, redirect_stdout
 import os
 import torch.distributed as dist
-from .scripts.train_loop import CliArgs as TrainArgs
-from .scripts.downstream import CliArgs as DownstreamArgs
-from .scripts.eval_loop import CliArgs as EvalArgs
-from simple_parsing import ArgumentParser, field
+from .scripts.train_loop import TrainingLoop
+from .scripts.downstream import DownstreamLoop
+from .scripts.eval_loop import EvaluationLoop
+from simple_parsing import ArgumentParser, field, parse
 from dataclasses import dataclass
 
 
@@ -25,9 +25,7 @@ class CliArgs:
     model_name: str = field(positional=True)
     """Name of model to use in the Huggingface Hub."""
 
-    dataset: Optional[List[str]] = field(
-        positional=True, default=["the_pile", "all"], nargs="*"
-    )
+    dataset: List[str] = field(positional=True, default=["the_pile", "all"], nargs="*")
     """Name of dataset to use. Can either be a local .jsonl file or a name
     suitable to be passed to the HuggingFace load_dataset function."""
 
@@ -85,25 +83,12 @@ class CliArgs:
     -1 = previous token, etc.)"""
 
 
+class Main(CliArgs):
+    command: Union[TrainingLoop, EvaluationLoop, DownstreamLoop]
+
+
 def run():
     """Run the script."""
-    parser = ArgumentParser(
-        description="Train or evaluate a set of tuned lenses for a language model.",
-    )
-    parent_parser = ArgumentParser(add_help=False)
-    parent_parser.add_arguments(CliArgs, dest="options")
-
-    subparsers = parser.add_subparsers(dest="command")
-    train_parser = subparsers.add_parser("train", parents=[parent_parser])
-    downstream_parser = subparsers.add_parser("downstream", parents=[parent_parser])
-    eval_parser = subparsers.add_parser("eval", parents=[parent_parser])
-
-    train_parser.add_arguments(TrainArgs, dest="options")
-    downstream_parser.add_arguments(DownstreamArgs, dest="options")
-    eval_parser.add_arguments(EvalArgs, dest="options")
-
-    args = parser.parse_args()
-
     # Support both distributed and non-distributed training
     local_rank = os.environ.get("LOCAL_RANK")
     if local_rank is not None:
@@ -112,15 +97,15 @@ def run():
 
     # Only print on rank 0
     with nullcontext() if not local_rank else redirect_stdout(None):
-        args = parser.parse_args()
+        args = parse(Main)
 
         if args.command is None:
-            parser.print_help()
+            ArgumentParser(Main).print_help()
             exit(1)
 
         if args.sweep:
             ckpt_range = eval(f"range({args.sweep})")
-            output_root = args.output
+            output_root = args.command.output
             assert output_root is not None
             print(f"Running sweep over {len(ckpt_range)} checkpoints.")
 
@@ -128,7 +113,7 @@ def run():
                 step_output = output_root / f"step{step}"
                 print(f"Running for step {step}, saving to '{step_output}'...")
 
-                args.output = step_output
+                args.command.output = step_output
                 args.revision = f"step{step}"
                 lens_main(args)
         else:
