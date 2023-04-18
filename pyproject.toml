@@ -18,6 +18,7 @@ dependencies = [
     "torch>=1.13.0",
     "transformers",
     "huggingface_hub>=0.12.1",
+    "simple-parsing>=0.1.1",
 ]
 version = "0.0.3"
 
