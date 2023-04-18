@@ -1,8 +1,8 @@
 """Tools for finding and modifying components in a transformer model."""
 
 from contextlib import contextmanager
-from transformers import PreTrainedModel
-from typing import Any, Generator, Optional, Type, TypeVar, Union
+import transformers as tr
+from typing import Any, Generator, TypeVar, Union
 import torch as th
 
 
@@ -52,18 +52,31 @@ def assign_key_path(model: T, key_path: str, value: Any) -> Generator[T, None, N
         set_key_path_(model, key_path, old_value)
 
 
-def get_final_layer_norm(
-    model: PreTrainedModel, norm_class: Type[th.nn.Module] = th.nn.LayerNorm
-) -> Optional[th.nn.Module]:
-    """Use heuristics to find the final layer norm in a model, if it exists."""
-    base = model.base_model
-    if decoder := getattr(base, "decoder", None):
-        base = decoder
+def get_final_layer_norm(model: tr.AutoModelForCausalLM):
+    """Get the final layer norm from a model.
 
-    top_level_lns = [
-        module for module in base.children() if isinstance(module, norm_class)
-    ]
-    return top_level_lns[-1] if top_level_lns else None
+    This isn't standardized across models, so this will need to be updated
+    """
+    if not hasattr(model, "base_model"):
+        raise ValueError("Model does not have a `base_model` attribute.")
+
+    base_model = model.base_model
+    if isinstance(base_model, tr.models.opt.modeling_opt.OPTModel):
+        return base_model.decoder.final_layer_norm
+    elif isinstance(base_model, tr.models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
+        return base_model.final_layer_norm
+    elif isinstance(
+        base_model,
+        (
+            tr.models.bloom.modeling_bloom.BloomModel,
+            tr.models.gpt2.modeling_gpt2.GPT2Model,
+            tr.models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+            tr.models.gptj.modeling_gptj.GPTJModel,
+        ),
+    ):
+        return base_model.ln_f
+    else:
+        raise NotImplementedError(f"Unknown model type {type(base_model)}")
 
 
 def get_transformer_layers(model: th.nn.Module) -> tuple[str, th.nn.ModuleList]:
