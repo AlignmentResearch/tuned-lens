@@ -62,9 +62,9 @@ def get_final_layer_norm(model: tr.AutoModelForCausalLM):
 
     base_model = model.base_model
     if isinstance(base_model, tr.models.opt.modeling_opt.OPTModel):
-        return base_model.decoder.final_layer_norm
+        final_layer_norm = base_model.decoder.final_layer_norm
     elif isinstance(base_model, tr.models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
-        return base_model.final_layer_norm
+        final_layer_norm = base_model.final_layer_norm
     elif isinstance(
         base_model,
         (
@@ -74,9 +74,14 @@ def get_final_layer_norm(model: tr.AutoModelForCausalLM):
             tr.models.gptj.modeling_gptj.GPTJModel,
         ),
     ):
-        return base_model.ln_f
+        final_layer_norm = base_model.ln_f
     else:
         raise NotImplementedError(f"Unknown model type {type(base_model)}")
+
+    if final_layer_norm is None:
+        raise ValueError("Model does not have a final layer norm.")
+
+    return final_layer_norm
 
 
 def get_transformer_layers(model: th.nn.Module) -> tuple[str, th.nn.ModuleList]:
