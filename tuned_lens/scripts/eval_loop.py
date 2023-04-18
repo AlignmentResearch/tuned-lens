@@ -23,50 +23,28 @@ from tuned_lens.utils import (
 )
 import torch as th
 import torch.distributed as dist
+from dataclasses import dataclass
 
-cli_args: List[Arg] = [
-    {
-        "name_or_flags": ["--lens"],
-        "options": {
-            "type": Path,
-            "help": "Directory containing the tuned lens to evaluate.",
-            "nargs": "?",
-        },
-    },
-    {
-        "name_or_flags": ["--grad-alignment"],
-        "options": {"action": "store_true", "help": "Evaluate gradient alignment."},
-    },
-    {
-        "name_or_flags": ["--limit"],
-        "options": {
-            "type": int,
-            "default": None,
-            "help": "Number of batches to evaluate on. If None, will use the entire "
-                    "dataset.",
-        },
-    },
-    {
-        "name_or_flags": ["-o", "--output"],
-        "options": {
-            "type": Path,
-            "help": "JSON file to save the eval results to.",
-        },
-    },
-    {
-        "name_or_flags": ["--transfer"],
-        "options": {
-            "action": "store_true",
-            "help": "Evaluate how well probes transfer to other layers.",
-        },
-    },
-]
+
+@dataclass
+class Args:
+    lens: Optional[List[Path]]
+    """Directory containing the tuned lens to evaluate."""
+
+    grad_alignment: bool = False
+    """Evaluate gradient alignment."""
+
+    limit: Optional[int] = None
+    """Number of batches to evaluate on. If None, will use the entire dataset."""
+
+    transfer: bool = False
+    """Evaluate how well probes transfer to other layers."""
 
 
 @th.autocast("cuda", enabled=th.cuda.is_available())
 @th.no_grad()
 def eval_loop(
-    args: Namespace,
+    args: Args,
     model: PreTrainedModel,
     data: Dataset,
     lens: Optional[TunedLens],

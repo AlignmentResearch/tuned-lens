@@ -1,7 +1,8 @@
 """Training loop for training a TunedLens model against a transformer on a dataset."""
 from argparse import Namespace
 from collections import defaultdict
-from typing import List
+import enum
+from typing import List, Optional
 from pathlib import Path
 from datasets import Dataset
 from itertools import islice
@@ -21,129 +22,70 @@ from tuned_lens.utils import (
 )
 import torch as th
 import torch.distributed as dist
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List
 
-cli_args: List[Arg] = [
-    {
-        "name_or_flags": ["--constant"],
-        "options": {"action": "store_true", "help": "Train only the bias term."},
-    },
-    {
-        "name_or_flags": ["--extra-layers"],
-        "options": {
-            "type": int,
-            "default": 0,
-            "help": "Number of extra decoder layers.",
-        },
-    },
-    {
-        "name_or_flags": ["--lasso"],
-        "options": {
-            "type": float,
-            "default": 0.0,
-            "help": "LASSO (L1) regularization strength.",
-        },
-    },
-    {
-        "name_or_flags": ["--lens"],
-        "options": {
-            "type": Path,
-            "help": "Directory containing a lens to warm-start training.",
-        },
-    },
-    {
-        "name_or_flags": ["--lr-scale"],
-        "options": {
-            "type": float,
-            "default": 1.0,
-            "help": "The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this "
-                    "factor.",
-        },
-    },
-    {
-        "name_or_flags": ["--momentum"],
-        "options": {
-            "type": float,
-            "default": 0.9,
-            "help": "Momentum coefficient for SGD, or beta1 for Adam.",
-        },
-    },
-    {
-        "name_or_flags": ["--num-steps"],
-        "options": {"type": int, "default": 250, "help": "Number of training steps."},
-    },
-    {
-        "name_or_flags": ["--optimizer"],
-        "options": {
-            "type": str,
-            "default": "sgd",
-            "choices": ("adam", "sgd"),
-            "help": "The type of optimizer to use.",
-        },
-    },
-    {
-        "name_or_flags": ["-o", "--output"],
-        "options": {
-            "type": Path,
-            "required": True,
-            "help": "File to save the lenses to. Defaults to the model name.",
-        },
-    },
-    {
-        "name_or_flags": ["--pre-ln"],
-        "options": {
-            "action": "store_true",
-            "help": "Apply layer norm before, and not after, each probe.",
-        },
-    },
-    {
-        "name_or_flags": ["--resume"],
-        "options": {"type": Path, "help": "File to resume training from."},
-    },
-    {
-        "name_or_flags": ["--separate-unembeddings"],
-        "options": {
-            "action": "store_true",
-            "help": "Learn a separate unembedding for each layer.",
-        },
-    },
-    {
-        "name_or_flags": ["--tokens-per-step"],
-        "options": {
-            "type": int,
-            "default": 2**18,
-            "help": "Number of tokens per step.",
-        },
-    },
-    {
-        "name_or_flags": ["--wandb"],
-        "options": {"type": str, "help": "Name of run in Weights & Biases."},
-    },
-    {
-        "name_or_flags": ["--warmup-steps"],
-        "options": {
-            "type": int,
-            "default": None,
-            "help": "Number of warmup steps. Defaults to min(0.1 * num_steps, 1000) "
-                    "for Adam and 0 for SGD.",
-        },
-    },
-    {
-        "name_or_flags": ["--weight-decay"],
-        "options": {
-            "type": float,
-            "default": 1e-3,
-            "help": "Weight decay coefficient.",
-        },
-    },
-    {
-        "name_or_flags": ["--zero"],
-        "options": {"action": "store_true", "help": "Use ZeroRedundancyOptimizer."},
-    },
-]
+
+class OptimizerOption(enum.Enum):
+    ADAM = "adam"
+    SGD = "sgd"
+
+
+@dataclass
+class Args:
+    lens: Optional[Path]
+    """Directory containing a lens to warm-start training."""
+
+    resume: Optional[Path]
+    """File to resume training from."""
+
+    wandb: Optional[str]
+    """Name of run in Weights & Biases."""
+
+    constant: bool = False
+    """Train only the bias term."""
+
+    extra_layers: int = 0
+    """Number of extra decoder layers."""
+
+    lasso: float = 0.0
+    """LASSO (L1) regularization strength."""
+
+    lr_scale: float = 1.0
+    """The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this factor."""
+
+    momentum: float = 0.9
+    """Momentum coefficient for SGD, or beta1 for Adam."""
+
+    num_steps: int = 250
+    """Number of training steps."""
+
+    optimizer: OptimizerOption = OptimizerOption.SGD
+    """The type of optimizer to use."""
+
+    pre_ln: bool = False
+    """Apply layer norm before, and not after, each probe."""
+
+    separate_unembeddings: bool = False
+    """Learn a separate unembedding for each layer."""
+
+    tokens_per_step: int = 2**18
+    """Number of tokens per step."""
+
+    warmup_steps: Optional[int] = None
+    """Number of warmup steps. Defaults to min(0.1 * num_steps, 1000) for Adam and 0
+    for SGD."""
+
+    weight_decay: float = 1e-3
+    """Weight decay coefficient."""
+
+    zero: bool = False
+    """Use ZeroRedundancyOptimizer."""
 
 
 def train_loop(
-    args: Namespace,
+    args: Args,
     model: th.nn.Module,
     data: Dataset,
     lens: TunedLens,
