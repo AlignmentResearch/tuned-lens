@@ -1,18 +1,23 @@
 """Evaluation loop for the tuned lens model."""
+import os
 from pathlib import Path
-from datasets import Dataset
 from collections import defaultdict
 from itertools import islice
 
 from simple_parsing import field
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from transformers import PreTrainedModel
 from typing import Optional
-from tuned_lens.__main__ import CliArgs as MainCliArgs
 from tuned_lens.residual_stream import record_residual_stream
 from tuned_lens.stats import ResidualStats, LogitStats
-from tuned_lens.nn import Decoder, TunedLens
+from tuned_lens.scripts.ingredients import (
+    local_rank,
+    Model,
+    Data,
+    Sharding,
+)
+
+from tuned_lens.nn.lenses import TunedLens
 from tuned_lens.utils import (
     maybe_all_cat,
     maybe_all_reduce,
@@ -23,16 +28,20 @@ from tuned_lens.utils import (
     send_to_device,
 )
 import torch as th
-import torch.distributed as dist
 from dataclasses import dataclass
 
 
 @dataclass
-class EvaluationLoop(MainCliArgs):
+class Eval:
     """Type hinting for CLI args."""
 
-    lens: Path = field(nargs="?")
-    """Directory containing the tuned lens to evaluate."""
+    lens: str
+
+    data: Data
+
+    model: Model
+
+    sharding: Sharding
 
     grad_alignment: Optional[bool] = field(action="store_true")
     """Evaluate gradient alignment."""
@@ -40,35 +49,42 @@ class EvaluationLoop(MainCliArgs):
     limit: Optional[int] = None
     """Number of batches to evaluate on. If None, will use the entire dataset."""
 
-    output: Optional[Path] = field(alias=["-o"])
+    output: Optional[Path] = field(alias=["-o"], default=None)
     """JSON file to save the eval results to."""
 
     transfer: Optional[bool] = field(action="store_true")
     """Evaluate how well probes transfer to other layers."""
 
+    token_shift: Optional[int] = None
+    """How to shift the labels wrt the input tokens (1 = next token, 0 = current token,
+    -1 = previous token, etc.)"""
+
+    per_gpu_batch_size: int = 1
+    """Number of samples to try to fit on a GPU at once."""
+
+    residual_stats: bool = field(action="store_true")
+
+    def load_lens(self) -> TunedLens:
+        """Load the tuned lens model."""
+        return TunedLens.load(self.lens)
+
     @th.autocast("cuda", enabled=th.cuda.is_available())
     @th.no_grad()
-    def execute(
-        self,
-        model: PreTrainedModel,
-        data: Dataset,
-        lens: Optional[TunedLens],
-        nats_to_bpb_ratio: float,
-    ):
-        """Trains a TunedLens model against a transformer on a dataset.
+    def execute(self):
+        """Trains a TunedLens model against a transformer on a dataset."""
+        model, tokenizer = self.model.load()
+        data, nats_to_bpb_ratio = self.data.load(tokenizer)
+        lens = self.load_lens()
 
-        Args:
-            args: The command-line arguments see __main__.py train subcommand.
-            model: The transformer model to train.
-            data: The dataset to train on.
-            lens: The TunedLens model to train.
-            nats_to_bpb_ratio: The ratio of nats to bits per byte for the dataset.
-        """
-        local_rank = dist.get_rank() if dist.is_initialized() else 0
+        model = self.sharding.shard_model(model)
+        data = self.sharding.shard_dataset(data)
+        lens = self.sharding.shard_lens(lens)
+
         dl = DataLoader(
             data.shuffle(seed=self.seed),  # type: ignore[arg-type],
             batch_size=self.per_gpu_batch_size,
         )
+
         if lens:
             lens.eval()
 
@@ -82,11 +98,10 @@ class EvaluationLoop(MainCliArgs):
         else:
             total = len(dl)
 
-        root_dir = self.output or self.lens / "eval"
+        root_dir = self.output or os.path.join(self.lens / "eval")
         output_dir = root_dir / f"rank_{local_rank}"
         output_dir.mkdir(exist_ok=True, parents=True)
 
-        _to_logits = lens.to_logits if lens else Decoder(model)
         L = model.config.num_hidden_layers
         batches = []
         transfer_batches = []
@@ -97,9 +112,9 @@ class EvaluationLoop(MainCliArgs):
         ll_statistics = [LogitStats() for _ in range(L)]
         tl_statistics = [LogitStats() for _ in range(L)]
 
-        pbar = tqdm(dl, desc="Evaluating", position=local_rank, total=total)
+        pbar = tqdm(dl, desc="Evaluating", position=local_rank(), total=total)
         for batch in pbar:
-            batch = send_to_device(batch, th.device(local_rank))
+            batch = send_to_device(batch, th.device(local_rank()))
             with record_residual_stream(model) as stream:
                 output = model(**batch)
 
@@ -119,7 +134,7 @@ class EvaluationLoop(MainCliArgs):
                     h.retain_grad()
 
                 with th.set_grad_enabled(self.grad_alignment):
-                    baseline_lps = _to_logits(h).log_softmax(dim=-1)
+                    baseline_lps = lens.to_logits(h).log_softmax(dim=-1)
 
                     # Note that we don't reduce the loss here, since we want to look at
                     # the full distribution of losses across tokens and samples
