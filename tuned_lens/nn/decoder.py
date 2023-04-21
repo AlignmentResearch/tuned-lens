@@ -4,7 +4,7 @@ from torch.autograd.functional import hessian
 from torch.distributions import Distribution
 from transformers import PreTrainedModel
 from typing import cast, Callable, Literal, Optional
-from tuned_lens.model_surgery import get_final_layer_norm, get_transformer_layers
+from tuned_lens.model_surgery import get_final_norm, get_transformer_layers
 from tuned_lens.stats import kl_divergence
 from tuned_lens.utils import maybe_unpack
 import torch as th
@@ -79,7 +79,7 @@ class Decoder(th.nn.Module):
 
     def load_from_model(self, model: PreTrainedModel):
         """Load the unembedding matrix and layer norm from a HuggingFace model."""
-        raw_ln = get_final_layer_norm(model)
+        raw_ln = get_final_norm(model)
         assert raw_ln is not None
 
         raw_unembed = model.get_output_embeddings()
