@@ -64,7 +64,7 @@ class TrajectoryStatistic:
         """Returns a Plotly Heatmap object for this statistic.
 
         Args:
-            layer_stride : The number of layers to between each layer plotted.
+            layer_stride : The number of layers between each layer plotted.
             colorscale : The colorscale to use for the heatmap.
             **kwargs : Additional keyword arguments to pass to the Heatmap constructor.
 
@@ -134,7 +134,7 @@ class TrajectoryStatistic:
 
         Args:
             title : The title of the plot.
-            layer_stride : The number of layers to between each layer we plot.
+            layer_stride : The number of layers between each layer we plot.
             colorscale : The colorscale to use for the heatmap.
             token_width : The width of each token in the plot.
 

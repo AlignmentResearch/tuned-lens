@@ -98,7 +98,7 @@ class PredictionTrajectory:
             model : The model to get the predictions from.
             tokenizer : The tokenizer to use for decoding the predictions.
             input_ids : The input ids to pass to the model.
-            targets : The targets for
+            targets : The targets for the input sequence.
             start_pos : The start position of the slice across the sequence dimension.
             end_pos : The end position of the slice accross the sequence dimension.
             mask_input : whether to forbid the lens from predicting the input tokens.
