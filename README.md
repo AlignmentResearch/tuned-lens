@@ -28,7 +28,7 @@ Originally conceived by [Igor Ostrovsky](https://twitter.com/igoro) and [Stella 
 ### Installing from PyPI
 First, you will need to install the basic prerequisites into a virtual environment:
 * Python 3.9+
-* PyTorch 1.12.0+
+* PyTorch 1.13.0+
 
 Then, you can simply install the package using pip.
 ```
