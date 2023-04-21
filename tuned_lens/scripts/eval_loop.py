@@ -11,21 +11,17 @@ from typing import Optional
 from tuned_lens.residual_stream import record_residual_stream
 from tuned_lens.stats import ResidualStats, LogitStats
 from tuned_lens.scripts.ingredients import (
-    local_rank,
     Model,
     Data,
-    Sharding,
+    Distributed,
 )
 
 from tuned_lens.nn.lenses import TunedLens
 from tuned_lens.utils import (
-    maybe_all_cat,
-    maybe_all_reduce,
     shift_labels,
     shift_preds,
     pytree_map,
     pytree_stack,
-    send_to_device,
 )
 import torch as th
 from dataclasses import dataclass
@@ -41,7 +37,7 @@ class Eval:
 
     model: Model
 
-    sharding: Sharding
+    dist: Distributed
 
     grad_alignment: Optional[bool] = field(action="store_true")
     """Evaluate gradient alignment."""
@@ -76,9 +72,9 @@ class Eval:
         data, nats_to_bpb_ratio = self.data.load(tokenizer)
         lens = self.load_lens()
 
-        model = self.sharding.shard_model(model)
-        data = self.sharding.shard_dataset(data)
-        lens = self.sharding.shard_lens(lens)
+        model = self.dist.shard_model(model)
+        data = self.dist.shard_dataset(data)
+        lens = self.dist.shard_lens(lens)
 
         dl = DataLoader(
             data.shuffle(seed=self.seed),  # type: ignore[arg-type],
@@ -99,7 +95,7 @@ class Eval:
             total = len(dl)
 
         root_dir = self.output or os.path.join(self.lens / "eval")
-        output_dir = root_dir / f"rank_{local_rank}"
+        output_dir = root_dir / f"rank_{self.dist.local_rank}"
         output_dir.mkdir(exist_ok=True, parents=True)
 
         L = model.config.num_hidden_layers
@@ -112,9 +108,9 @@ class Eval:
         ll_statistics = [LogitStats() for _ in range(L)]
         tl_statistics = [LogitStats() for _ in range(L)]
 
-        pbar = tqdm(dl, desc="Evaluating", position=local_rank(), total=total)
+        pbar = tqdm(dl, desc="Evaluating", position=self.dist.local_rank, total=total)
         for batch in pbar:
-            batch = send_to_device(batch, th.device(local_rank()))
+            batch = self.dist.send_to_device(batch)
             with record_residual_stream(model) as stream:
                 output = model(**batch)
 
@@ -226,16 +222,18 @@ class Eval:
 
         pbar.close()
         agg = pytree_map(lambda x: nats_to_bpb_ratio * x.mean(), pytree_stack(batches))
-        agg = pytree_map(lambda x: maybe_all_reduce(x), agg)
-        if local_rank == 0:
+        agg = pytree_map(lambda x: self.dist.maybe_all_reduce(x), agg)
+        if self.dist.primary:
             th.save(agg, root_dir / "aggregate_metrics.pt")
 
         if self.transfer:
             agg_transfer = pytree_map(
                 lambda x: nats_to_bpb_ratio * x.mean(0), pytree_stack(transfer_batches)
             )
-            agg_transfer = pytree_map(lambda x: maybe_all_reduce(x), agg_transfer)
-            if local_rank == 0:
+            agg_transfer = pytree_map(
+                lambda x: self.dist.maybe_all_reduce(x), agg_transfer
+            )
+            if self.dist.primary:
                 th.save(agg_transfer, root_dir / "aggregate_transfer_metrics.pt")
 
         # first_token_stats.all_reduce_()
@@ -249,11 +247,13 @@ class Eval:
                 stats.all_reduce_()
 
         if self.grad_alignment:
-            grad_alignments = [maybe_all_cat(th.cat(x, dim=0)) for x in grad_alignments]
-            if local_rank == 0:
+            grad_alignments = [
+                self.dist.maybe_all_cat(th.cat(x, dim=0)) for x in grad_alignments
+            ]
+            if self.dist.primary:
                 th.save(grad_alignments, root_dir / "grad_alignments.pt")
 
-        if local_rank == 0:
+        if self.dist.primary:
             th.save(delta_stats, root_dir / "delta_stats.pt")
             th.save(stream_stats, root_dir / "stream_stats.pt")
 

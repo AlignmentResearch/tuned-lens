@@ -12,18 +12,11 @@ from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup, PreTrainedModel
 from tuned_lens import TunedLens
 from tuned_lens.residual_stream import ResidualStream
-from tuned_lens.utils import (
-    maybe_all_reduce,
-    shift_labels,
-    shift_preds,
-    send_to_device,
-)
+from tuned_lens.utils import shift_labels, shift_preds, maybe_all_reduce
 from tuned_lens.scripts.ingredients import (
-    local_rank,
-    world_size,
     Model,
     Data,
-    Sharding,
+    Distributed,
 )
 import torch as th
 from dataclasses import dataclass
@@ -53,8 +46,8 @@ class Train:
     data: Data
     """Data configuration."""
 
-    sharding: Sharding
-    """Sharding configuration."""
+    dist: Distributed
+    """Configuration for how to distribute the training."""
 
     seed: int = 42
     """Random seed for data shuffling."""
@@ -117,7 +110,9 @@ class Train:
     loss: LossChoice = LossChoice.KL
     """Loss function to use."""
 
-    def get_lens(self, model: PreTrainedModel) -> TunedLens:
+    def get_lens(
+        self, model: PreTrainedModel, must_use_cache: bool = False
+    ) -> TunedLens:
         """Load or create a TunedLens model."""
         if self.lens_name_or_path is None:
             lens = TunedLens(model)
@@ -134,9 +129,6 @@ class Train:
         return lens
 
     def _init_logging(self, model_name: str, lens: TunedLens):
-        if local_rank() > 0 or not self.wandb:
-            return
-
         import wandb
 
         wandb.init(
@@ -149,7 +141,7 @@ class Train:
         wandb.watch(lens)
 
     def _log(self, opt, step, metrics, lens, nats_to_bpb):
-        if local_rank() > 0 or not self.wandb:
+        if self.dist.primary or not self.wandb:
             return
 
         import wandb
@@ -195,7 +187,7 @@ class Train:
                 f"divisible by the number of tokens per sample ({tokens_per_sample})."
             )
 
-        global_batch_size = self.per_gpu_batch_size * world_size()
+        global_batch_size = self.per_gpu_batch_size * self.dist.world_size
         grad_acc_steps, rem = divmod(samples_per_step, global_batch_size)
         if rem:
             # If the number of samples per step isn't divisible by the global batch
@@ -204,8 +196,8 @@ class Train:
             adjusted_count = grad_acc_steps * global_batch_size * tokens_per_sample
             print(
                 f"Note: Increasing grad acc steps from {grad_acc_steps - 1} to "
-                f"{grad_acc_steps} to maintain load balance across {world_size()} "
-                "GPUs."
+                f"{grad_acc_steps} to maintain load balance across "
+                f"{self.dist.world_size} GPUs."
             )
             print(
                 f"Using {adjusted_count:_} tokens per training step "
@@ -218,23 +210,34 @@ class Train:
 
     def execute(self):
         """Trains a TunedLens model against a transformer on a dataset."""
-        model, tokenizer = self.model.load()
-        data, nats_to_bpb = self.data.load(tokenizer)
-        lens = self.get_lens(model)
+        model = tokenizer = data = lens = None
+        if self.dist.primary:
+            model, tokenizer = self.model.load()
+            data, nats_to_bpb = self.data.load(tokenizer)
+            lens = self.get_lens(model)
+
+            *_, model_name = model.config.name_or_path.split("/")
+            self._init_logging(model_name, lens)
+
+        self.dist.barrier()  # Wait for primary to finish loading
+
+        # TODO everyone else loads from cache
+        if not self.dist.primary:
+            model, tokenizer = self.model.load(must_use_cache=True)
+            data, nats_to_bpb = self.data.load(tokenizer)
+            lens = self.get_lens(model)
+
+        assert model and tokenizer and data and lens
+
+        # Shard across GPUs
+        model = self.dist.shard_model(model)
+        data = self.dist.shard_dataset(data)
+        ddp_lens = self.dist.distribute_lens(lens)
 
         dl = DataLoader(
             data.shuffle(seed=self.seed),  # type: ignore[arg-type]
             batch_size=self.per_gpu_batch_size,
         )
-
-        *_, model_name = model.config.name_or_path.split("/")
-
-        self._init_logging(model_name, lens)
-
-        # Shard across GPUs
-        model = self.sharding.shard_model(model)
-        data = self.sharding.shard_dataset(data)
-        ddp_lens = self.sharding.shard_lens(lens)
 
         # Don't train the unembedding matrix or final layer norm
         params = [p for p in ddp_lens.parameters() if p.requires_grad]
@@ -269,6 +272,9 @@ class Train:
         else:
             opt = opt_class(params, **config)  # type: ignore[call-arg]
 
+        self.dist.barrier()
+        print("All processes have completed setup. Starting training.")
+
         if self.warmup_steps is None:
             # Adam generally performs poorly without an LR warmup
             if self.optimizer == "adam":
@@ -290,7 +296,7 @@ class Train:
 
         grad_acc_steps = self.calculate_gradient_accumulation_steps(tokens_per_sample)
 
-        if self.sharding.cpu_offload and grad_acc_steps > 1:
+        if self.dist.cpu_offload and grad_acc_steps > 1:
             raise ValueError("CPU offloading cannot be used with gradient accumulation")
 
         metrics = defaultdict(list)
@@ -299,7 +305,7 @@ class Train:
         pbar = tqdm(islice(dl, total_batches), desc="Training", total=total_batches)
         for batch_idx, batch in enumerate(pbar, start=1):
             assert isinstance(batch, dict)
-            batch = send_to_device(batch, th.device(local_rank()))
+            batch = self.dist.send_to_device(batch)
             with th.autocast("cuda"):
                 output = model(**batch, output_hidden_states=True)
 
@@ -347,15 +353,8 @@ class Train:
                     # Log the loss *before* LASSO regularization
                     logging_loss = loss.detach()
                     maybe_all_reduce(logging_loss)
-                    if local_rank() == 0:
+                    if self.dist.primary:
                         metrics[f"loss/{name}"].append(logging_loss)
-
-                    # Add sparsity regularizer
-                    if self.lasso:
-                        param_vec = th.nn.utils.parameters_to_vector(
-                            lens[i].parameters()
-                        )
-                        loss += self.lasso * param_vec.abs().sum()
 
                     scaled_loss = loss / grad_acc_steps
 
@@ -373,7 +372,7 @@ class Train:
             # centering the affine transform at each step
             lens.normalize_()
 
-        if local_rank() == 0:
+        if self.dist.primary:
             output = model_name if self.output is None else self.output
             print(f"Saving lens to {self.output}")
             lens.save(output)

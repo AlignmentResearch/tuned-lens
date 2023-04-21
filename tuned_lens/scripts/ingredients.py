@@ -1,30 +1,33 @@
 """Shared configuration for the scripts."""
 from datasets import Dataset, DatasetDict, load_dataset
 from functools import partial
-from hashlib import md5
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.fsdp import (
     CPUOffload,
     FullyShardedDataParallel,
     MixedPrecision,
 )
-from typing import Optional, List
+from typing import Optional
 from dataclasses import dataclass
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+
 from transformers import (
-    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
+
 from tuned_lens.data import (
     chunk_and_tokenize,
     compute_nats_to_bpb_ratio,
 )
+
+from tuned_lens.utils import (
+    send_to_device,
+    TreeType,
+)
 from tuned_lens.model_surgery import get_transformer_layers
-import pickle
-import shutil
 import torch as th
 import torch.distributed as dist
 
@@ -33,21 +36,11 @@ from simple_parsing import field
 from tuned_lens.nn.lenses import TunedLens
 
 
-def local_rank() -> int:
-    """Get the local rank of the current process."""
-    return dist.get_rank() if dist.is_initialized() else 0
-
-
-def world_size() -> int:
-    """Get the world size from torch.distributed."""
-    return dist.get_world_size() if dist.is_initialized() else 1
-
-
 @dataclass
 class Data:
     """Configuration for the dataset."""
 
-    name: List[str] = field(default_factory=lambda: ["the_pile", "all"], nargs="*")
+    name: list[str] = field(default_factory=lambda: ["the_pile", "all"], nargs="*")
     """Name of dataset to use. Can either be a local .jsonl file or a name
     suitable to be passed to the HuggingFace load_dataset function."""
 
@@ -79,6 +72,7 @@ class Data:
         print(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
 
         assert isinstance(processed, Dataset)
+
         return processed, nats_to_bpb
 
 
@@ -88,12 +82,6 @@ class Model:
 
     name: str
     """Name of model to use in the Huggingface Hub."""
-
-    no_cache: bool = field(action="store_true")
-    """Don't permanently cache the model on disk."""
-
-    random_model: bool = field(action="store_true")
-    """Use a randomly initialized model instead of pretrained weights."""
 
     revision: str = "main"
     """Git revision to use for pretrained models."""
@@ -108,60 +96,42 @@ class Model:
     tokenizer_type: Optional[str] = None
     """Name of tokenizer class to use. If None, will use AutoTokenizer."""
 
-    def load_tokenizer(self) -> PreTrainedTokenizerBase:
+    def load_tokenizer(self, must_use_cache: bool = False) -> PreTrainedTokenizerBase:
         """Load the tokenizer from huggingface hub."""
         tokenizer = AutoTokenizer.from_pretrained(
             self.tokenizer or self.name,
             revision=self.revision,
             use_fast=not self.slow_tokenizer,
             tokenizer_type=self.tokenizer_type,
+            local_files_only=must_use_cache,
         )
 
         assert isinstance(tokenizer, PreTrainedTokenizerBase)
         return tokenizer
 
-    def load(self) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
+    def load(
+        self, must_use_cache: bool = False
+    ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
         """Load the model and tokenizer."""
-        # Deterministically choose a temporary cache directory shared
-        # by all ranks using MD5 hash of the command line arguments
-        if self.no_cache:
-            cache_dir = f"/tmp/{md5(pickle.dumps(self)).hexdigest()}"
-        else:
-            cache_dir = None
-
-        if self.random_model:
-            print(f"Sampling random weights for model '{self.name}'...")
-            config = AutoConfig.from_pretrained(self.name, revision=self.revision)
-            model = AutoModelForCausalLM.from_config(  # type: ignore
-                config, torch_dtype=th.float16
-            )
-        else:
-            print(f"Loading pretrained weights for '{self.name}'...")
-            model = AutoModelForCausalLM.from_pretrained(  # type: ignore
-                self.name,
-                cache_dir=cache_dir,
-                low_cpu_mem_usage=True,
-                revision=self.revision,
-                torch_dtype="auto",
-            )
-
-        # Make sure all ranks have the model
-        if cache_dir:
-            if dist.is_initialized():
-                dist.barrier()
-            if local_rank() == 0:
-                shutil.rmtree(cache_dir)
+        print(f"Loading pretrained weights for '{self.name}'...")
+        model = AutoModelForCausalLM.from_pretrained(  # type: ignore
+            self.name,
+            low_cpu_mem_usage=True,
+            revision=self.revision,
+            torch_dtype="auto",
+            local_files_only=must_use_cache,
+        )
 
         assert isinstance(model, PreTrainedModel)
         model.eval()
         model.requires_grad_(False)
 
-        return model, self.load_tokenizer()
+        return model, self.load_tokenizer(must_use_cache=must_use_cache)
 
 
 @dataclass
-class Sharding:
-    """Configuration for Fully Sharded Data Parallelism."""
+class Distributed:
+    """Configuration and utilities for distributing the model."""
 
     fsdp: bool = field(action="store_true")
     """Run the model with Fully Sharded Data Parallelism."""
@@ -169,11 +139,31 @@ class Sharding:
     cpu_offload: bool = field(action="store_true")
     """Use CPU offloading. Must be combined with fsdp"""
 
+    @property
+    def local_rank(self) -> int:
+        """Get the local rank of the current process."""
+        return dist.get_rank() if dist.is_initialized() else 0
+
+    @property
+    def world_size(self) -> int:
+        """Get the world size from torch.distributed."""
+        return dist.get_world_size() if dist.is_initialized() else 1
+
+    @property
+    def primary(self) -> bool:
+        """Whether this is the rank 0 process."""
+        return self.local_rank == 0
+
+    @property
+    def device(self) -> th.device:
+        """The device associated with this process."""
+        return th.device(f"cuda:{self.local_rank}")
+
     def shard_model(
         self, model: PreTrainedModel
     ) -> FullyShardedDataParallel | PreTrainedModel:
         """Shard the model using Fully Sharded Data Parallelism."""
-        th.cuda.set_device(local_rank())
+        th.cuda.set_device(self.local_rank)
 
         if self.fsdp:
             _, layers = get_transformer_layers(model)
@@ -185,7 +175,7 @@ class Sharding:
                     transformer_auto_wrap_policy, transformer_layer_cls={layer_cls}
                 ),
                 cpu_offload=CPUOffload(offload_params=self.cpu_offload),
-                device_id=local_rank(),
+                device_id=self.local_rank,
                 # This turns out to be important for training speed
                 forward_prefetch=True,
                 mixed_precision=MixedPrecision(
@@ -197,19 +187,28 @@ class Sharding:
         elif self.cpu_offload:
             raise ValueError("CPU offload requires FSDP.")
         else:
-            model.to(local_rank())
+            model.to(self.local_rank)
             return model
 
-    def shard_lens(self, lens: TunedLens) -> DDP | TunedLens:
-        """Shard a tuned lens using DistributedDataParallel."""
-        if world_size() > 1:
-            return DDP(lens, device_ids=[local_rank()], find_unused_parameters=True)
+    def distribute_lens(self, lens: TunedLens) -> DDP | TunedLens:
+        """Distribute the lens using DistributedDataParallel."""
+        if self.world_size > 1:
+            return DDP(lens, device_ids=[self.local_rank], find_unused_parameters=True)
         else:
             return lens
 
     def shard_dataset(self, dataset: Dataset) -> Dataset:
         """Shard the dataset based on local rank."""
         if dist.is_initialized():
-            dataset = dataset.shard(dist.get_world_size(), local_rank())
+            dataset = dataset.shard(dist.get_world_size(), self.local_rank)
 
         return dataset
+
+    def barrier(self) -> None:
+        """Barrier for all processes."""
+        if dist.is_initialized():
+            dist.barrier()
+
+    def send_to_device(self, pytree: TreeType) -> TreeType:
+        """Move pytree to the current device."""
+        return send_to_device(pytree, self.device)
