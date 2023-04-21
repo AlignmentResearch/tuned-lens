@@ -23,14 +23,14 @@ def opt():
 
 
 def test_get_final_layer_norm(small_model):
-    ln = model_surgery.get_final_layer_norm(small_model)
+    ln = model_surgery.get_final_norm(small_model)
     assert isinstance(ln, th.nn.LayerNorm)
 
 
 def test_get_final_layer_norm_raises(opt):
     opt.base_model.decoder.final_layer_norm = None
     with pytest.raises(ValueError):
-        assert model_surgery.get_final_layer_norm(opt)
+        assert model_surgery.get_final_norm(opt)
 
 
 def test_get_layers_from_model(small_model):

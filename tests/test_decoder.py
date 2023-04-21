@@ -1,4 +1,4 @@
-from tuned_lens.model_surgery import get_final_layer_norm
+from tuned_lens.model_surgery import get_final_norm
 from tuned_lens.nn import Decoder
 import transformers as tr
 import pytest
@@ -20,7 +20,7 @@ def correctness(model_str: str):
         U.bias.data.normal_()
 
     decoder = Decoder(model)
-    ln_f = get_final_layer_norm(model)
+    ln_f = get_final_norm(model)
 
     x = th.randn(1, 1, config.hidden_size)
     y = U(ln_f(x)).log_softmax(-1)  # type: ignore[attr-defined]

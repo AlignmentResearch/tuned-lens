@@ -52,10 +52,11 @@ def assign_key_path(model: T, key_path: str, value: Any) -> Generator[T, None, N
         set_key_path_(model, key_path, old_value)
 
 
-def get_final_layer_norm(model: tr.AutoModelForCausalLM):
-    """Get the final layer norm from a model.
+def get_final_norm(model: tr.PreTrainedModel) -> th.nn.LayerNorm:
+    """Get the final norm from a model.
 
-    This isn't standardized across models, so this will need to be updated
+    This isn't standardized across models, so this will need to be updated as
+    we add new models.
     """
     if not hasattr(model, "base_model"):
         raise ValueError("Model does not have a `base_model` attribute.")
@@ -81,10 +82,12 @@ def get_final_layer_norm(model: tr.AutoModelForCausalLM):
     if final_layer_norm is None:
         raise ValueError("Model does not have a final layer norm.")
 
+    assert isinstance(final_layer_norm, th.nn.LayerNorm)
+
     return final_layer_norm
 
 
-def get_transformer_layers(model: th.nn.Module) -> tuple[str, th.nn.ModuleList]:
+def get_transformer_layers(model: tr.PreTrainedModel) -> tuple[str, th.nn.ModuleList]:
     """Get the decoder layers from a model.
 
     Args:

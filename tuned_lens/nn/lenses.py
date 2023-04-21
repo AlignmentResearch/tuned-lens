@@ -7,7 +7,7 @@ import json
 import abc
 
 from ._model_specific import instantiate_layer, maybe_wrap
-from ..model_surgery import get_final_layer_norm, get_transformer_layers
+from ..model_surgery import get_final_norm, get_transformer_layers
 from ..load_artifacts import load_lens_artifacts
 from transformers import PreTrainedModel
 from typing import Optional, Generator, Union
@@ -52,7 +52,7 @@ class LogitLens(Lens):
 
         # Currently we convert the decoder to full precision
         self.unembedding = deepcopy(model.get_output_embeddings()).float()
-        if ln := get_final_layer_norm(model):
+        if ln := get_final_norm(model):
             self.layer_norm = deepcopy(ln).float()
         else:
             self.layer_norm = th.nn.Identity()
@@ -152,7 +152,7 @@ class TunedLens(Lens):
 
             # Currently we convert the decoder to full precision
             self.unembedding = deepcopy(model.get_output_embeddings()).float()
-            if ln := get_final_layer_norm(model):
+            if ln := get_final_norm(model):
                 self.layer_norm = deepcopy(ln).float()
             else:
                 self.layer_norm = th.nn.Identity()
