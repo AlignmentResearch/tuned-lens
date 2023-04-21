@@ -106,18 +106,12 @@ class Decoder(th.nn.Module):
             if raw_unembed.bias is not None:
                 bias += raw_unembed.bias.data.float()
 
-            bias -= bias.mean()  # Shift invariance of softmax
             self.unembedding.bias.data = bias.to(beta.dtype)
 
         # Roll the LN diagonal scaling factor into our unembedding matrix
         if isinstance(gamma, th.Tensor):
             U = U * gamma
 
-        # Softmax is invariant to constant shifts, so we can canonicalize U
-        # by centering its rows. We can also center the columns because the
-        # input gets centered by LayerNorm.
-        U = U - U.mean(dim=0)
-        U -= U.mean(dim=1, keepdim=True)
         self.unembedding.weight.data = U.to(raw_unembed.weight.dtype)
 
         self.register_buffer("U_pinv", U.pinverse())
