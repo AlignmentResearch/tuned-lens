@@ -155,9 +155,4 @@ class TrajectoryStatistic:
 
 
 def _stride_keep_last(x: NDArray, stride: int):
-    if stride == 1:
-        return x
-    elif len(x) % stride != 1:
-        return np.concatenate([x[::stride], [x[-1]]])
-    else:
-        return x[::stride]
+    return np.concatenate([x[:-1:stride], [x[-1]]])

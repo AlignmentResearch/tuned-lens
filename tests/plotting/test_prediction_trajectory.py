@@ -59,10 +59,8 @@ def lens(model_and_tokenizer):
 
 
 def test_prediction_trajectory_from_lens_and_model_smoke(model_and_tokenizer, lens):
-    _, tokenizer = model_and_tokenizer
-    input_ids = tokenizer.encode("Hello world!")
     model, tokenizer = model_and_tokenizer
-    input_ids = np.array(input_ids)
+    input_ids = tokenizer.encode("Hello world!")
     traj = PredictionTrajectory.from_lens_and_model(
         lens, model, input_ids, tokenizer=tokenizer
     )
