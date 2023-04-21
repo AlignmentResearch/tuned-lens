@@ -36,6 +36,7 @@ extensions = [
     "sphinx_autodoc_typehints",
     "sphinx.ext.doctest",
     "myst_parser",
+    "nbsphinx",
 ]
 
 napoleon_google_docstring = True
@@ -43,7 +44,7 @@ napoleon_use_param = False
 napoleon_use_ivar = True
 
 templates_path = ["_templates"]
-exclude_patterns = ["build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
 
 
 html_theme = "furo"
