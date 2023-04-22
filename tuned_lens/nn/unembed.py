@@ -6,7 +6,7 @@ from transformers import PreTrainedModel
 from typing import cast, Callable, Literal, Optional
 from tuned_lens.model_surgery import get_final_layer_norm, get_transformer_layers
 from tuned_lens.stats import kl_divergence
-from tuned_lens.utils import maybe_unpack
+from tuned_lens.utils import maybe_unpack, tensor_hash
 import torch as th
 
 
@@ -99,10 +99,10 @@ class Unembed(th.nn.Module):
         # In general we don't want to finetune the unembed operation.
         self.requires_grad_(False)
 
-    def unembedding_hash(self) -> int:
+    def unembedding_hash(self) -> str:
         """Hash the unmbedding matrix to identify the model."""
-        parameter = self.unembedding.weight.data
-        return hash(str(parameter.detach().cpu().numpy()))
+        parameter = self.unembedding.weight.data.detach().cpu().numpy()
+        return tensor_hash(parameter)
 
     def forward(self, h: th.Tensor, transform: Callable = lambda x: x) -> th.Tensor:
         """Convert hidden states into logits."""
