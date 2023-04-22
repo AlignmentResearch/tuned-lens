@@ -2,11 +2,13 @@
 from datasets import Dataset, DatasetDict, load_dataset
 from functools import partial
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.distributed.fsdp import (
     CPUOffload,
     FullyShardedDataParallel,
     MixedPrecision,
 )
+import enum
 from typing import Optional
 from dataclasses import dataclass
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
@@ -16,6 +18,7 @@ from transformers import (
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    get_linear_schedule_with_warmup,
 )
 
 from tuned_lens.data import (
@@ -127,6 +130,90 @@ class Model:
         model.requires_grad_(False)
 
         return model, self.load_tokenizer(must_use_cache=must_use_cache)
+
+
+class OptimizerOption(enum.Enum):
+    """Options for the optimizer to use when training the model."""
+
+    ADAM = "adam"
+    SGD = "sgd"
+
+
+@dataclass
+class Optimizer:
+    """Configuration for the optimizer."""
+
+    weight_decay: float = 1e-3
+    """Weight decay coefficient."""
+
+    lr_scale: float = 1.0
+    """The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this factor."""
+
+    momentum: float = 0.9
+    """Momentum coefficient for SGD, or beta1 for Adam."""
+
+    zero: Optional[bool] = field(action="store_true")
+    """Use ZeroRedundancyOptimizer."""
+
+    optimizer: OptimizerOption = OptimizerOption.SGD
+    """The type of optimizer to use."""
+
+    warmup_steps: Optional[int] = None
+    """Number of warmup steps. Defaults to min(0.2 * num_steps, 1000) for Adam and 0
+    for SGD."""
+
+    def create_scheduler(
+        self, opt: th.optim.Optimizer, num_steps: int
+    ) -> th.optim.lr_scheduler.LambdaLR:
+        """Create the LR scheduler."""
+        if self.warmup_steps is None:
+            # Adam generally performs poorly without an LR warmup
+            if self.optimizer == "adam":
+                self.warmup_steps = min(1000, num_steps // 5)
+                print(f"Using {self.warmup_steps} LR warmup steps for Adam")
+            else:
+                self.warmup_steps = 0
+
+        scheduler = get_linear_schedule_with_warmup(
+            opt, self.warmup_steps, num_steps - self.warmup_steps
+        )
+
+        return scheduler
+
+    def create_optim(self, params: list[th.nn.Parameter]) -> th.optim.Optimizer:
+        """Create the optimizer."""
+        # Don't train things that don't need gradients
+        β = self.momentum
+        if self.optimizer == "sgd":
+            config = dict(
+                # PyTorch's implementation effectively scales the LR by 1 / (1 - β),
+                # so we undo that here. See https://www.youtube.com/watch?v=k8fTYJPd3_I
+                # for discussion. Once we do this, the optimal LR seems to be unity.
+                lr=self.lr_scale * (1 - β),
+                momentum=β,
+                # Empirically Nesterov momentum seems to improve convergence speed.
+                nesterov=True,
+                weight_decay=self.weight_decay,
+            )
+            opt_class = th.optim.SGD
+        elif self.optimizer == "adam":
+            config = dict(
+                # Helps convergence slightly by ensuring that the LR actually decays
+                amsgrad=True,
+                betas=(β, 0.999),
+                lr=self.lr_scale * 1e-3,
+                weight_decay=self.weight_decay,
+            )
+            opt_class = th.optim.Adam
+        else:
+            raise ValueError(f"Unknown optimizer '{self.optimizer}'")
+
+        if self.zero:
+            opt = ZeroRedundancyOptimizer(params, optimizer_class=opt_class, **config)
+        else:
+            opt = opt_class(params, **config)  # type: ignore[call-arg]
+
+        return opt
 
 
 @dataclass
