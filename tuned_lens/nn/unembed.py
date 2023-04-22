@@ -4,7 +4,7 @@ from torch.autograd.functional import hessian
 from torch.distributions import Distribution
 from transformers import PreTrainedModel
 from typing import cast, Callable, Literal, Optional
-from tuned_lens.model_surgery import get_final_layer_norm, get_transformer_layers
+from tuned_lens.model_surgery import get_final_norm, get_transformer_layers
 from tuned_lens.stats import kl_divergence
 from tuned_lens.utils import maybe_unpack, tensor_hash
 import torch as th
@@ -46,7 +46,7 @@ class Unembed(th.nn.Module):
         self.transformer_layers = th.nn.ModuleList()
         # Initializing from scratch without a model
 
-        raw_ln = get_final_layer_norm(model)
+        raw_ln = get_final_norm(model)
         assert raw_ln is not None
 
         raw_unembed = model.get_output_embeddings()
@@ -73,18 +73,12 @@ class Unembed(th.nn.Module):
             if raw_unembed.bias is not None:
                 bias += raw_unembed.bias.data.float()
 
-            bias -= bias.mean()  # Shift invariance of softmax
             self.unembedding.bias.data = bias.to(beta.dtype)
 
         # Roll the LN diagonal scaling factor into our unembedding matrix
         if isinstance(gamma, th.Tensor):
             U = U * gamma
 
-        # Softmax is invariant to constant shifts, so we can canonicalize U
-        # by centering its rows. We can also center the columns because the
-        # input gets centered by LayerNorm.
-        U = U - U.mean(dim=0)
-        U -= U.mean(dim=1, keepdim=True)
         self.unembedding.weight.data = U.to(raw_unembed.weight.dtype)
 
         # We precompute the pseudo-inverse of the unembedding matrix

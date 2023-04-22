@@ -1,8 +1,8 @@
 """Tools for finding and modifying components in a transformer model."""
 
 from contextlib import contextmanager
-from transformers import PreTrainedModel
-from typing import Any, Generator, Optional, Type, TypeVar, Union
+import transformers as tr
+from typing import Any, Generator, TypeVar, Union
 import torch as th
 
 
@@ -52,25 +52,43 @@ def assign_key_path(model: T, key_path: str, value: Any) -> Generator[T, None, N
         set_key_path_(model, key_path, old_value)
 
 
-def get_final_layer_norm(
-    model: PreTrainedModel, norm_class: Type[th.nn.Module] = th.nn.LayerNorm
-) -> Optional[th.nn.Module]:
-    """Use heuristics to find the final layer norm in a model, if it exists."""
-    base = model.base_model
-    if decoder := getattr(base, "decoder", None):
-        base = decoder
+def get_final_norm(model: tr.PreTrainedModel) -> th.nn.LayerNorm:
+    """Get the final norm from a model.
 
-    top_level_lns = [
-        module for module in base.children() if isinstance(module, norm_class)
-    ]
-    return top_level_lns[-1] if top_level_lns else None
+    This isn't standardized across models, so this will need to be updated as
+    we add new models.
+    """
+    if not hasattr(model, "base_model"):
+        raise ValueError("Model does not have a `base_model` attribute.")
+
+    base_model = model.base_model
+    if isinstance(base_model, tr.models.opt.modeling_opt.OPTModel):
+        final_layer_norm = base_model.decoder.final_layer_norm
+    elif isinstance(base_model, tr.models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
+        final_layer_norm = base_model.final_layer_norm
+    elif isinstance(
+        base_model,
+        (
+            tr.models.bloom.modeling_bloom.BloomModel,
+            tr.models.gpt2.modeling_gpt2.GPT2Model,
+            tr.models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+            tr.models.gptj.modeling_gptj.GPTJModel,
+        ),
+    ):
+        final_layer_norm = base_model.ln_f
+    else:
+        raise NotImplementedError(f"Unknown model type {type(base_model)}")
+
+    if final_layer_norm is None:
+        raise ValueError("Model does not have a final layer norm.")
+
+    assert isinstance(final_layer_norm, th.nn.LayerNorm)
+
+    return final_layer_norm
 
 
-def get_transformer_layers(model: th.nn.Module) -> tuple[str, th.nn.ModuleList]:
-    """Get "the" list of transformer layers from a model.
-
-    This is operationalized as the unique `nn.ModuleList` that contains
-    more than half of all the parameters in the model, if it exists.
+def get_transformer_layers(model: tr.PreTrainedModel) -> tuple[str, th.nn.ModuleList]:
+    """Get the decoder layers from a model.
 
     Args:
         model: The model to search.
@@ -81,16 +99,30 @@ def get_transformer_layers(model: th.nn.Module) -> tuple[str, th.nn.ModuleList]:
     Raises:
         ValueError: If no such list exists.
     """
-    total_params = sum(p.numel() for p in model.parameters())
-    for name, module in model.named_modules():
-        if isinstance(module, th.nn.ModuleList):
-            module_params = sum(p.numel() for p in module.parameters())
-            if module_params > total_params / 2:
-                return name, module
+    if not hasattr(model, "base_model"):
+        raise ValueError("Model does not have a `base_model` attribute.")
 
-    raise ValueError(
-        "Could not find suitable `ModuleList`; is this an encoder-decoder model?"
-    )
+    path_to_layers = ["base_model"]
+    base_model = model.base_model
+    if isinstance(base_model, tr.models.opt.modeling_opt.OPTModel):
+        path_to_layers += ["decoder", "layers"]
+    elif isinstance(base_model, tr.models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
+        path_to_layers += ["layers"]
+    elif isinstance(
+        base_model,
+        (
+            tr.models.bloom.modeling_bloom.BloomModel,
+            tr.models.gpt2.modeling_gpt2.GPT2Model,
+            tr.models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+            tr.models.gptj.modeling_gptj.GPTJModel,
+        ),
+    ):
+        path_to_layers += ["h"]
+    else:
+        raise NotImplementedError(f"Unknown model type {type(base_model)}")
+
+    path_to_layers = ".".join(path_to_layers)
+    return path_to_layers, get_key_path(model, path_to_layers)
 
 
 @contextmanager
