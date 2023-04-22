@@ -22,6 +22,8 @@ from tuned_lens.utils import (
     shift_preds,
     pytree_map,
     pytree_stack,
+    maybe_all_reduce,
+    maybe_all_cat,
 )
 import torch as th
 from dataclasses import dataclass
@@ -74,7 +76,7 @@ class Eval:
 
         model = self.dist.shard_model(model)
         data = self.dist.shard_dataset(data)
-        lens = self.dist.shard_lens(lens)
+        lens = self.dist.distribute_lens(lens)
 
         dl = DataLoader(
             data.shuffle(seed=self.seed),  # type: ignore[arg-type],
@@ -222,7 +224,7 @@ class Eval:
 
         pbar.close()
         agg = pytree_map(lambda x: nats_to_bpb_ratio * x.mean(), pytree_stack(batches))
-        agg = pytree_map(lambda x: self.dist.maybe_all_reduce(x), agg)
+        agg = pytree_map(lambda x: maybe_all_reduce(x), agg)
         if self.dist.primary:
             th.save(agg, root_dir / "aggregate_metrics.pt")
 
@@ -230,9 +232,7 @@ class Eval:
             agg_transfer = pytree_map(
                 lambda x: nats_to_bpb_ratio * x.mean(0), pytree_stack(transfer_batches)
             )
-            agg_transfer = pytree_map(
-                lambda x: self.dist.maybe_all_reduce(x), agg_transfer
-            )
+            agg_transfer = pytree_map(lambda x: maybe_all_reduce(x), agg_transfer)
             if self.dist.primary:
                 th.save(agg_transfer, root_dir / "aggregate_transfer_metrics.pt")
 
@@ -247,9 +247,7 @@ class Eval:
                 stats.all_reduce_()
 
         if self.grad_alignment:
-            grad_alignments = [
-                self.dist.maybe_all_cat(th.cat(x, dim=0)) for x in grad_alignments
-            ]
+            grad_alignments = [maybe_all_cat(th.cat(x, dim=0)) for x in grad_alignments]
             if self.dist.primary:
                 th.save(grad_alignments, root_dir / "grad_alignments.pt")
 
