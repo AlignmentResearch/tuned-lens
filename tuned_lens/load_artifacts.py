@@ -1,5 +1,5 @@
 """Load lens artifacts from the hub or locally storage."""
-from typing import Optional, Tuple
+from typing import Optional
 from pathlib import Path
 import os
 
@@ -15,7 +15,7 @@ def load_lens_artifacts(
     ckpt_file: str = "params.pt",
     subfolder: str = "lens",
     cache_dir: Optional[str] = None,
-) -> Tuple[Path, Path]:
+) -> tuple[Path, Path]:
     """First checks for lens resource locally then tries to download it from the hub.
 
     Args:
