@@ -48,7 +48,7 @@ def eval_loop(
     )
 
     if lens is None:
-        lens = LogitLens.init_from_model(model)
+        lens = LogitLens.from_model(model)
 
     lens.eval()
 

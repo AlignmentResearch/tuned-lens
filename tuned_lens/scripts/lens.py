@@ -16,7 +16,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
-from tuned_lens import TunedLens
+from tuned_lens.nn import TunedLens
 from tuned_lens.data import (
     chunk_and_tokenize,
     compute_nats_to_bpb_ratio,
@@ -77,15 +77,11 @@ def main(args):
 
     # Can be set either in eval or in training; in eval it's required
     if getattr(args, "lens", None):
-        lens = TunedLens.from_model_and_pretrained(model, args.lens, map_location="cpu")
+        lens = TunedLens.from_pretrained(args.lens, model=model, map_location="cpu")
     elif args.command in ("downstream", "eval"):
         lens = None
     else:
-        lens = TunedLens(
-            model,
-            extra_layers=args.extra_layers,
-            reuse_unembedding=not args.separate_unembeddings,
-        ).float()
+        lens = TunedLens.from_model(model, revision=args.revision).float()
 
     if lens:
         lens = lens.to(device=th.device("cuda", local_rank))

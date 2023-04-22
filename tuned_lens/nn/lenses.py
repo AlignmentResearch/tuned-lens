@@ -9,7 +9,7 @@ import abc
 
 from tuned_lens.load_artifacts import load_lens_artifacts
 from tuned_lens.nn.unembed import Unembed
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, AutoModelForCausalLM
 from typing import Dict, Optional, Generator, Union
 import torch as th
 
@@ -62,7 +62,7 @@ class LogitLens(Lens):
         super().__init__(unembed)
 
     @classmethod
-    def init_from_model(
+    def from_model(
         cls,
         model: PreTrainedModel,
         extra_layers: int = 0,
@@ -108,7 +108,7 @@ class TunedLensConfig:
     # The revision of the base model this lens was tuned for.
     base_model_revision: Optional[str] = None
     # The hash of the base's unembed model this lens was tuned for.
-    unemebd_hash: Optional[int] = None
+    unemebd_hash: Optional[str] = None
     # The name of the lens type.
     lens_type: str = "linear_tuned_lens"
 
@@ -151,13 +151,7 @@ class TunedLens(Lens):
 
         self.config = config
         unembed_hash = unembed.unembedding_hash()
-        if config.unemebd_hash is not None and config.unemebd_hash != unembed_hash:
-            warning(
-                "The unembeding matrix hash does not match the model's hash."
-                "This lens may have been trained with a different model."
-            )
-        else:
-            config.unemebd_hash = unembed_hash
+        config.unemebd_hash = unembed_hash
 
         translator = th.nn.Linear(config.d_model, config.d_model, bias=config.bias)
         translator.weight.data.zero_()
@@ -177,7 +171,7 @@ class TunedLens(Lens):
         yield from self.layer_translators
 
     @classmethod
-    def init_from_model(
+    def from_model(
         cls,
         model: PreTrainedModel,
         revision: Optional[str] = None,
@@ -205,20 +199,26 @@ class TunedLens(Lens):
         return cls(unembed, config)
 
     @classmethod
-    def from_model_and_pretrained(
+    def from_pretrained(
         cls,
-        model: PreTrainedModel,
         resource_id: str,
+        model: Optional[PreTrainedModel] = None,
+        unembed: Optional[Unembed] = None,
         cache_dir: Optional[str] = None,
         revision: Optional[str] = None,
         **kwargs,
     ) -> "TunedLens":
         """Load a tuned lens from a folder or hugging face hub.
 
+        If a model or an unembed is provided, the lens will be initialized from them
+        otherwise this function attempts to automatically download the model from
+        hugging face hub.
+
         Args:
-            model: The model to create the lens from.
             resource_id: The path to the directory containing the config and checkpoint
                 or the name of the model on the hugging face hub.
+            model: The model to create the lens from.
+            unembed: The unembed operation to use as the final step in the lens.
             cache_dir: The directory to cache the artifacts in if downloaded. If None,
                 will use the default huggingface cache directory.
             revision: The git revision to use if downloading from the hub.
@@ -227,48 +227,41 @@ class TunedLens(Lens):
         Returns:
             A TunedLens instance.
         """
-        return cls.from_unembed_and_pretrained(
-            Unembed(model),
-            resource_id=resource_id,
-            cache_dir=cache_dir,
-            revision=revision,
-            **kwargs,
-        )
-
-    @classmethod
-    def from_unembed_and_pretrained(
-        cls,
-        unembed: Unembed,
-        resource_id: str,
-        cache_dir: Optional[str] = None,
-        revision: Optional[str] = None,
-        **kwargs,
-    ) -> "TunedLens":
-        """Load a tuned lens from a folder or hugging face hub.
-
-        Args:
-            unembed : The unembed operation to use.
-            resource_id : The path to the directory containing the config and checkpoint
-                or the name of the model on the hugging face hub.
-            cache_dir : The directory to cache the artifacts in if downloaded. If None,
-                will use the default huggingface cache directory.
-            revision : The git revision to use if downloading from the hub.
-            **kwargs : Additional arguments to pass to torch.load.
-
-        Returns:
-            A TunedLens instance.
-        """
+        # Create the config
         config_path, ckpt_path = load_lens_artifacts(
             resource_id, cache_dir=cache_dir, revision=revision
         )
-        # Load config
+
         with open(config_path, "r") as f:
             config = TunedLensConfig.from_dict(json.load(f))
 
+        # Create the unembed
+        if unembed is None and model is not None:
+            unembed = Unembed(model)
+        elif unembed is not None and model is None:
+            pass
+        elif unembed is None and model is None:
+            model = AutoModelForCausalLM.from_pretrained(
+                resource_id, cache_dir=cache_dir, revision=revision
+            )
+            unembed = Unembed(model)
+        else:
+            raise ValueError(
+                "Cannot specify both an unembed and a model. "
+                "Please specify only one of the two."
+            )
+        # validate the unembed is the same as the one used to train the lens
+        if config.unemebd_hash and unembed.unembedding_hash() != config.unemebd_hash:
+            warning(
+                "The unembeding matrix hash does not match the lens' hash."
+                "This lens may have been trained with a different unembeding."
+            )
+
+        # Create the lens
+        lens = cls(unembed, config)
+
         # Load parameters
         state = th.load(ckpt_path, **kwargs)
-
-        lens = cls(unembed, config)
 
         lens.layer_translators.load_state_dict(state)
 

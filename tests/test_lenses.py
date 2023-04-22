@@ -67,7 +67,7 @@ def test_logit_lens_smoke(logit_lens):
 def test_tuned_lens_init_from_model(model):
     with mock.patch("tuned_lens.model_surgery.get_final_layer_norm") as mock_get_ln_f:
         mock_get_ln_f.return_value = th.nn.LayerNorm(128)
-        tuned_lens = TunedLens.init_from_model(model)
+        tuned_lens = TunedLens.from_model(model)
     assert tuned_lens.config.base_model_name_or_path == "test-model"
     assert tuned_lens.config.d_model == 128
     assert tuned_lens.config.num_hidden_layers == 3
@@ -87,6 +87,6 @@ def test_tuned_lens_save_and_load(unembed: Unembed, tuned_lens: TunedLens):
     logits_before = tuned_lens(randn, 1)
     with tempfile.TemporaryDirectory() as tmpdir:
         tuned_lens.save(tmpdir)
-        tuned_lens = TunedLens.from_unembed_and_pretrained(unembed, tmpdir)
+        tuned_lens = TunedLens.from_pretrained(tmpdir, unembed=unembed)
         logits_after = tuned_lens(randn, 1)
         assert th.allclose(logits_before, logits_after)

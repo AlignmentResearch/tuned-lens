@@ -7,7 +7,7 @@ import torch as th
 def test_plot_logit_lens():
     pythia_125M_model = AutoModelForCausalLM.from_pretrained("EleutherAI/pythia-125m")
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-125m")
-    pythia_125M_lens = LogitLens.init_from_model(pythia_125M_model)
+    pythia_125M_lens = LogitLens.from_model(pythia_125M_model)
     pythia_125M_lens.attn_translators = th.nn.ModuleList()
     text = "Never gonna give you up, never gonna let you down,"
     text += " never gonna run around and desert you"
