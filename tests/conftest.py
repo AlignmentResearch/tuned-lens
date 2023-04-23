@@ -16,7 +16,7 @@ def text_dataset() -> Dataset:
 @pytest.fixture(
     scope="module",
     params=[
-        "EleutherAI/pythia-125m",
+        "EleutherAI/pythia-70m-deduped",
         "bigscience/bloom-560m",
         "EleutherAI/gpt-neo-125M",
         "facebook/opt-125m",
@@ -41,3 +41,8 @@ def random_small_model(small_model_name: str):
 @pytest.fixture(scope="module")
 def small_model_tokenizer(small_model_name: str) -> tr.PreTrainedTokenizerBase:
     return tr.AutoTokenizer.from_pretrained(small_model_name, use_fast=True)
+
+
+@pytest.fixture(scope="module")
+def gpt2_tokenizer():
+    return tr.AutoTokenizer.from_pretrained("gpt2", use_fast=True)
