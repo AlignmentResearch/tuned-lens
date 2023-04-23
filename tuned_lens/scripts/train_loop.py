@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel
 from tuned_lens import TunedLens
-from tuned_lens.residual_stream import ResidualStream
 from tuned_lens.utils import shift_labels, shift_preds, maybe_all_reduce
 from tuned_lens.scripts.ingredients import (
     Model,
@@ -61,9 +60,6 @@ class Train:
 
     pre_ln: Optional[bool] = field(action="store_true")
     """Apply layer norm before, and not after, each probe."""
-
-    resume: Optional[Path] = None
-    """File to resume training from."""
 
     separate_unembeddings: Optional[bool] = field(action="store_true")
     """Learn a separate unembedding for each layer."""
@@ -182,8 +178,10 @@ class Train:
 
     def execute(self):
         """Trains a TunedLens model against a transformer on a dataset."""
-        model = tokenizer = data = lens = nats_to_bpb = None
+        # Load model, tokenizer, data, and lens
+        model = tokenizer = data = lens = nats_to_bpb = model_name = None
         if self.dist.primary:
+            # Let the primary processes populate the cache
             model, tokenizer = self.model.load()
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
@@ -191,19 +189,22 @@ class Train:
             *_, model_name = model.config.name_or_path.split("/")
             self._init_logging(model_name, lens)
 
-        self.dist.barrier()  # Wait for primary to finish loading
+        self.dist.barrier()  # Wait for primary to finish filling the cache
 
         if not self.dist.primary:
+            # Let the non-primary processes load from the cache
             model, tokenizer = self.model.load(must_use_cache=True)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
 
         assert model and tokenizer and data and lens and nats_to_bpb
 
-        # Shard across GPUs
+        # Shard the model using fully shared data parallel
         model = self.dist.shard_model(model)
-        data = self.dist.shard_dataset(data)
+        # Distribute the lens across the GPUS using distributed data parallel
         ddp_lens = self.dist.distribute_lens(lens)
+        # Shard the dataset for use with distributed data parallel
+        data = self.dist.shard_dataset(data)
 
         dl = DataLoader(
             data.shuffle(seed=self.seed),  # type: ignore[arg-type]
@@ -213,18 +214,9 @@ class Train:
         # Don't train the unembedding matrix or final layer norm
         params = [p for p in ddp_lens.parameters() if p.requires_grad]
 
+        # Create the optimizer and scheduler
         opt = self.opt.create_optim(params)
-
-        self.dist.barrier()
-        print("All processes have completed setup. Starting training.")
-
         scheduler = self.opt.create_scheduler(opt, self.num_steps)
-
-        if self.resume:
-            assert self.resume.is_dir()
-
-            print(f"Loading checkpoint from {self.resume}")
-            ddp_lens.load_state_dict(th.load(self.resume))
 
         tokens_per_sample = len(data[0]["input_ids"])
 
@@ -236,6 +228,11 @@ class Train:
         metrics = defaultdict(list)
         total_batches = self.num_steps * grad_acc_steps
 
+        # Wait for all processes to finish setup
+        self.dist.barrier()
+        print("All processes have completed setup. Starting training.")
+
+        # Main training loop
         pbar = tqdm(islice(dl, total_batches), desc="Training", total=total_batches)
         for batch_idx, batch in enumerate(pbar, start=1):
             assert isinstance(batch, dict)
@@ -244,9 +241,7 @@ class Train:
                 output = model(**batch, output_hidden_states=True)
 
             final_logits = output.logits
-            stream = ResidualStream(
-                embeddings=output.hidden_states[0], layers=output.hidden_states[1:-1]
-            )
+            hidden_stats = output.hidden_states[:-1]
 
             shift = self.token_shift
             if self.loss == "ce":
@@ -267,7 +262,7 @@ class Train:
             labels = shift_labels(labels, shift)
 
             # We do this sequentially to save VRAM
-            for i, (name, h) in enumerate(stream.items()):
+            for i, h in enumerate(hidden_stats):
                 # bfloat16 has larger dynamic range than float16 and seems to be better
                 # for computing log softmax & KL loss
                 with th.autocast("cuda", dtype=th.bfloat16):
@@ -288,7 +283,7 @@ class Train:
                     logging_loss = loss.detach()
                     maybe_all_reduce(logging_loss)
                     if self.dist.primary:
-                        metrics[f"loss/{name}"].append(logging_loss)
+                        metrics[f"loss/translator_{i}"].append(logging_loss)
 
                     scaled_loss = loss / grad_acc_steps
 
@@ -304,9 +299,13 @@ class Train:
 
             # Make the problem strictly convex with projected gradient descent,
             # centering the affine transform at each step
+
+            # TODO this should be reviewed when we add support for other types of
+            # normalization beyond layer norm
             lens.normalize_()
 
         if self.dist.primary:
+            assert model_name is not None
             output = model_name if self.output is None else self.output
             print(f"Saving lens to {self.output}")
             lens.save(output)
