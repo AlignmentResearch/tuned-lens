@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Sequence, Union
+from typing import Any, Optional, Sequence, Union
 
 from ..nn.lenses import Lens
 from .token_formatter import TokenFormatter
@@ -164,7 +164,6 @@ class PredictionTrajectory:
         sort_by: NDArray[np.float32],
         values: NDArray[np.float32],
     ) -> NDArray[np.str_]:
-
         # Get the top-k tokens & probabilities for each
         topk_inds = np.argpartition(sort_by, -k, axis=-1)[..., -k:]
         topk_sort_by = np.take_along_axis(sort_by, topk_inds, axis=-1)
@@ -180,7 +179,7 @@ class PredictionTrajectory:
         topk_tokens = self.tokenizer.convert_ids_to_tokens(topk_inds.flatten().tolist())
         topk_tokens = np.array(topk_tokens).reshape(topk_inds.shape)
 
-        return topk_tokens, topk_values
+        return topk_tokens, topk_values, topk_inds
 
     def largest_prob_labels(
         self,
@@ -229,6 +228,43 @@ class PredictionTrajectory:
             sequence_labels=formatter.vectorized_format(input_tokens),
             hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
         )
+
+    def get_first_order_diff(self, k: int = 10) -> Any:
+        # WIP
+        # Pseudocode:
+
+        # for each input token:
+        #     for each layer (starting at 2nd layer):
+        #         get top k tokens for that layer
+        #         for each token:
+        #             get value from previous layer for that token
+        #             subtract previous value from current value to get delta
+        #             store delta
+        #         store all deltas for layer tokens
+        #     store all deltas for input token's layers' tokens
+        # return input tokens' layers' tokens' deltas
+
+        topk_tokens, topk_values, topk_ids = self._get_topk_tokens_and_values(
+            k, self.log_probs, self.probs
+        )
+
+        input_diffs = []
+        for input_ix in range(self.num_tokens):
+            layer_diffs = []
+            for layer_ix in range(1, self.num_layers):
+                layer_topk_ids = topk_ids[layer_ix][input_ix]
+                diff_ids = []
+                diff_values = []
+                for id in layer_topk_ids:
+                    prev_value = self.log_probs[layer_ix - 1][input_ix][id]
+                    value = self.log_probs[layer_ix][input_ix][id]
+                    diff_value = prev_value - value
+                    diff_ids.append(id)
+                    diff_values.append(diff_value)
+                layer_diffs.append((diff_ids, diff_values))
+            input_diffs.append(layer_diffs)
+
+        return input_diffs
 
     def largest_delta_in_prob_labels(
         self,
