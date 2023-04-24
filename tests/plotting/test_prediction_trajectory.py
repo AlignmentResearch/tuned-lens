@@ -186,6 +186,6 @@ def test_calc_first_order_diff_smoke(prediction_trajectory_with_tokenizer):
     traj = prediction_trajectory_with_tokenizer
     traj.log_probs[1][0][0] = 0.1
     traj.log_probs[2][0][0] = 0.5
-    token_deltas = traj.get_first_order_diff(3)
-    assert token_deltas[0][0][0][1] == 0.1
-    assert token_deltas[0][1][0][1] == 0.4
+    token_deltas = traj.get_first_order_diff()
+    assert token_deltas[0][0][0] == np.float32(0.1)
+    assert token_deltas[1][0][0] == np.float32(0.4)

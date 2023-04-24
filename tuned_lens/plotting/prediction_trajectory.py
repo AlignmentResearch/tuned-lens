@@ -229,42 +229,13 @@ class PredictionTrajectory:
             hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
         )
 
-    def get_first_order_diff(self, k: int = 10) -> Any:
-        # WIP
-        # Pseudocode:
+    def get_first_order_diff(self) -> Any:
+        log_prob_diffs = []
+        for layer_ix in range(0, self.log_probs.shape[0] - 1):
+            diff = self.log_probs[layer_ix + 1, :] - self.log_probs[layer_ix, :]
+            log_prob_diffs.append(diff)
 
-        # for each input token:
-        #     for each layer (starting at 2nd layer):
-        #         get top k tokens for that layer
-        #         for each token:
-        #             get value from previous layer for that token
-        #             subtract previous value from current value to get delta
-        #             store delta
-        #         store all deltas for layer tokens
-        #     store all deltas for input token's layers' tokens
-        # return input tokens' layers' tokens' deltas
-
-        topk_tokens, topk_values, topk_ids = self._get_topk_tokens_and_values(
-            k, self.log_probs, self.probs
-        )
-
-        input_diffs = []
-        for input_ix in range(self.num_tokens):
-            layer_diffs = []
-            for layer_ix in range(1, self.num_layers):
-                layer_topk_ids = topk_ids[layer_ix][input_ix]
-                diff_ids = []
-                diff_values = []
-                for id in layer_topk_ids:
-                    prev_value = self.log_probs[layer_ix - 1][input_ix][id]
-                    value = self.log_probs[layer_ix][input_ix][id]
-                    diff_value = prev_value - value
-                    diff_ids.append(id)
-                    diff_values.append(diff_value)
-                layer_diffs.append((diff_ids, diff_values))
-            input_diffs.append(layer_diffs)
-
-        return input_diffs
+        return log_prob_diffs
 
     def largest_delta_in_prob_labels(
         self,
