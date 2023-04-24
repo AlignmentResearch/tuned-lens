@@ -12,7 +12,7 @@ API Reference
 
     tuned_lens.nn.lenses
     tuned_lens.nn.decoder
-    tuned_lens.plotting.plot_lens
+    tuned_lens.plotting
     tuned_lens.load_artifacts
 
 .. toctree::
@@ -22,3 +22,4 @@ API Reference
 
     tutorials/loading_pretrained_lenses.rst
     tutorials/training_and_evaluating_lenses.rst
+    tutorials/prediction_trajectories.ipynb

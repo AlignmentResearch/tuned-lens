@@ -25,15 +25,25 @@ jobs:
           python-version: '3.9'
           cache: 'pip'
           cache-dependency-path: pyproject.toml
-      - name: Install dependences
+      - name: Install pandoc
+        shell: bash
         run: |
-          pip install -e ".[docs]"
+          sudo apt update
+          sudo apt install -y pandoc
+      - name: Install python dependencies
+        run: |
+          pip install -e ".[docs,test,notebooks]"
       - name: Ensure no warnings
         run: |
           python -m sphinx -W docs/source docs/build
       - name: Run doc-tests
         run: |
           cd docs && make doctest
+      - name: Test the tutorial notebooks
+        run: |
+          python -m ipykernel install --user --name tuned-lens
+          python -m pytest --nbmake docs/source/tutorials/*.ipynb \
+            --nbmake-kernel=tuned-lens
   python-build-and-test:
     name: Install and run tests to ensure dependencies are specific enough.
     runs-on: ubuntu-latest
@@ -72,7 +82,7 @@ jobs:
           context: .
           target: test
           tags: unit_test_img:latest
-      - name: Run tests
+      - name: Run unit tests
         run: |
           docker run \
             -v $PWD:/workspace \

@@ -7,8 +7,8 @@ import json
 import abc
 
 from ._model_specific import instantiate_layer, maybe_wrap
-from ..model_surgery import get_final_layer_norm, get_transformer_layers
-from ..load_artifacts import load_lens_artifacts
+from tuned_lens import model_surgery
+from tuned_lens import load_artifacts
 from transformers import PreTrainedModel
 from typing import Optional, Generator, Union
 import torch as th
@@ -52,13 +52,13 @@ class LogitLens(Lens):
 
         # Currently we convert the decoder to full precision
         self.unembedding = deepcopy(model.get_output_embeddings()).float()
-        if ln := get_final_layer_norm(model):
+        if ln := model_surgery.get_final_norm(model):
             self.layer_norm = deepcopy(ln).float()
         else:
             self.layer_norm = th.nn.Identity()
 
         if extra_layers:
-            _, layers = get_transformer_layers(model)
+            _, layers = model_surgery.get_transformer_layers(model)
             self.extra_layers.extend(
                 [maybe_wrap(layer) for layer in layers[-extra_layers:]]
             )
@@ -152,13 +152,13 @@ class TunedLens(Lens):
 
             # Currently we convert the decoder to full precision
             self.unembedding = deepcopy(model.get_output_embeddings()).float()
-            if ln := get_final_layer_norm(model):
+            if ln := model_surgery.get_final_norm(model):
                 self.layer_norm = deepcopy(ln).float()
             else:
                 self.layer_norm = th.nn.Identity()
 
             if extra_layers:
-                _, layers = get_transformer_layers(model)
+                _, layers = model_surgery.get_transformer_layers(model)
                 self.extra_layers.extend(
                     [maybe_wrap(layer) for layer in layers[-extra_layers:]]
                 )
@@ -208,18 +208,21 @@ class TunedLens(Lens):
         yield from self.layer_translators
 
     @classmethod
-    def load(cls, resource_id: str, **kwargs) -> "TunedLens":
+    def load(cls, resource_id: str, revision: str = "v0.0.5", **kwargs) -> "TunedLens":
         """Load a tuned lens from a or hugging face hub.
 
         Args:
             resource_id : The path to the directory containing the config and checkpoint
                 or the name of the model on the hugging face hub.
+            revision : The git revision of the lens to load from the hub.
             **kwargs : Additional arguments to pass to torch.load.
 
         Returns:
             A TunedLens instance.
         """
-        config_path, ckpt_path = load_lens_artifacts(resource_id)
+        config_path, ckpt_path = load_artifacts.load_lens_artifacts(
+            resource_id, revision=revision
+        )
         # Load config
         with open(config_path, "r") as f:
             config = json.load(f)

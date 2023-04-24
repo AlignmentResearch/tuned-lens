@@ -16,10 +16,11 @@ def logit_lens():
     model.config.vocab_size = 100
     model.get_output_embeddings = mock.MagicMock(return_value=th.nn.Linear(128, 100))
 
-    with mock.patch("tuned_lens.model_surgery.get_final_layer_norm") as get_final_ln:
+    with mock.patch("tuned_lens.model_surgery.get_final_norm") as get_final_ln:
         get_final_ln.return_value = th.nn.LayerNorm(128)
+        logit_lens = LogitLens(model)
 
-    return LogitLens(model)
+    return logit_lens
 
 
 @pytest.fixture
