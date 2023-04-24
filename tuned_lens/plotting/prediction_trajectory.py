@@ -179,7 +179,7 @@ class PredictionTrajectory:
         topk_tokens = self.tokenizer.convert_ids_to_tokens(topk_inds.flatten().tolist())
         topk_tokens = np.array(topk_tokens).reshape(topk_inds.shape)
 
-        return topk_tokens, topk_values, topk_inds
+        return topk_tokens, topk_values
 
     def largest_prob_labels(
         self,

@@ -182,7 +182,6 @@ def test_total_variation_smoke(
 
 
 def test_calc_first_order_diff_smoke(prediction_trajectory_with_tokenizer):
-    # WIP
     traj = prediction_trajectory_with_tokenizer
     traj.log_probs[1][0][0] = 0.1
     traj.log_probs[2][0][0] = 0.5
