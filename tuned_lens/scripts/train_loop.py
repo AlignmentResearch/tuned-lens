@@ -249,20 +249,20 @@ class Train:
         for batch_idx, batch in enumerate(pbar, start=1):
             assert isinstance(batch, dict)
             batch = self.dist.send_to_device(batch)
-            with th.autocast("cuda"):
+            with th.no_grad():
                 output = model(**batch, output_hidden_states=True)
 
             final_logits = output.logits
             hidden_stats = output.hidden_states[:-1]
 
             shift = self.token_shift
-            if self.loss == "ce":
+            if self.loss == LossChoice.CE:
                 labels = batch["input_ids"]
 
                 # Predict the *next* token by default w/ cross entropy
                 if shift is None:
                     shift = 1
-            elif self.loss == "kl":
+            elif self.loss == LossChoice.KL:
                 labels = final_logits.log_softmax(dim=-1)
 
                 # Match the *current* token distribution by default
@@ -280,11 +280,11 @@ class Train:
                 with th.autocast("cuda", dtype=th.bfloat16):
                     logits = shift_preds(ddp_lens(h, idx=i), shift)
 
-                    if self.loss == "ce":
+                    if self.loss == LossChoice.CE:
                         loss = th.nn.functional.cross_entropy(
                             logits.flatten(0, -2), labels.flatten()
                         )
-                    elif self.loss == "kl":
+                    elif self.loss == LossChoice.KL:
                         loss = th.sum(
                             labels.exp() * (labels - logits.log_softmax(-1)), dim=-1
                         ).mean()
@@ -320,5 +320,5 @@ class Train:
         if self.dist.primary:
             assert model_name is not None
             output = model_name if self.output is None else self.output
-            print(f"Saving lens to {self.output}")
+            print(f"Saving lens to {output}")
             lens.save(output)

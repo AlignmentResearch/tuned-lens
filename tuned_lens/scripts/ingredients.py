@@ -23,7 +23,6 @@ from transformers import (
 
 from tuned_lens.data import (
     chunk_and_tokenize,
-    compute_nats_to_bpb_ratio,
 )
 
 from tuned_lens.utils import (
@@ -69,8 +68,9 @@ class Data:
                     "Only Dataset and DatasetDict instances are supported."
                 )
 
-        processed = chunk_and_tokenize(dataset, tokenizer, text_key=self.text_column)
-        nats_to_bpb = compute_nats_to_bpb_ratio(dataset, processed)
+        processed, nats_to_bpb = chunk_and_tokenize(
+            dataset, tokenizer, text_key=self.text_column
+        )
 
         print(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
 
@@ -184,7 +184,7 @@ class Optimizer:
         """Create the optimizer."""
         # Don't train things that don't need gradients
         β = self.momentum
-        if self.optimizer == "sgd":
+        if self.optimizer == OptimizerOption.SGD:
             config = dict(
                 # PyTorch's implementation effectively scales the LR by 1 / (1 - β),
                 # so we undo that here. See https://www.youtube.com/watch?v=k8fTYJPd3_I
@@ -196,7 +196,7 @@ class Optimizer:
                 weight_decay=self.weight_decay,
             )
             opt_class = th.optim.SGD
-        elif self.optimizer == "adam":
+        elif self.optimizer == OptimizerOption.ADAM:
             config = dict(
                 # Helps convergence slightly by ensuring that the LR actually decays
                 amsgrad=True,
@@ -278,16 +278,16 @@ class Distributed:
             return model
 
     def distribute_lens(self, lens: TunedLens) -> DDP | TunedLens:
-        """Distribute the lens using DistributedDataParallel."""
+        """Distribute the lens using DistributedDataParallel and send lens to device."""
         if self.world_size > 1:
             return DDP(lens, device_ids=[self.local_rank], find_unused_parameters=True)
         else:
-            return lens
+            return lens.to(self.device)
 
     def shard_dataset(self, dataset: Dataset) -> Dataset:
         """Shard the dataset based on local rank."""
         if dist.is_initialized():
-            dataset = dataset.shard(dist.get_world_size(), self.local_rank)
+            dataset = dataset.shard(self.world_size, self.local_rank)
 
         return dataset
 
