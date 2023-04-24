@@ -22,5 +22,5 @@ exclude_lines =
     if __name__ == .__main__.:
 
     # Ignore place holder lines that appear in abstract methods
-    ...
+    \.\.\.
     pass
