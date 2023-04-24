@@ -97,27 +97,40 @@ class Train:
         return lens
 
     def _init_logging(self, model_name: str, lens: TunedLens):
-        import wandb
-
-        wandb.init(
-            config=vars(self),
-            entity="eleutherai",
-            group=model_name,
-            name=self.wandb,
-            project="tuned-lens",
-        )
-        wandb.watch(lens)
-
-    def _log(self, opt, step, metrics, lens, nats_to_bpb):
-        if self.dist.primary or not self.wandb:
+        """Initialize logging to weights and biases."""
+        if not self.dist.primary or not self.wandb:
             return
 
         import wandb
 
-        log_dict = {k: th.stack(v).mean() * nats_to_bpb for k, v in metrics.items()}
+        wandb.init(
+            config=vars(self),
+            group=model_name,
+            name=self.wandb,
+        )
+        wandb.watch(lens)
+
+    def _log(
+        self,
+        opt: th.optim.Optimizer,
+        step: int,
+        losses: dict[str, list[float]],
+        tuned_lens: TunedLens,
+        nats_to_bpb: float,
+    ):
+        """Log statistics about the training process to weights and biases."""
+        if not self.dist.primary or not self.wandb:
+            return
+
+        import wandb
+
+        log_dict = {}
+        log_dict.update(
+            {f"loss/{k}": th.tensor(v).mean() * nats_to_bpb for k, v in losses.items()}
+        )
 
         # Log statistics about optimizer & probes
-        for i, probe in enumerate(lens):
+        for i, probe in enumerate(tuned_lens):
             name = "input" if i == 0 else f"{i - 1}.ffn"
             states = [opt.state[p] for p in probe.parameters()]
 
@@ -142,7 +155,6 @@ class Train:
                 log_dict["bias_norm/" + name] = probe.bias.data.norm()
                 log_dict["weight_norm/" + name] = probe.weight.data.norm()
 
-        metrics.clear()
         wandb.log(log_dict)
 
     def calculate_gradient_accumulation_steps(self, tokens_per_sample: int) -> int:
@@ -225,7 +237,7 @@ class Train:
         if self.dist.cpu_offload and grad_acc_steps > 1:
             raise ValueError("CPU offloading cannot be used with gradient accumulation")
 
-        metrics = defaultdict(list)
+        losses = defaultdict(list)
         total_batches = self.num_steps * grad_acc_steps
 
         # Wait for all processes to finish setup
@@ -281,9 +293,9 @@ class Train:
 
                     # Log the loss *before* LASSO regularization
                     logging_loss = loss.detach()
-                    maybe_all_reduce(logging_loss)
+                    logging_loss = maybe_all_reduce(logging_loss).item()
                     if self.dist.primary:
-                        metrics[f"loss/translator_{i}"].append(logging_loss)
+                        losses[f"translator_{i}"].append(logging_loss)
 
                     scaled_loss = loss / grad_acc_steps
 
@@ -295,7 +307,8 @@ class Train:
                 opt.step()
                 opt.zero_grad(set_to_none=False)
                 scheduler.step()
-                self._log(opt, step, metrics, lens, nats_to_bpb)
+                self._log(opt, step, losses, lens, nats_to_bpb)
+                losses.clear()
 
             # Make the problem strictly convex with projected gradient descent,
             # centering the affine transform at each step
