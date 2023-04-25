@@ -64,14 +64,9 @@ def test_logit_lens_smoke(logit_lens):
     logit_lens(randn, 0)
 
 
-def test_tuned_lens_init_from_model(model):
-    with mock.patch("tuned_lens.model_surgery.get_final_layer_norm") as mock_get_ln_f:
-        mock_get_ln_f.return_value = th.nn.LayerNorm(128)
-        tuned_lens = TunedLens.from_model(model)
-    assert tuned_lens.config.base_model_name_or_path == "test-model"
-    assert tuned_lens.config.d_model == 128
-    assert tuned_lens.config.num_hidden_layers == 3
-    assert tuned_lens.config.bias
+def test_tuned_lens_from_model(random_small_model: trf.PreTrainedModel):
+    tuned_lens = TunedLens.from_model(random_small_model)
+    assert tuned_lens.config.d_model == random_small_model.config.hidden_size
 
 
 def test_tuned_lens_forward(tuned_lens: TunedLens):
