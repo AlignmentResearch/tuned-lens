@@ -1,4 +1,5 @@
 """Shared configuration for the scripts."""
+import os
 from datasets import Dataset, DatasetDict, load_dataset
 from functools import partial
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -292,8 +293,14 @@ class Distributed:
         """Shard the dataset based on local rank."""
         if dist.is_initialized():
             dataset = dataset.shard(self.world_size, self.local_rank)
-
         return dataset
+
+    def init(self) -> None:
+        """Initialize distributed process group."""
+        # Support both distributed and non-distributed training
+        local_rank = os.environ.get("LOCAL_RANK")
+        if local_rank is not None:
+            dist.init_process_group("nccl")
 
     def barrier(self) -> None:
         """Barrier for all processes."""

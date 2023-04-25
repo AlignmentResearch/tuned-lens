@@ -191,6 +191,7 @@ class Train:
     def execute(self):
         """Trains a TunedLens model against a transformer on a dataset."""
         # Load model, tokenizer, data, and lens
+        self.dist.init()
         model = tokenizer = data = lens = nats_to_bpb = model_name = None
         if self.dist.primary:
             # Let the primary processes populate the cache

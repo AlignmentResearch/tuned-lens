@@ -74,6 +74,8 @@ class Eval:
     @th.no_grad()
     def execute(self):
         """Trains a TunedLens model against a transformer on a dataset."""
+        self.dist.init()
+
         model, tokenizer = self.model.load()
         data, nats_to_bpb_ratio = self.data.load(tokenizer)
         lens = self.load_lens(model)
