@@ -1,14 +1,19 @@
-import os
 import pytest
 from datasets import Dataset
 import torch as th
 import transformers as tr
+from pathlib import Path
 
 
 @pytest.fixture(scope="module")
-def text_dataset() -> Dataset:
-    dir_path = os.path.dirname(os.path.realpath(__file__))
-    dataset = Dataset.from_json(os.path.join(dir_path, "test_data/pile_text.jsonl"))
+def text_dataset_path() -> Path:
+    dir_path = Path(__file__).parent.absolute()
+    return Path(dir_path, "test_data", "pile_text.jsonl")
+
+
+@pytest.fixture(scope="module")
+def text_dataset(text_dataset_path: Path) -> Dataset:
+    dataset = Dataset.from_json(text_dataset_path)
     assert isinstance(dataset, Dataset)
     return dataset
 
@@ -46,3 +51,16 @@ def small_model_tokenizer(small_model_name: str) -> tr.PreTrainedTokenizerBase:
 @pytest.fixture(scope="module")
 def gpt2_tokenizer():
     return tr.AutoTokenizer.from_pretrained("gpt2", use_fast=True)
+
+
+@pytest.fixture(scope="module")
+def gpt2_random_model_local_path(
+    tmpdir_factory, gpt2_tokenizer: tr.PreTrainedTokenizerBase
+):
+    config = tr.AutoConfig.from_pretrained("gpt2")
+    model = tr.AutoModelForCausalLM.from_config(config)
+    assert isinstance(model, tr.PreTrainedModel)
+    tmp_path = tmpdir_factory.mktemp("gpt2_random_model_local")
+    model.save_pretrained(tmp_path)
+    gpt2_tokenizer.save_pretrained(tmp_path)
+    return tmp_path

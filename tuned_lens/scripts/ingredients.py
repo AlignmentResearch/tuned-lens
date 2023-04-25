@@ -53,6 +53,10 @@ class Data:
     """Column of the dataset containing text to run the model on."""
 
     revision: Optional[str] = None
+    """The revision of the dataset to use"""
+
+    max_length: int = 2048
+    """The maximum length of the input sequences."""
 
     def load(self, tokenizer: PreTrainedTokenizerBase) -> tuple[Dataset, float]:
         """Load the dataset, tokenize it and compute nats_to_bpb."""
@@ -69,7 +73,7 @@ class Data:
                 )
 
         processed, nats_to_bpb = chunk_and_tokenize(
-            dataset, tokenizer, text_key=self.text_column
+            dataset, tokenizer, text_key=self.text_column, max_length=self.max_length
         )
 
         print(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
