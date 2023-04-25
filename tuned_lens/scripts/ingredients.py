@@ -35,7 +35,7 @@ import torch.distributed as dist
 
 from simple_parsing import field
 
-from tuned_lens.nn.lenses import TunedLens
+from tuned_lens.nn.lenses import Lens
 
 
 @dataclass
@@ -277,7 +277,7 @@ class Distributed:
             model.to(self.local_rank)
             return model
 
-    def distribute_lens(self, lens: TunedLens) -> DDP | TunedLens:
+    def distribute_lens(self, lens: Lens) -> DDP | Lens:
         """Distribute the lens using DistributedDataParallel and send lens to device."""
         if self.world_size > 1:
             return DDP(lens, device_ids=[self.local_rank], find_unused_parameters=True)
