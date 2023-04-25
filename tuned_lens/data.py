@@ -1,6 +1,5 @@
 """Tools for tokenizing and manipulating text datasets."""
 from datasets import Dataset, DatasetDict
-from functools import partial
 from multiprocessing import cpu_count
 from transformers import PreTrainedTokenizerBase
 from typing import TypeVar, Union
@@ -17,14 +16,18 @@ def chunk_and_tokenize(
     tokenizer: PreTrainedTokenizerBase,
     *,
     format: str = "torch",
-    num_proc: int = cpu_count() // 2,
+    num_proc: int = min(cpu_count() // 2, 8),
     text_key: str = "text",
-) -> T:
+    max_length: int = 2048,
+    return_final_batch: bool = False,
+    load_from_cache_file: bool = True,
+) -> tuple[T, float]:
     """Perform GPT-style chunking and tokenization on a dataset.
 
     The resulting dataset will consist entirely of chunks exactly `max_length` tokens
     long. Long sequences will be split into multiple chunks, and short sequences will
-    be merged with their neighbors, using `eos_token` as a separator.
+    be merged with their neighbors, using `eos_token` as a separator. The fist token
+    will also always be an `eos_token`.
 
     Args:
         data: The dataset to chunk and tokenize.
@@ -32,89 +35,78 @@ def chunk_and_tokenize(
         format: The format to return the dataset in, passed to `Dataset.with_format`.
         num_proc: The number of processes to use for tokenization.
         text_key: The key in the dataset to use as the text to tokenize.
+        max_length: The maximum length of a batch of input ids.
+        return_final_batch: Whether to return the final batch, which may be smaller
+            than the others.
+        load_from_cache_file: Whether to load from the cache file.
 
     Returns:
-        The chunked and tokenized dataset.
+        * The chunked and tokenized dataset.
+        * The ratio of nats to bits per byte see https://arxiv.org/pdf/2101.00027.pdf,
+            section 3.1.
     """
-    return data.map(
-        partial(_tokenize_fn, tokenizer=tokenizer, text_key=text_key),
+
+    def _tokenize_fn(x: dict[str, list]):
+        chunk_size = min(tokenizer.model_max_length, max_length)
+        sep = tokenizer.eos_token or "<|endoftext|>"
+        joined_text = sep.join([""] + x[text_key])
+        output = tokenizer(
+            # Concatenate all the samples together, separated by the EOS token.
+            joined_text,  # start with an eos token
+            max_length=chunk_size,
+            return_attention_mask=False,
+            return_overflowing_tokens=True,
+            truncation=True,
+        )
+
+        total_tokens = sum(len(ids) for ids in output["input_ids"])
+        total_bytes = len(joined_text.encode("utf-8"))
+
+        assert (
+            "overflowing_tokens" not in output
+        ), "We should not have any overflowing tokens."
+
+        if not return_final_batch:
+            # We know that the last sample will almost always be less than the max
+            # number of tokens, and we don't want to pad, so we just drop it.
+            output = {k: v[:-1] for k, v in output.items()}
+
+        output_batch_size = len(output["input_ids"])
+
+        if output_batch_size == 0:
+            raise ValueError(
+                "Not enough data to create a single batch complete batch."
+                " Either allow the final batch to be returned,"
+                " or supply more data."
+            )
+
+        # We need to output this in order to compute the number of bits per byte
+        div, rem = divmod(total_tokens, output_batch_size)
+        output["length"] = [div] * output_batch_size
+        output["length"][-1] += rem
+
+        div, rem = divmod(total_bytes, output_batch_size)
+        output["bytes"] = [div] * output_batch_size
+        output["bytes"][-1] += rem
+
+        return output
+
+    data = data.map(
+        _tokenize_fn,
+        # Batching is important for ensuring that we don't waste tokens
+        # since we always throw away the last element of the batch we
+        # want to keep the batch size as large as possible
         batched=True,
+        batch_size=2048,
         num_proc=num_proc,
         remove_columns=get_columns_all_equal(data),
-    ).with_format(
-        format,
-        # Remove the "overflow_to_sample_mapping" column so we can directly pass
-        # elements of the dataset to a model
-        columns=["input_ids"],
+        load_from_cache_file=load_from_cache_file,
     )
-
-
-def compute_nats_to_bpb_ratio(raw: T, tokenized: T) -> float:
-    """Compute ratio of nats per token to bits per byte for a given tokenizer.
-
-    This is used to convert the perplexity of a model to bits per byte.
-
-    Args:
-        raw: The raw, unprocessed dataset.
-        tokenized: The tokenized dataset.
-
-    Returns:
-        The ratio of nats to bits per byte.
-    """
-    byte_counts = raw.map(
-        lambda x: {"length": [len(txt.encode("utf-8")) for txt in x["text"]]},
-        batched=True,
-        num_proc=cpu_count() // 2,
-        remove_columns=get_columns_all_equal(raw),
-    )
-
-    token_counts = tokenized.map(
-        lambda x: {"length": [len(ids) for ids in x["input_ids"]]},
-        batched=True,
-        num_proc=cpu_count() // 2,
-        remove_columns=get_columns_all_equal(tokenized),
-    )
-    total_bytes = sum(byte_counts["length"])  # type: ignore[operator]
-    total_tokens = sum(token_counts["length"])  # type: ignore[operator]
-
-    # See https://arxiv.org/pdf/2101.00027.pdf, section 3.1
-    return (total_tokens / total_bytes) / math.log(2)
-
-
-def _tokenize_fn(x: dict[str, list], tokenizer: PreTrainedTokenizerBase, text_key: str):
-    """Annoyingly, we need to use a separate function so it can be hashed correctly."""
-    chunk_size = min(tokenizer.model_max_length, 2048)
-    sep = tokenizer.eos_token or "<|endoftext|>"
-    output = tokenizer(
-        # Concatenate all the samples together, separated by the EOS token.
-        sep.join(x[text_key]),
-        max_length=chunk_size,
-        return_overflowing_tokens=True,
-        truncation=True,
-    )
-
-    # Workaround for weird inconsistency of behavior in OPT tokenizer
-    if overflow := output.pop("overflowing_tokens", None):
-        tokens = output["input_ids"]
-        tokens += overflow
-
-        # Drop tokens that don't fit into a chunk
-        limit = len(tokens) - len(tokens) % chunk_size
-
-        # Manually group tokens into a list of chunks of length `chunk_size`
-        return {
-            "input_ids": [
-                tokens[i : i + chunk_size] for i in range(0, limit, chunk_size)
-            ]
-        }
-
-    # Normal case
-    return {
-        # We know that the last sample will almost always be less than the max
-        # number of tokens, and we don't want to pad, so we just drop it.
-        k: v[:-1]
-        for k, v in output.items()
-    }
+    total_bytes: float = sum(data["bytes"])
+    total_tokens: float = sum(data["length"])
+    return data.with_format(format, columns=["input_ids"]), (
+        total_tokens / total_bytes
+    ) / math.log(2)
 
 
 def get_columns_all_equal(dataset: Union[Dataset, DatasetDict]) -> list[str]:
