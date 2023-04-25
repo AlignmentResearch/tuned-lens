@@ -1,26 +1,16 @@
 codecov:
   require_ci_to_pass: yes
 
+comment:
+  layout: "reach, diff, flags, files"
+
 coverage:
   status:
     project:
-      default: false
-      tests:
-        target: 90%
-        threshold: 1%
-      tuned_lens:
+      default:
         target: auto
         threshold: 1%
     patch:
-      tuned_lens:
+      default:
         target: 60%
         threshold: 1%
-
-flags:
-  tests:
-    paths:
-      - tests/
-    statuses:
-  tuned_lens:
-    paths:
-      - tuned_lens/

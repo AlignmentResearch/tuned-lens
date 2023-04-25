@@ -19,7 +19,6 @@ from transformers import (
 from tuned_lens.nn import TunedLens
 from tuned_lens.data import (
     chunk_and_tokenize,
-    compute_nats_to_bpb_ratio,
     silence_datasets_messages,
 )
 from tuned_lens.model_surgery import get_transformer_layers
@@ -136,8 +135,9 @@ def main(args):
         if not isinstance(dataset, (Dataset, DatasetDict)):
             raise ValueError("Only Dataset and DatasetDict instances are supported.")
 
-    processed = chunk_and_tokenize(dataset, tokenizer, text_key=args.text_column)
-    nats_to_bpb = compute_nats_to_bpb_ratio(dataset, processed)
+    processed, nats_to_bpb = chunk_and_tokenize(
+        dataset, tokenizer, text_key=args.text_column
+    )
     print(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
 
     assert isinstance(processed, Dataset)
