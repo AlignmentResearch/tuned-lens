@@ -241,9 +241,9 @@ class PredictionTrajectory:
             for layer_ix in range(0, self.log_probs.shape[0] - 1)
         ], dtype=np.float32)
 
-    def largest_delta_in_prob_labels(
+    def largest_delta_labels(
         self,
-        other: "PredictionTrajectory",
+        deltas,
         formatter: Optional[TokenFormatter] = None,
         min_prob_delta: np.float_ = np.finfo(np.float32).eps,
         topk: int = 10,
@@ -274,8 +274,6 @@ class PredictionTrajectory:
             lambda token, percent: f"{formatter.format(token)} Δ{percent:.2f}%"
         )
 
-        deltas = other.probs - self.probs
-
         topk_tokens, topk_deltas = self._get_topk_tokens_and_values(
             k=topk, sort_by=np.abs(deltas), values=deltas
         )
@@ -295,6 +293,21 @@ class PredictionTrajectory:
             hover_over_entries=entry_format_fn(topk_tokens, 100 * topk_deltas),
         )
 
+    def largest_delta_in_prob_labels(
+        self,
+        other: "PredictionTrajectory",
+        *args,
+    ) -> TrajectoryLabels:
+        deltas = other.probs - self.probs
+        return self.largest_delta_labels(deltas, *args)
+            
+    def largest_delta_in_layer_prob_labels(
+        self,
+        *args,
+    ) -> TrajectoryLabels:
+        deltas = self.get_first_order_diff()
+        return self.largest_delta_labels(deltas, *args)
+    
     def cross_entropy(self, **kwargs) -> TrajectoryStatistic:
         """The cross entropy of the predictions to the targets.
 
