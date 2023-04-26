@@ -13,7 +13,7 @@ def text_dataset_path() -> Path:
 
 @pytest.fixture(scope="module")
 def text_dataset(text_dataset_path: Path) -> Dataset:
-    dataset = Dataset.from_json(text_dataset_path)
+    dataset = Dataset.from_json(str(text_dataset_path))
     assert isinstance(dataset, Dataset)
     return dataset
 

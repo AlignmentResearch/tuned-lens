@@ -4,6 +4,9 @@ from itertools import islice
 from typing import cast, Any, Callable, Iterable, Sequence, Type, TypeVar, Union
 import torch as th
 import torch.distributed as dist
+import hashlib
+import numpy as np
+from numpy.typing import NDArray
 
 
 T = TypeVar("T")
@@ -232,3 +235,13 @@ def revcumsum(x: Sequence[th.Tensor]) -> list[th.Tensor]:
 def send_to_device(tree: TreeType, device: th.device) -> TreeType:
     """Recursively send all tensors in a pytree to a device."""
     return pytree_map(lambda t: t.to(device), tree)
+
+
+def tensor_hash(tensor: NDArray) -> str:
+    """Fast hash of a matrix that is robust to dtype and small perturbations.
+
+    Note this relies on the ordering of the elements in the matrix, so it is
+    if the matrix is in any way sorted this will not work well. In addition,
+    this hash is intended for large tensors 64 + elements.
+    """
+    return hashlib.sha256(str.encode(np.array_str(tensor, precision=1))).hexdigest()

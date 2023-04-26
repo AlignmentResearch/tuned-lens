@@ -6,79 +6,46 @@ from transformers import PreTrainedModel
 from typing import cast, Callable, Literal, Optional
 from tuned_lens.model_surgery import get_final_norm, get_transformer_layers
 from tuned_lens.stats import kl_divergence
-from tuned_lens.utils import maybe_unpack
+from tuned_lens.utils import maybe_unpack, tensor_hash
 import torch as th
 
 
 @dataclass
 class InversionOutput:
-    """Output of `Decoder.invert`."""
+    """Output of `Unemebd.invert`."""
 
     preimage: th.Tensor
     grad_norm: th.Tensor
     kl: th.Tensor
     loss: th.Tensor
     nfev: int
-
     hessian: Optional[th.Tensor]
 
 
-class Decoder(th.nn.Module):
-    """Module that maps transformer hidden states to logits (and vice versa).
+class Unembed(th.nn.Module):
+    """Module that maps transformer hidden states to logits (and vice versa)."""
 
-    This class can be instantiated in two ways: (1) From a HuggingFace model, in which
-    case it will extract the unembedding matrix and layer norm from the model; (2) From
-    scratch, in which case it will initialize the unembedding matrix and layer norm
-    with the provided `d_model` and `vocab_size` args. The second option mainly exists
-    for compatibility with PyTorch state dicts.
-    """
+    transformer_layers: th.nn.ModuleList
+    layer_norm: th.nn.LayerNorm
+    unembedding: th.nn.Linear
+
+    _U_pinv: th.Tensor
 
     def __init__(
         self,
-        model: Optional[PreTrainedModel] = None,
-        num_transformer_layers: int = 0,
-        *,
-        # Automatically set when model is provided
-        d_model: Optional[int] = None,
-        vocab_size: Optional[int] = None,
-        # Overridden by model if provided
-        norm_eps: float = 1e-5,
+        model: PreTrainedModel,
+        extra_layers: int = 0,
     ):
-        """Initialize the decoder.
+        """Initialize unmebed.
 
         Args:
             model: A HuggingFace model from which to extract the unembedding matrix.
-            num_transformer_layers: To leave at the end of the transformer.
-
-        Automatically set if the model is provided.
-
-        KWArgs:
-            d_model: The dimensionality of the hidden states.
-            vocab_size: The size of the vocabulary.
-            norm_eps: The epsilon value for the layer norm.
+            extra_layers: To leave at the end of the transformer.
         """
         super().__init__()
-
-        self.num_transformer_layers = num_transformer_layers
         self.transformer_layers = th.nn.ModuleList()
-
         # Initializing from scratch without a model
-        if not model:
-            assert d_model and vocab_size
-            self.layer_norm = th.nn.LayerNorm(
-                d_model, elementwise_affine=False, eps=norm_eps
-            )
-            self.unembedding = th.nn.Linear(d_model, vocab_size)
 
-        # Starting from a HuggingFace model
-        else:
-            self.load_from_model(model)
-
-        # In general we don't want to finetune the decoder
-        self.requires_grad_(False)
-
-    def load_from_model(self, model: PreTrainedModel):
-        """Load the unembedding matrix and layer norm from a HuggingFace model."""
         raw_ln = get_final_norm(model)
         assert raw_ln is not None
 
@@ -114,13 +81,22 @@ class Decoder(th.nn.Module):
 
         self.unembedding.weight.data = U.to(raw_unembed.weight.dtype)
 
-        self.register_buffer("U_pinv", U.pinverse())
+        # We precompute the pseudo-inverse of the unembedding matrix
+        self.register_buffer("_U_pinv", U.pinverse())
 
-        if self.num_transformer_layers:
+        if extra_layers > 0:
             _, layers = get_transformer_layers(model)
             self.transformer_layers.extend(
-                layers[-self.num_transformer_layers :]  # type: ignore[arg-type]
+                layers[-self.config.extra_layers, :]  # type: ignore[arg-type]
             )
+
+        # In general we don't want to finetune the unembed operation.
+        self.requires_grad_(False)
+
+    def unembedding_hash(self) -> str:
+        """Hash the unmbedding matrix to identify the model."""
+        parameter = self.unembedding.weight.data.detach().cpu().numpy()
+        return tensor_hash(parameter)
 
     def forward(self, h: th.Tensor, transform: Callable = lambda x: x) -> th.Tensor:
         """Convert hidden states into logits."""
@@ -173,15 +149,15 @@ class Decoder(th.nn.Module):
         transform: Callable = lambda x: x,
         weight: Optional[th.Tensor] = None,
     ) -> InversionOutput:
-        """Project logits onto the image of the decoder, returning the preimage.
+        """Project logits onto the image of the unemebed operation.
 
         When the hidden state dimension is smaller than the vocabulary size, the
-        decoder cannot perfectly represent arbitrary logits, since its image is
-        restricted to a subspace; this phenomenon is known as the softmax bottleneck
+        unembed operation cannot perfectly represent arbitrary logits, since its image
+        is restricted to a subspace; this phenomenon is known as the softmax bottleneck
         (cf. https://arxiv.org/abs/1711.03953). Because of this, the inverse can only
         be approximate in general. Here, we use gradient-based optimization to find a
         hidden state that minimizes the KL divergence from the target distribution p to
-        the decoder output q: h* = argmin KL(p || q).
+        unembeded logits q(h): h* = argmin_h KL(p || q(h)).
 
         Args:
             logits: Tensor of shape `[..., vocab_size]` containing logits to invert.

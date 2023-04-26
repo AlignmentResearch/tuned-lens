@@ -66,9 +66,9 @@ class Eval:
     def load_lens(self, model) -> Lens:
         """Load the tuned lens model."""
         if self.lens is None:
-            return LogitLens(model)
+            return LogitLens.from_model(model)
         else:
-            return TunedLens.load(self.lens)
+            return TunedLens.from_model_and_pretrained(model, self.lens)
 
     @th.autocast("cuda", enabled=th.cuda.is_available())
     @th.no_grad()

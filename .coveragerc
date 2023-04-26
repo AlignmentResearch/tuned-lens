@@ -1,9 +1,9 @@
 [run]
 source = tuned_lens,tests
-omit = */__init__.py
 
 [report]
 include = tuned_lens/*, tests/*
+omit = */__init__.py
 # Regexes for lines to exclude from consideration
 exclude_lines =
     # Have to re-enable the standard pragma
@@ -22,5 +22,5 @@ exclude_lines =
     if __name__ == .__main__.:
 
     # Ignore place holder lines that appear in abstract methods
-    ...
+    \.\.\.
     pass

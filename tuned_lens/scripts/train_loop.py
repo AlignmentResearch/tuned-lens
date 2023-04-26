@@ -83,9 +83,9 @@ class Train:
     def get_lens(self, model: PreTrainedModel) -> TunedLens:
         """Load or create a TunedLens model."""
         if self.lens_name_or_path is None:
-            lens = TunedLens(model)
+            lens = TunedLens.from_model(model)
         else:
-            lens = TunedLens.load(self.lens_name_or_path)
+            lens = TunedLens.from_model_and_pretrained(model, self.lens_name_or_path)
 
         lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
         print(f"Tuned lens memory usage: {lens_size / 2 ** 20:.2f} MB per GPU")
