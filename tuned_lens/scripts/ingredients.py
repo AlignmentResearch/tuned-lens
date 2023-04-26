@@ -10,7 +10,7 @@ from torch.distributed.fsdp import (
     MixedPrecision,
 )
 import enum
-from typing import Optional
+from typing import Optional, Union
 from dataclasses import dataclass
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
@@ -263,7 +263,7 @@ class Distributed:
 
     def shard_model(
         self, model: PreTrainedModel
-    ) -> FullyShardedDataParallel | PreTrainedModel:
+    ) -> Union[FullyShardedDataParallel, PreTrainedModel]:
         """Shard the model using Fully Sharded Data Parallelism."""
         th.cuda.set_device(self.rank)
 
@@ -292,7 +292,7 @@ class Distributed:
             model.to(self.rank)
             return model
 
-    def distribute_lens(self, lens: Lens) -> DDP | Lens:
+    def distribute_lens(self, lens: Lens) -> Union[DDP, Lens]:
         """Distribute the lens using DistributedDataParallel and send lens to device."""
         if self.world_size > 1:
             return DDP(lens, device_ids=[self.rank], find_unused_parameters=True)
