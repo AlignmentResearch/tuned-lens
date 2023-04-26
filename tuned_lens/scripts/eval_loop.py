@@ -9,7 +9,7 @@ from transformers import PreTrainedModel
 from typing import Optional
 from tuned_lens.residual_stream import record_residual_stream
 from tuned_lens.stats import ResidualStats, LogitStats
-from tuned_lens.nn import Decoder, TunedLens
+from tuned_lens.nn import Lens, LogitLens, TunedLens
 from tuned_lens.utils import (
     maybe_all_cat,
     maybe_all_reduce,
@@ -29,8 +29,8 @@ def eval_loop(
     args: Namespace,
     model: PreTrainedModel,
     data: Dataset,
-    lens: Optional[TunedLens],
     nats_to_bpb_ratio: float,
+    lens: Optional[Lens] = None,
 ):
     """Trains a TunedLens model against a transformer on a dataset.
 
@@ -38,16 +38,19 @@ def eval_loop(
         args: The command-line arguments see __main__.py train subcommand.
         model: The transformer model to train.
         data: The dataset to train on.
-        lens: The TunedLens model to train.
         nats_to_bpb_ratio: The ratio of nats to bits per byte for the dataset.
+        lens: The TunedLens model to train.
     """
     local_rank = dist.get_rank() if dist.is_initialized() else 0
     dl = DataLoader(
         data.shuffle(seed=args.seed),  # type: ignore[arg-type],
         batch_size=args.per_gpu_batch_size,
     )
-    if lens:
-        lens.eval()
+
+    if lens is None:
+        lens = LogitLens.from_model(model)
+
+    lens.eval()
 
     # Running mean & covariance of the hidden states & residuals
     delta_stats = ResidualStats(cov=False)
@@ -63,7 +66,6 @@ def eval_loop(
     output_dir = root_dir / f"rank_{local_rank}"
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    _to_logits = lens.to_logits if lens else Decoder(model)
     L = model.config.num_hidden_layers
     batches = []
     transfer_batches = []
@@ -96,7 +98,7 @@ def eval_loop(
                 h.retain_grad()
 
             with th.set_grad_enabled(args.grad_alignment):
-                baseline_lps = _to_logits(h).log_softmax(dim=-1)
+                baseline_lps = lens.unembed(h).log_softmax(dim=-1)
 
                 # Note that we don't reduce the loss here, since we want to look at
                 # the full distribution of losses across tokens and samples
@@ -129,7 +131,7 @@ def eval_loop(
             )
 
         # Compute tuned lens eval and statistics if applicable
-        if lens:
+        if isinstance(lens, TunedLens):
             for j, (name, h) in zip(range(L), stream.items()):
                 lens_lps = lens(h, idx=j).log_softmax(dim=-1)
                 lens_probs = lens_lps.exp()

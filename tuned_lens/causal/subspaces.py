@@ -1,11 +1,11 @@
 """Provides tools for extracting causal bases from models and ablating subspaces"""
 from ..model_surgery import get_transformer_layers
-from ..nn import Decoder, TunedLens
+from ..nn import Lens
 from ..utils import maybe_all_reduce
 from .utils import derange
 from contextlib import contextmanager
 from tqdm.auto import trange
-from typing import Iterable, Literal, NamedTuple, Optional, Union, Sequence
+from typing import Iterable, Literal, NamedTuple, Optional, Sequence
 import torch as th
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -61,25 +61,23 @@ class CausalBasis(NamedTuple):
 
 
 def extract_causal_bases(
-    model: Union[Decoder, TunedLens],
+    lens: Lens,
     hiddens: Sequence[th.Tensor],
     k: int,
     *,
     labels: Optional[th.Tensor] = None,
     max_iter: int = 100,
     mode: Literal["mean", "resample", "zero"] = "mean",
-    no_translator: bool = False,
 ) -> Iterable[CausalBasis]:
     """Extract causal bases for probes at each layer of a model.
 
     Args:
-        model: A model to compute causal bases for. This can be a `Decoder` or a
-            `TunedLens` instance.
+        lens: A lens to compute causal bases for.
         hiddens: A sequence of hidden states from the model.
         k: The number of basis vectors to compute for each layer.
         max_iter: The maximum number of iterations to run L-BFGS for each vector.
     """
-    model.requires_grad_(False)
+    lens.requires_grad_(False)
 
     device = hiddens[0].device
     dtype = hiddens[0].dtype
@@ -99,21 +97,11 @@ def extract_causal_bases(
 
     # Outer loop iterates over layers
     for i in range(num_layers):
-        U = model.unembedding.weight.data.T
+        U = lens.unembed.unembedding.weight.data.T
 
-        if isinstance(model, Decoder):
-            log_p = model(hiddens[i]).log_softmax(-1)
-
-        elif isinstance(model, TunedLens):
-            logits = (
-                model(hiddens[i], i)
-                if not no_translator
-                else model.to_logits(hiddens[i])
-            )
-            log_p = logits.log_softmax(-1)
-            U = (eye + model[i].weight.data.T) @ U
-        else:
-            raise NotImplementedError()
+        logits = lens(hiddens[i], i)
+        log_p = logits.log_softmax(-1)
+        U = lens.transform_hidden(U, i)  # TODO not sure if we need transposes here
 
         # Compute the baseline loss up front so that we can subtract it
         # from the post-ablation losses to get the loss increment
@@ -170,12 +158,7 @@ def extract_causal_bases(
                 v_ = project(v)
                 h_ = remove_subspace(hiddens[i], v_, mode=mode, orthonormal=True)
 
-                if isinstance(model, Decoder):
-                    logits = model(h_)
-                elif isinstance(model, TunedLens):
-                    logits = model(h_, i)
-                else:
-                    raise TypeError(f"Unknown lens type {type(model)}")
+                logits = lens(h_, i)
 
                 if labels is not None:
                     loss = -F.cross_entropy(

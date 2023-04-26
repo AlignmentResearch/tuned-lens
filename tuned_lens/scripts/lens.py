@@ -16,7 +16,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
-from tuned_lens import TunedLens
+from tuned_lens.nn import TunedLens
 from tuned_lens.data import (
     chunk_and_tokenize,
     silence_datasets_messages,
@@ -76,15 +76,13 @@ def main(args):
 
     # Can be set either in eval or in training; in eval it's required
     if getattr(args, "lens", None):
-        lens = TunedLens.load(args.lens, map_location="cpu")
+        lens = TunedLens.from_model_and_pretrained(
+            model=model, lens_resource_id=args.lens
+        )
     elif args.command in ("downstream", "eval"):
         lens = None
     else:
-        lens = TunedLens(
-            model,
-            extra_layers=args.extra_layers,
-            reuse_unembedding=not args.separate_unembeddings,
-        ).float()
+        lens = TunedLens.from_model(model, model_revision=args.revision).float()
 
     if lens:
         lens = lens.to(device=th.device("cuda", local_rank))

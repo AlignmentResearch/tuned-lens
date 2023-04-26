@@ -1,71 +1,86 @@
 """Provides lenses for decoding hidden states into logits."""
 from copy import deepcopy
+from dataclasses import dataclass, asdict
 import inspect
-from logging import warn
+from logging import warning
 from pathlib import Path
 import json
 import abc
 
-from ._model_specific import instantiate_layer, maybe_wrap
-from tuned_lens import model_surgery
-from tuned_lens import load_artifacts
+from tuned_lens.load_artifacts import load_lens_artifacts
+from tuned_lens.nn.unembed import Unembed
 from transformers import PreTrainedModel
-from typing import Optional, Generator, Union
+from typing import Dict, Optional, Generator, Union
 import torch as th
 
 
 class Lens(abc.ABC, th.nn.Module):
     """Abstract base class for all Lens."""
 
+    unembed: Unembed
+
+    def __init__(self, unembed: Unembed):
+        """Create a Lens.
+
+        Args:
+            unembed: The unembed operation to use.
+        """
+        super().__init__()
+
+        self.unembed = unembed
+
+    @abc.abstractmethod
+    def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
+        """Convert a hidden state to the final hidden just before the unembeding.
+
+        Args:
+            h: The hidden state to convert.
+            idx: The layer of the transformer these hidden states come from.
+        """
+        ...
+
     @abc.abstractmethod
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Decode hidden states into logits."""
+        ...
 
 
 class LogitLens(Lens):
-    """Decodes the residual stream into logits using the unembeding matrix."""
+    """Unembeds the residual stream into logits."""
 
-    layer_norm: th.nn.LayerNorm
-    unembedding: th.nn.Linear
-    extra_layers: th.nn.Sequential
+    unembed: Unembed
 
     def __init__(
         self,
-        model: Optional[PreTrainedModel] = None,
-        *,
-        extra_layers: int = 0,
+        unembed: Unembed,
     ):
         """Create a Logit Lens.
 
         Args:
-            model: A pertained model from the transformers library you wish to inspect.
+            unembed: The unembed operation to use.
+        """
+        super().__init__(unembed)
+
+    @classmethod
+    def from_model(
+        cls,
+        model: PreTrainedModel,
+        extra_layers: int = 0,
+    ) -> "LogitLens":
+        """Create a LogitLens from a pretrained model.
+
+        Args:
+            model: A pretrained model from the transformers library you wish to inspect.
             extra_layers: The number of extra layers to apply to the residual stream
                 before decoding into logits.
         """
-        super().__init__()
+        unembed = Unembed(model, extra_layers)
+        return cls(unembed)
 
-        self.extra_layers = th.nn.Sequential()
-
-        d_model = model.config.hidden_size
-        vocab_size = model.config.vocab_size
-        assert isinstance(d_model, int) and isinstance(vocab_size, int)
-
-        # Currently we convert the decoder to full precision
-        self.unembedding = deepcopy(model.get_output_embeddings()).float()
-        if ln := model_surgery.get_final_norm(model):
-            self.layer_norm = deepcopy(ln).float()
-        else:
-            self.layer_norm = th.nn.Identity()
-
-        if extra_layers:
-            _, layers = model_surgery.get_transformer_layers(model)
-            self.extra_layers.extend(
-                [maybe_wrap(layer) for layer in layers[-extra_layers:]]
-            )
-
-        # Try to prevent finetuning the decoder
-        self.layer_norm.requires_grad_(False)
-        self.unembedding.requires_grad_(False)
+    def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
+        """For the LogitLens, this is the identity function."""
+        del idx
+        return h
 
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Decode a hidden state into logits.
@@ -74,205 +89,193 @@ class LogitLens(Lens):
             h: The hidden state to decode.
             idx: the layer of the transformer these hidden states come from.
         """
-        h = self.extra_layers(h)
-        while isinstance(h, tuple):
-            h, *_ = h
-        return self.unembedding(self.layer_norm(h))
+        del idx
+        return self.unembed.forward(h)
+
+
+@dataclass
+class TunedLensConfig:
+    """A configuration for a TunedLens."""
+
+    # The name of the base model this lens was tuned for.
+    base_model_name_or_path: str
+    # The hidden size of the base model.
+    d_model: int
+    # The number of layers in the base model.
+    num_hidden_layers: int
+    # whether to use a bias in the linear translators.
+    bias: bool = True
+    # The revision of the base model this lens was tuned for.
+    base_model_revision: Optional[str] = None
+    # The hash of the base's unembed model this lens was tuned for.
+    unemebd_hash: Optional[str] = None
+    # The name of the lens type.
+    lens_type: str = "linear_tuned_lens"
+
+    def to_dict(self):
+        """Convert this config to a dictionary."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, config_dict: Dict):
+        """Create a config from a dictionary."""
+        config_dict = deepcopy(config_dict)
+        # Drop unrecognized config keys
+        unrecognized = set(config_dict) - set(inspect.getfullargspec(cls).args)
+        for key in unrecognized:
+            warning(f"Ignoring config key '{key}'")
+            del config_dict[key]
+
+        return cls(**config_dict)
 
 
 class TunedLens(Lens):
     """A tuned lens for decoding hidden states into logits."""
 
-    layer_norm: th.nn.LayerNorm
-    unembedding: th.nn.Linear
-    extra_layers: th.nn.Sequential
+    config: TunedLensConfig
+    unembed: Unembed
     layer_translators: th.nn.ModuleList
 
     def __init__(
         self,
-        model: Optional[PreTrainedModel] = None,
-        *,
-        bias: bool = True,
-        extra_layers: int = 0,
-        include_input: bool = True,
-        reuse_unembedding: bool = True,
-        # Used when saving and loading the lens
-        model_config: Optional[dict] = None,
-        d_model: Optional[int] = None,
-        num_layers: Optional[int] = None,
-        vocab_size: Optional[int] = None,
+        unembed: Unembed,
+        config: TunedLensConfig,
     ):
         """Create a TunedLens.
 
         Args:
-            model : A pertained model from the transformers library you wish to inspect.
-            bias : Whether to include a bias term in the translator layers.
-            extra_layers : The number of extra layers to apply to the hidden states
-                before decoding into logits.
-
-            include_input : Whether to include a lens that decodes the word embeddings.
-            reuse_unembedding : Weather to reuse the unembedding matrix from the model.
-            model_config : The config of the model. Used for saving and loading.
-            d_model : The models hidden size. Used for saving and loading.
-            num_layers : The number of layers in the model. Used for saving and loading.
-            vocab_size : The size of the vocabulary. Used for saving and loading.
-
-        Raises:
-            ValueError: if neither a model or d_model, num_layers, and vocab_size,
-                are provided.
+            unembed: The unembed operation to use.
+            config: The configuration for this lens.
         """
-        super().__init__()
+        super().__init__(unembed)
 
-        self.extra_layers = th.nn.Sequential()
+        self.config = config
+        unembed_hash = unembed.unembedding_hash()
+        config.unemebd_hash = unembed_hash
 
-        if (
-            model
-            is None
-            == (d_model is None or num_layers is None or vocab_size is None)
-        ):
-            raise ValueError(
-                "Must provide either a model or d_model, num_layers, and vocab_size"
-            )
+        translator = th.nn.Linear(config.d_model, config.d_model, bias=config.bias)
+        translator.weight.data.zero_()
+        translator.bias.data.zero_()
 
-        # Initializing from scratch without a model
-        if not model:
-            assert d_model and num_layers and vocab_size
-            self.layer_norm = th.nn.LayerNorm(d_model)
-            self.unembedding = th.nn.Linear(d_model, vocab_size, bias=False)
-
-        # Use HuggingFace methods to get decoder layers
-        else:
-            assert not (d_model or num_layers or vocab_size)
-            d_model = model.config.hidden_size
-            num_layers = model.config.num_hidden_layers
-            vocab_size = model.config.vocab_size
-            assert isinstance(d_model, int) and isinstance(vocab_size, int)
-
-            model_config = model.config.to_dict()  # type: ignore[F841]
-
-            # Currently we convert the decoder to full precision
-            self.unembedding = deepcopy(model.get_output_embeddings()).float()
-            if ln := model_surgery.get_final_norm(model):
-                self.layer_norm = deepcopy(ln).float()
-            else:
-                self.layer_norm = th.nn.Identity()
-
-            if extra_layers:
-                _, layers = model_surgery.get_transformer_layers(model)
-                self.extra_layers.extend(
-                    [maybe_wrap(layer) for layer in layers[-extra_layers:]]
-                )
-
-        # Save config for later
-        config_keys = set(inspect.getfullargspec(TunedLens).kwonlyargs)
-        self.config = {k: v for k, v in locals().items() if k in config_keys}
-        del model_config
-
-        # Try to prevent finetuning the decoder
-        assert d_model and num_layers
-        self.layer_norm.requires_grad_(False)
-        self.unembedding.requires_grad_(False)
-
-        out_features = d_model if reuse_unembedding else vocab_size
-        translator = th.nn.Linear(d_model, out_features, bias=bias)
-        if not reuse_unembedding:
-            translator.weight.data = self.unembedding.weight.data.clone()
-            translator.bias.data.zero_()
-        else:
-            translator.weight.data.zero_()
-            translator.bias.data.zero_()
-
-        self.add_module("input_translator", translator if include_input else None)
-        # Don't include the final layer
-        num_layers -= 1
-
+        # Don't include the final layer since it does not need a translator
         self.layer_translators = th.nn.ModuleList(
-            [deepcopy(translator) for _ in range(num_layers)]
+            [deepcopy(translator) for _ in range(self.config.num_hidden_layers)]
         )
 
     def __getitem__(self, item: int) -> th.nn.Module:
         """Get the probe module at the given index."""
-        if isinstance(self.input_translator, th.nn.Module):
-            if item == 0:
-                return self.input_translator
-            else:
-                item -= 1
-
         return self.layer_translators[item]
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
         """Get iterator over the translators within the lens."""
-        if isinstance(self.input_translator, th.nn.Module):
-            yield self.input_translator
-
         yield from self.layer_translators
 
     @classmethod
-    def load(cls, resource_id: str, revision: str = "v0.0.5", **kwargs) -> "TunedLens":
-        """Load a tuned lens from a or hugging face hub.
+    def from_model(
+        cls,
+        model: PreTrainedModel,
+        model_revision: Optional[str] = None,
+        bias: bool = True,
+    ) -> "TunedLens":
+        """Create a lens from a pretrained model.
 
         Args:
-            resource_id : The path to the directory containing the config and checkpoint
-                or the name of the model on the hugging face hub.
-            revision : The git revision of the lens to load from the hub.
-            **kwargs : Additional arguments to pass to torch.load.
+            model: The model to create the lens from.
+            model_revision: The git revision of the model to used.
+            bias: Whether to use a bias in the linear translators.
 
         Returns:
             A TunedLens instance.
         """
-        config_path, ckpt_path = load_artifacts.load_lens_artifacts(
-            resource_id, revision=revision
+        unembed = Unembed(model)
+        config = TunedLensConfig(
+            base_model_name_or_path=model.config.name_or_path,
+            base_model_revision=model_revision,
+            d_model=model.config.hidden_size,
+            num_hidden_layers=model.config.num_hidden_layers,
+            bias=bias,
         )
-        # Load config
+
+        return cls(unembed, config)
+
+    @classmethod
+    def from_model_and_pretrained(
+        cls,
+        model: PreTrainedModel,
+        lens_resource_id: Optional[str] = None,
+        **kwargs,
+    ) -> "TunedLens":
+        """Load a tuned lens from a folder or hugging face hub.
+
+        Args:
+            model: The model to create the lens from.
+            lens_resource_id: The resource id of the lens to load. Defaults to the
+                model's name_or_path.
+            **kwargs: Additional arguments to pass to
+                :func:`tuned_lens.load_artifacts.load_lens_artifacts` and
+                `th.load <https://pytorch.org/docs/stable/generated/torch.load.html>`_.
+
+        Returns:
+            A TunedLens instance whose unembeding is derived from the given model
+            and whose layer translators are loaded from the given resource id.
+        """
+        if lens_resource_id is None:
+            lens_resource_id = model.config.name_or_path
+
+        return cls.from_unembed_and_pretrained(
+            Unembed(model), lens_resource_id, **kwargs
+        )
+
+    @classmethod
+    def from_unembed_and_pretrained(
+        cls,
+        unembed: Unembed,
+        lens_resource_id: str,
+        **kwargs,
+    ) -> "TunedLens":
+        """Load a tuned lens from a folder or hugging face hub.
+
+        Args:
+            unembed: The unembed operation to use for the lens.
+            lens_resource_id: The resource id of the lens to load.
+            **kwargs: Additional arguments to pass to
+                :func:`tuned_lens.load_artifacts.load_lens_artifacts` and
+                `th.load <https://pytorch.org/docs/stable/generated/torch.load.html>`_.
+
+        Returns:
+            A TunedLens instance.
+        """
+        artifact_kwargs = set(inspect.getfullargspec(load_lens_artifacts).kwonlyargs)
+        load_kwargs = set(inspect.getfullargspec(th.load).kwonlyargs)
+        if unrecognized := [k not in (artifact_kwargs | load_kwargs) for k in kwargs]:
+            raise ValueError(f"Unrecognized keyword argument(s) {unrecognized}.")
+
+        # Create the config
+        config_path, ckpt_path = load_lens_artifacts(
+            lens_resource_id,
+            **{k: v for k, v in kwargs.items() if k in artifact_kwargs},
+        )
+
         with open(config_path, "r") as f:
-            config = json.load(f)
+            config = TunedLensConfig.from_dict(json.load(f))
 
-        # Load parameters
-        state = th.load(ckpt_path, **kwargs)
-
-        # Backwards compatibility we really need to stop renaming things
-        keys = list(state.keys())
-        for key in keys:
-            for old_key in ["probe", "adapter"]:
-                if old_key in key:
-                    warn(
-                        f"Loading a checkpoint with a '{old_key}' key. "
-                        "This is deprecated and may be removed in a future version. "
-                    )
-                    new_key = key.replace(old_key, "translator")
-                    state[new_key] = state.pop(key)
-
-        # Drop unrecognized config keys
-        unrecognized = set(config) - set(inspect.getfullargspec(cls).kwonlyargs)
-        for key in unrecognized:
-            warn(f"Ignoring config key '{key}'")
-            del config[key]
-
-        lens = cls(**config)
-
-        if num_extras := config.get("extra_layers"):
-            # This is sort of a hack but AutoConfig doesn't appear to have a from_dict
-            # for some reason.
-            from transformers.models.auto import CONFIG_MAPPING
-
-            model_conf_dict = config.get("model_config")
-            del model_conf_dict["torch_dtype"]
-            assert model_conf_dict, "Need a 'model_config' entry to load extra layers"
-
-            model_type = model_conf_dict["model_type"]
-            config_cls = CONFIG_MAPPING[model_type]
-            model_config = config_cls.from_dict(model_conf_dict)
-
-            lens.extra_layers = th.nn.Sequential(
-                *[
-                    instantiate_layer(
-                        model_config, model_config.num_hidden_layers - i - 1, model_type
-                    )
-                    for i in range(num_extras)
-                ]
+        # validate the unembed is the same as the one used to train the lens
+        if config.unemebd_hash and unembed.unembedding_hash() != config.unemebd_hash:
+            warning(
+                "The unembeding matrix hash does not match the lens' hash."
+                "This lens may have been trained with a different unembeding."
             )
 
-        lens.load_state_dict(state)
+        # Create the lens
+        lens = cls(unembed, config)
+
+        # Load parameters
+        state = th.load(
+            ckpt_path, **{k: v for k, v in kwargs.items() if k in load_kwargs}
+        )
+
+        lens.layer_translators.load_state_dict(state)
+
         return lens
 
     def save(
@@ -290,10 +293,11 @@ class TunedLens(Lens):
         """
         path = Path(path)
         path.mkdir(exist_ok=True, parents=True)
-        th.save(self.state_dict(), path / ckpt)
+        state_dict = self.layer_translators.state_dict()
 
+        th.save(state_dict, path / ckpt)
         with open(path / config, "w") as f:
-            json.dump(self.config, f)
+            json.dump(self.config.to_dict(), f)
 
     def normalize_(self):
         """Canonicalize the transforms by centering their weights and biases."""
@@ -306,40 +310,16 @@ class TunedLens(Lens):
 
     def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Transform hidden state from layer `idx`."""
-        if not self.config["reuse_unembedding"]:
-            raise RuntimeError("TunedLens.transform_hidden requires reuse_unembedding")
-
         # Note that we add the translator output residually, in contrast to the formula
         # in the paper. By parametrizing it this way we ensure that weight decay
         # regularizes the transform toward the identity, not the zero transformation.
         return h + self[idx](h)
 
-    def to_logits(self, h: th.Tensor) -> th.Tensor:
-        """Decode a hidden state into logits."""
-        h = self.extra_layers(h)
-        while isinstance(h, tuple):
-            h, *_ = h
-
-        return self.unembedding(self.layer_norm(h))
-
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Transform and then decode the hidden states into logits."""
-        # Sanity check to make sure we don't finetune the decoder
-        # if any(p.requires_grad for p in self.parameters(recurse=False)):
-        #     raise RuntimeError("Make sure to freeze the decoder")
-
-        # We're learning a separate unembedding for each layer
-        if not self.config["reuse_unembedding"]:
-            h_ = self.layer_norm(h)
-            return self[idx](h_)
-
         h = self.transform_hidden(h, idx)
-        return self.to_logits(h)
+        return self.unembed.forward(h)
 
     def __len__(self) -> int:
         """Return the number of layer translators in the lens."""
-        N = len(self.layer_translators)
-        if self.input_translator:
-            N += 1
-
-        return N
+        return len(self.layer_translators)

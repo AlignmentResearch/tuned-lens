@@ -120,9 +120,6 @@ def run():
         "--constant", action="store_true", help="Train only the bias term."
     )
     train_parser.add_argument(
-        "--extra-layers", type=int, default=0, help="Number of extra decoder layers."
-    )
-    train_parser.add_argument(
         "--lasso", type=float, default=0.0, help="LASSO (L1) regularization strength."
     )
     train_parser.add_argument(

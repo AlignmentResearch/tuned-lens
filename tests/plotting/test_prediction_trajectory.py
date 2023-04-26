@@ -55,7 +55,7 @@ def model_and_tokenizer():
 @pytest.fixture
 def lens(model_and_tokenizer):
     model, _ = model_and_tokenizer
-    return LogitLens(model)
+    return LogitLens.from_model(model)
 
 
 def test_prediction_trajectory_from_lens_and_model_smoke(model_and_tokenizer, lens):

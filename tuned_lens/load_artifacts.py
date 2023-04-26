@@ -1,5 +1,5 @@
 """Load lens artifacts from the hub or locally storage."""
-from typing import Optional, Tuple
+from typing import Optional
 from pathlib import Path
 import os
 
@@ -14,7 +14,8 @@ def load_lens_artifacts(
     config_file: str = "config.json",
     ckpt_file: str = "params.pt",
     subfolder: str = "lens",
-) -> Tuple[Path, Path]:
+    cache_dir: Optional[str] = None,
+) -> tuple[Path, Path]:
     """First checks for lens resource locally then tries to download it from the hub.
 
     Args:
@@ -29,6 +30,7 @@ def load_lens_artifacts(
         ckpt_file: The name of the checkpoint file in the folder contain the lens.
         revision: The revision of the lens to download.
         subfolder: The subfolder of the repository to download the lens from.
+        cache_dir: The directory to cache the lens in.
 
     Returns:
         * The path to the config.json file
@@ -61,6 +63,7 @@ def load_lens_artifacts(
         repo_type=repo_type,
         revision=revision,
         subfolder=subfolder,
+        cache_dir=cache_dir,
     )
 
     config_path = hf_hub_download(
@@ -69,6 +72,7 @@ def load_lens_artifacts(
         repo_type=repo_type,
         revision=revision,
         subfolder=subfolder,
+        cache_dir=cache_dir,
     )
 
     if config_path is not None and params_path is not None:
