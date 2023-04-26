@@ -49,7 +49,7 @@ notebooks = [
 ]
 
 [project.scripts]
-tuned-lens = "tuned_lens.__main__:run"
+tuned-lens = "tuned_lens.__main__:main"
 
 [tool.setuptools.packages.find]
 namespaces = false
