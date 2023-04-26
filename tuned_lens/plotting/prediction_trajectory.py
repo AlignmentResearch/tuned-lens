@@ -333,7 +333,7 @@ class PredictionTrajectory:
             stats=-self.log_probs[:, np.arange(self.num_tokens), self.targets],
         )
 
-    def entropy(self, **kwargs) -> TrajectoryStatistic:
+    def entropy(self, use_layer_diffs=False, **kwargs) -> TrajectoryStatistic:
         """The entropy of the predictions.
 
         Args:
@@ -342,11 +342,24 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the entropy of the predictions.
         """
+        if self.tokenizer:
+            if use_layer_diffs:
+                labels = self.largest_delta_in_layer_prob_labels(**kwargs)
+            else:
+                labels = self.largest_delta_in_prob_labels(**kwargs)
+        else:
+            labels = None
+
+        if use_layer_diffs:
+            stats = None  # unsure what to put here
+        else:
+            stats = -np.sum(np.exp(self.log_probs) * self.log_probs, axis=-1)
+
         return TrajectoryStatistic(
             name="Entropy",
             units="nats",
-            labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
-            stats=-np.sum(np.exp(self.log_probs) * self.log_probs, axis=-1),
+            labels=labels,
+            stats=stats,
         )
 
     def forward_kl(self, **kwargs) -> TrajectoryStatistic:
