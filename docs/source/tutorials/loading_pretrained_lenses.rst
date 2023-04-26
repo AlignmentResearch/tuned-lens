@@ -43,7 +43,7 @@ model used to train it and the folder you saved it to.
     >>> lens = TunedLens.from_model(model)
     >>> # Do some thing
     >>> lens.save(directory_path)
-    >>> lens = TunedLens.from_pretrained(directory_path, model=model)
+    >>> lens = TunedLens.from_model_and_pretrained(model, directory_path)
 
 .. testcleanup::
 
