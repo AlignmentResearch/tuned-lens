@@ -259,7 +259,7 @@ class Distributed:
     @property
     def device(self) -> th.device:
         """The device associated with this process."""
-        return th.device(f"cuda:{self.local_rank}")
+        return th.device("cuda")
 
     def shard_model(
         self, model: PreTrainedModel
@@ -295,7 +295,8 @@ class Distributed:
     def distribute_lens(self, lens: Lens) -> Union[DDP, Lens]:
         """Distribute the lens using DistributedDataParallel and send lens to device."""
         if self.world_size > 1:
-            return DDP(lens, device_ids=[self.rank], find_unused_parameters=True)
+            lens.to(self.device)
+            return DDP(lens, device_ids=[self.local_rank], find_unused_parameters=True)
         else:
             return lens.to(self.device)
 

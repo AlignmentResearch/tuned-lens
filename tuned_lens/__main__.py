@@ -5,6 +5,7 @@ from typing import Optional, Union
 from dataclasses import dataclass
 
 from simple_parsing import ArgumentParser, ConflictResolution
+from torch.distributed.elastic.multiprocessing.errors import record
 
 
 @dataclass
@@ -18,6 +19,7 @@ class Main:
         self.command.execute()
 
 
+@record
 def main(args: Optional[list[str]] = None):
     """Entry point for the CLI."""
     parser = ArgumentParser(conflict_resolution=ConflictResolution.EXPLICIT)

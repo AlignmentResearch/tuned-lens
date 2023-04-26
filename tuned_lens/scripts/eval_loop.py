@@ -76,13 +76,24 @@ class Eval:
         """Trains a TunedLens model against a transformer on a dataset."""
         self.dist.init()
 
-        model, tokenizer = self.model.load()
-        data, nats_to_bpb_ratio = self.data.load(tokenizer)
-        lens = self.load_lens(model)
+        # Load model, tokenizer, data, and lens
+        self.dist.init()
+        model = tokenizer = data = lens = nats_to_bpb = model_name = None
+        if self.dist.primary:
+            # Let the primary processes populate the cache
+            model, tokenizer = self.model.load()
+            data, nats_to_bpb = self.data.load(tokenizer)
+            lens = self.load_lens(model)
 
-        model = self.dist.shard_model(model)
-        data = self.dist.shard_dataset(data)
-        lens = self.dist.distribute_lens(lens)
+        self.dist.barrier()  # Wait for primary to finish filling the cache
+
+        if not self.dist.primary:
+            # Let the non-primary processes load from the cache
+            model, tokenizer = self.model.load(must_use_cache=True)
+            data, nats_to_bpb = self.data.load(tokenizer)
+            lens = self.load_lens(model)
+
+        assert model and tokenizer and data and lens and nats_to_bpb
 
         dl = DataLoader(
             data.shuffle(seed=self.seed),  # type: ignore[arg-type],
@@ -184,14 +195,14 @@ class Eval:
             )
 
         pbar.close()
-        agg = pytree_map(lambda x: nats_to_bpb_ratio * x.mean(), pytree_stack(batches))
+        agg = pytree_map(lambda x: nats_to_bpb * x.mean(), pytree_stack(batches))
         agg = pytree_map(lambda x: maybe_all_reduce(x), agg)
         if self.dist.primary:
             th.save(agg, root_dir / "aggregate_metrics.pt")
 
         if self.transfer:
             agg_transfer = pytree_map(
-                lambda x: nats_to_bpb_ratio * x.mean(0), pytree_stack(transfer_batches)
+                lambda x: nats_to_bpb * x.mean(0), pytree_stack(transfer_batches)
             )
             agg_transfer = pytree_map(lambda x: maybe_all_reduce(x), agg_transfer)
             if self.dist.primary:
