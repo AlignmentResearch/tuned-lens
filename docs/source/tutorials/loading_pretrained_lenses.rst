@@ -18,9 +18,8 @@ a model that was used to train it so first load the model and then the lens.
 >>> import torch
 >>> from tuned_lens import TunedLens
 >>> from transformers import AutoModelForCausalLM
->>> device = torch.device('cpu')
 >>> model = AutoModelForCausalLM.from_pretrained('EleutherAI/pythia-160m-deduped-v0')
->>> tuned_lens = TunedLens.from_pretrained("pythia-160m-deduped-v0", model=model, map_location=device)
+>>> tuned_lens = TunedLens.from_model_and_pretrained(model)
 
 If you want to load from your own code space you can override the default
 by providing the correct environment variables see :ref:`tuned\_lens.load\_artifacts`.

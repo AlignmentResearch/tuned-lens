@@ -9,7 +9,7 @@ import abc
 
 from tuned_lens.load_artifacts import load_lens_artifacts
 from tuned_lens.nn.unembed import Unembed
-from transformers import PreTrainedModel, AutoModelForCausalLM
+from transformers import PreTrainedModel
 from typing import Dict, Optional, Generator, Union
 import torch as th
 
@@ -174,14 +174,14 @@ class TunedLens(Lens):
     def from_model(
         cls,
         model: PreTrainedModel,
-        revision: Optional[str] = None,
+        model_revision: Optional[str] = None,
         bias: bool = True,
     ) -> "TunedLens":
         """Create a lens from a pretrained model.
 
         Args:
             model: The model to create the lens from.
-            revision: The git revision of the model to use.
+            model_revision: The git revision of the model to used.
             bias: Whether to use a bias in the linear translators.
 
         Returns:
@@ -190,7 +190,7 @@ class TunedLens(Lens):
         unembed = Unembed(model)
         config = TunedLensConfig(
             base_model_name_or_path=model.config.name_or_path,
-            base_model_revision=revision,
+            base_model_revision=model_revision,
             d_model=model.config.hidden_size,
             num_hidden_layers=model.config.num_hidden_layers,
             bias=bias,
@@ -199,57 +199,66 @@ class TunedLens(Lens):
         return cls(unembed, config)
 
     @classmethod
-    def from_pretrained(
+    def from_model_and_pretrained(
         cls,
-        resource_id: str,
-        model: Optional[PreTrainedModel] = None,
-        unembed: Optional[Unembed] = None,
-        cache_dir: Optional[str] = None,
-        revision: Optional[str] = None,
+        model: PreTrainedModel,
+        lens_resource_id: Optional[str] = None,
         **kwargs,
     ) -> "TunedLens":
         """Load a tuned lens from a folder or hugging face hub.
 
-        If a model or an unembed is provided, the lens will be initialized from them
-        otherwise this function attempts to automatically download the model from
-        hugging face hub.
+        Args:
+            model: The model to create the lens from.
+            lens_resource_id: The resource id of the lens to load. Defaults to the
+                model's name_or_path.
+            **kwargs: Additional arguments to pass to
+            :func:`tuned_lens.load_artifacts.load_lens_artifacts` and
+            `th.load <https://pytorch.org/docs/stable/generated/torch.load.html>`_.
+
+        Returns:
+            A TunedLens instance whose unembeding is derived from the given model
+            and whose layer translators are loaded from the given resource id.
+        """
+        if lens_resource_id is None:
+            lens_resource_id = model.config.name_or_path
+
+        return cls.from_unembed_and_pretrained(
+            Unembed(model), lens_resource_id, **kwargs
+        )
+
+    @classmethod
+    def from_unembed_and_pretrained(
+        cls,
+        unembed: Unembed,
+        lens_resource_id: str,
+        **kwargs,
+    ) -> "TunedLens":
+        """Load a tuned lens from a folder or hugging face hub.
 
         Args:
-            resource_id: The path to the directory containing the config and checkpoint
-                or the name of the model on the hugging face hub.
-            model: The model to create the lens from.
-            unembed: The unembed operation to use as the final step in the lens.
-            cache_dir: The directory to cache the artifacts in if downloaded. If None,
-                will use the default huggingface cache directory.
-            revision: The git revision to use if downloading from the hub.
-            **kwargs: Additional arguments to pass to torch.load.
+            unembed: The unembed operation to use for the lens.
+            lens_resource_id: The resource id of the lens to load.
+            **kwargs: Additional arguments to pass to
+            :func:`tuned_lens.load_artifacts.load_lens_artifacts` and
+            `th.load <https://pytorch.org/docs/stable/generated/torch.load.html>`_.
 
         Returns:
             A TunedLens instance.
         """
+        artifact_kwargs = set(inspect.getfullargspec(load_lens_artifacts).kwonlyargs)
+        load_kwargs = set(inspect.getfullargspec(th.load).kwonlyargs)
+        if unrecognized := [k not in (artifact_kwargs | load_kwargs) for k in kwargs]:
+            raise ValueError(f"Unrecognized keyword argument(s) {unrecognized}.")
+
         # Create the config
         config_path, ckpt_path = load_lens_artifacts(
-            resource_id, cache_dir=cache_dir, revision=revision
+            lens_resource_id,
+            **{k: v for k, v in kwargs.items() if k in artifact_kwargs},
         )
 
         with open(config_path, "r") as f:
             config = TunedLensConfig.from_dict(json.load(f))
 
-        # Create the unembed
-        if unembed is None and model is not None:
-            unembed = Unembed(model)
-        elif unembed is not None and model is None:
-            pass
-        elif unembed is None and model is None:
-            model = AutoModelForCausalLM.from_pretrained(
-                resource_id, cache_dir=cache_dir, revision=revision
-            )
-            unembed = Unembed(model)
-        else:
-            raise ValueError(
-                "Cannot specify both an unembed and a model. "
-                "Please specify only one of the two."
-            )
         # validate the unembed is the same as the one used to train the lens
         if config.unemebd_hash and unembed.unembedding_hash() != config.unemebd_hash:
             warning(
@@ -261,7 +270,9 @@ class TunedLens(Lens):
         lens = cls(unembed, config)
 
         # Load parameters
-        state = th.load(ckpt_path, **kwargs)
+        state = th.load(
+            ckpt_path, **{k: v for k, v in kwargs.items() if k in load_kwargs}
+        )
 
         lens.layer_translators.load_state_dict(state)
 

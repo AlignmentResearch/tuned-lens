@@ -76,11 +76,13 @@ def main(args):
 
     # Can be set either in eval or in training; in eval it's required
     if getattr(args, "lens", None):
-        lens = TunedLens.from_pretrained(args.lens, model=model, map_location="cpu")
+        lens = TunedLens.from_model_and_pretrained(
+            model=model, lens_resource_id=args.lens
+        )
     elif args.command in ("downstream", "eval"):
         lens = None
     else:
-        lens = TunedLens.from_model(model, revision=args.revision).float()
+        lens = TunedLens.from_model(model, model_revision=args.revision).float()
 
     if lens:
         lens = lens.to(device=th.device("cuda", local_rank))

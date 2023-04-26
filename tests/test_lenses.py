@@ -82,6 +82,18 @@ def test_tuned_lens_save_and_load(unembed: Unembed, tuned_lens: TunedLens):
     logits_before = tuned_lens(randn, 1)
     with tempfile.TemporaryDirectory() as tmpdir:
         tuned_lens.save(tmpdir)
-        tuned_lens = TunedLens.from_pretrained(tmpdir, unembed=unembed)
+        tuned_lens = TunedLens.from_unembed_and_pretrained(
+            lens_resource_id=tmpdir, unembed=unembed
+        )
         logits_after = tuned_lens(randn, 1)
         assert th.allclose(logits_before, logits_after)
+
+
+def test_tuned_lens_from_unemebd_and_pretrained_raises(unembed: Unembed):
+    with pytest.raises(ValueError, match="Unrecognized keyword argument"):
+        TunedLens.from_unembed_and_pretrained(
+            unembed=unembed,
+            lens_resource_id="will-never-reach",
+            banana="non-existent",
+            apple=1,
+        )
