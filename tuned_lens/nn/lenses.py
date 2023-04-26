@@ -212,8 +212,8 @@ class TunedLens(Lens):
             lens_resource_id: The resource id of the lens to load. Defaults to the
                 model's name_or_path.
             **kwargs: Additional arguments to pass to
-            :func:`tuned_lens.load_artifacts.load_lens_artifacts` and
-            `th.load <https://pytorch.org/docs/stable/generated/torch.load.html>`_.
+                :func:`tuned_lens.load_artifacts.load_lens_artifacts` and
+                `th.load <https://pytorch.org/docs/stable/generated/torch.load.html>`_.
 
         Returns:
             A TunedLens instance whose unembeding is derived from the given model
@@ -239,8 +239,8 @@ class TunedLens(Lens):
             unembed: The unembed operation to use for the lens.
             lens_resource_id: The resource id of the lens to load.
             **kwargs: Additional arguments to pass to
-            :func:`tuned_lens.load_artifacts.load_lens_artifacts` and
-            `th.load <https://pytorch.org/docs/stable/generated/torch.load.html>`_.
+                :func:`tuned_lens.load_artifacts.load_lens_artifacts` and
+                `th.load <https://pytorch.org/docs/stable/generated/torch.load.html>`_.
 
         Returns:
             A TunedLens instance.
