@@ -116,7 +116,7 @@ class Eval:
         final_logit_stats = LogitStats()
         lens_statistics = [LogitStats() for _ in range(L)]
 
-        pbar = tqdm(dl, desc="Evaluating", position=self.dist.local_rank, total=total)
+        pbar = tqdm(dl, desc="Evaluating", position=self.dist.rank, total=total)
         for batch in pbar:
             batch = self.dist.send_to_device(batch)
             with th.no_grad():

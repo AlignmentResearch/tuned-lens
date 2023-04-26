@@ -232,19 +232,29 @@ class Distributed:
     """Use CPU offloading. Must be combined with fsdp"""
 
     @property
+    def rank(self) -> int:
+        """The rank of this process.
+
+        Note that in general this is not the same as the local rank.
+        However, for single-node training, the local rank is the same as the
+        global rank.
+        """
+        return int(os.environ["RANK"]) if dist.is_initialized() else 0
+
+    @property
     def local_rank(self) -> int:
-        """Get the local rank of the current process."""
-        return dist.get_rank() if dist.is_initialized() else 0
+        """The local rank of this process."""
+        return int(os.environ["LOCAL_RANK"]) if dist.is_initialized() else 0
 
     @property
     def world_size(self) -> int:
         """Get the world size from torch.distributed."""
-        return dist.get_world_size() if dist.is_initialized() else 1
+        return int(os.environ["WORLD_SIZE"]) if dist.is_initialized() else 1
 
     @property
     def primary(self) -> bool:
         """Whether this is the rank 0 process."""
-        return self.local_rank == 0
+        return self.rank == 0
 
     @property
     def device(self) -> th.device:
@@ -255,7 +265,7 @@ class Distributed:
         self, model: PreTrainedModel
     ) -> FullyShardedDataParallel | PreTrainedModel:
         """Shard the model using Fully Sharded Data Parallelism."""
-        th.cuda.set_device(self.local_rank)
+        th.cuda.set_device(self.rank)
 
         if self.fsdp:
             _, layers = get_transformer_layers(model)
@@ -267,7 +277,7 @@ class Distributed:
                     transformer_auto_wrap_policy, transformer_layer_cls={layer_cls}
                 ),
                 cpu_offload=CPUOffload(offload_params=self.cpu_offload),
-                device_id=self.local_rank,
+                device_id=self.rank,
                 # This turns out to be important for training speed
                 forward_prefetch=True,
                 mixed_precision=MixedPrecision(
@@ -279,28 +289,29 @@ class Distributed:
         elif self.cpu_offload:
             raise ValueError("CPU offload requires FSDP.")
         else:
-            model.to(self.local_rank)
+            model.to(self.rank)
             return model
 
     def distribute_lens(self, lens: Lens) -> DDP | Lens:
         """Distribute the lens using DistributedDataParallel and send lens to device."""
         if self.world_size > 1:
-            return DDP(lens, device_ids=[self.local_rank], find_unused_parameters=True)
+            return DDP(lens, device_ids=[self.rank], find_unused_parameters=True)
         else:
             return lens.to(self.device)
 
     def shard_dataset(self, dataset: Dataset) -> Dataset:
         """Shard the dataset based on local rank."""
         if dist.is_initialized():
-            dataset = dataset.shard(self.world_size, self.local_rank)
+            dataset = dataset.shard(self.world_size, self.rank)
         return dataset
 
     def init(self) -> None:
-        """Initialize distributed process group."""
+        """Initialize distributed process group if started with elastic launch."""
         # Support both distributed and non-distributed training
         local_rank = os.environ.get("LOCAL_RANK")
         if local_rank is not None:
             dist.init_process_group("nccl")
+            th.cuda.set_device(self.local_rank)
 
     def barrier(self) -> None:
         """Barrier for all processes."""

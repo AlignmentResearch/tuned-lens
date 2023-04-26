@@ -70,6 +70,9 @@ class Train:
     wandb: Optional[str] = None
     """Name of run in Weights & Biases."""
 
+    wandb_upload_checkpoints: Optional[bool] = field(action="store_true")
+    """Upload checkpoints to Weights & Biases."""
+
     token_shift: Optional[int] = None
     """How to shift the labels wrt the input tokens (1 = next token, 0 = current token,
     -1 = previous token, etc.)"""
@@ -88,7 +91,7 @@ class Train:
             lens = TunedLens.from_model_and_pretrained(model, self.lens_name_or_path)
 
         lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
-        print(f"Tuned lens memory usage: {lens_size / 2 ** 20:.2f} MB per GPU")
+        print(f"Tuned lens parameter memory usage: {lens_size / 2 ** 20:.2f} MB")
 
         if self.constant:
             for probe in lens:
@@ -156,6 +159,27 @@ class Train:
                 log_dict["weight_norm/" + name] = probe.weight.data.norm()
 
         wandb.log(log_dict)
+
+    def _save_model(self, tuned_lens: TunedLens, model_name: str):
+        """Save the model to disk and try to upload to wandb if enabled."""
+        if not self.dist.primary:
+            return
+
+        assert model_name is not None
+        output = model_name if self.output is None else self.output
+        print(f"Saving lens to {output}")
+        tuned_lens.save(output)
+
+        if self.wandb and self.wandb_upload_checkpoints:
+            import wandb
+
+            artifact = wandb.Artifact(
+                name="final_checkpoint",
+                type="checkpoint",
+                description="A trained lens.",
+            )
+            artifact.add_dir(output)
+            wandb.log_artifact(artifact)
 
     def calculate_gradient_accumulation_steps(self, tokens_per_sample: int) -> int:
         """Calculate the number of batches of data to process before taking a step."""
