@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence, Union
+from typing import Optional, Sequence, Union
 
 from ..nn.lenses import Lens
 from .token_formatter import TokenFormatter
@@ -229,13 +229,17 @@ class PredictionTrajectory:
             hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
         )
 
-    def get_first_order_diff(self) -> Any:
-        log_prob_diffs = []
-        for layer_ix in range(0, self.log_probs.shape[0] - 1):
-            diff = self.log_probs[layer_ix + 1, :] - self.log_probs[layer_ix, :]
-            log_prob_diffs.append(diff)
-
-        return log_prob_diffs
+    def get_first_order_diff(self) -> NDArray[np.float32]:
+        """Gets the log probability difference between each consecutive layer.
+        
+        Returns:
+           An array with the probability differences that has a length of one
+           less than the number of layers in the prediction trajectory.
+        """
+        return np.array([
+            np.log(self.probs[layer_ix + 1, :] - self.probs[layer_ix, :])
+            for layer_ix in range(0, self.log_probs.shape[0] - 1)
+        ], dtype=np.float32)
 
     def largest_delta_in_prob_labels(
         self,
