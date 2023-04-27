@@ -287,7 +287,7 @@ class Distributed:
         elif self.cpu_offload:
             raise ValueError("CPU offload requires FSDP.")
         else:
-            model.to(self.rank)
+            model.to(self.device)
             return model
 
     def distribute_lens(self, lens: Lens) -> Union[DDP, Lens]:
