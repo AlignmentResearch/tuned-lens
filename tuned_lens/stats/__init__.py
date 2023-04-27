@@ -4,4 +4,3 @@ from .distance import (
     kl_divergence,
 )
 from .logit_stats import LogitStats
-from .residual_stats import ResidualStats
