@@ -225,6 +225,8 @@ class Optimizer:
 class Distributed:
     """Configuration and utilities for distributing the model."""
 
+    distributed: bool = field(action="store_true")
+
     fsdp: bool = field(action="store_true")
     """Run the model with Fully Sharded Data Parallelism."""
 
@@ -265,8 +267,6 @@ class Distributed:
         self, model: PreTrainedModel
     ) -> Union[FullyShardedDataParallel, PreTrainedModel]:
         """Shard the model using Fully Sharded Data Parallelism."""
-        th.cuda.set_device(self.rank)
-
         if self.fsdp:
             _, layers = get_transformer_layers(model)
             layer_cls = type(layers[0])
