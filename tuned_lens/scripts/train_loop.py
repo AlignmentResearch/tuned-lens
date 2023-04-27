@@ -1,5 +1,6 @@
 """Training loop for training a TunedLens model against a transformer on a dataset."""
 from collections import defaultdict
+import dataclasses
 import enum
 from typing import Optional
 from pathlib import Path
@@ -107,7 +108,7 @@ class Train:
         import wandb
 
         wandb.init(
-            config=vars(self),
+            config=dataclasses.asdict(self),
             group=model_name,
             name=self.wandb,
         )
