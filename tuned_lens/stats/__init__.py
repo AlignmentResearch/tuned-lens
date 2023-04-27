@@ -1,5 +1,3 @@
-from .anomaly import fit_anomaly_detector
-from .dimensionality import effective_rank
 from .distance import (
     js_divergence,
     js_distance,
