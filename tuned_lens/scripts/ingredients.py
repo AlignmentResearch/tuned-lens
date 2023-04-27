@@ -225,8 +225,6 @@ class Optimizer:
 class Distributed:
     """Configuration and utilities for distributing the model."""
 
-    distributed: bool = field(action="store_true")
-
     fsdp: bool = field(action="store_true")
     """Run the model with Fully Sharded Data Parallelism."""
 
@@ -261,7 +259,7 @@ class Distributed:
     @property
     def device(self) -> th.device:
         """The device associated with this process."""
-        return th.device("cuda")
+        return th.device("cuda") if th.cuda.is_available() else th.device("cpu")
 
     def shard_model(
         self, model: PreTrainedModel
@@ -312,6 +310,9 @@ class Distributed:
         local_rank = os.environ.get("LOCAL_RANK")
         if local_rank is not None:
             dist.init_process_group("nccl")
+            assert (
+                th.cuda.is_available()
+            ), "CUDA must be available for distributed training"
             th.cuda.set_device(self.local_rank)
 
     def barrier(self) -> None:
