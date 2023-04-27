@@ -74,8 +74,6 @@ class Eval:
     @th.no_grad()
     def execute(self):
         """Trains a TunedLens model against a transformer on a dataset."""
-        self.dist.init()
-
         # Load model, tokenizer, data, and lens
         self.dist.init()
         model = tokenizer = data = lens = nats_to_bpb = model_name = None
@@ -94,6 +92,12 @@ class Eval:
             lens = self.load_lens(model)
 
         assert model and tokenizer and data and lens and nats_to_bpb
+
+        model = self.dist.shard_model(model)
+        # Note since we are not training we can just move the lens to the device.
+        # No need to use DDP
+        lens = lens.to(self.dist.device)
+        data = self.dist.shard_dataset(data)
 
         dl = DataLoader(
             data.shuffle(seed=self.seed),  # type: ignore[arg-type],
@@ -126,6 +130,8 @@ class Eval:
 
         final_logit_stats = LogitStats()
         lens_statistics = [LogitStats() for _ in range(L)]
+        self.dist.barrier()
+        print(f"All processes initialized. Running evaluation on {total} batches.")
 
         pbar = tqdm(dl, desc="Evaluating", position=self.dist.rank, total=total)
         for batch in pbar:
@@ -193,6 +199,8 @@ class Eval:
                     "transfer_kl": transfer_kls,
                 }
             )
+            # Keep the processes synced
+            self.dist.barrier()
 
         pbar.close()
         agg = pytree_map(lambda x: nats_to_bpb * x.mean(), pytree_stack(batches))
