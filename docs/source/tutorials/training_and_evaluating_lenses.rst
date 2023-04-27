@@ -76,7 +76,7 @@ If the model does not fit on a single GPU, you can also use `fully sharded data 
 Please not that cpue offloading is currently experimental. This substantially slows down training but allows for very large models to be run using less VRAM.
 
 Wandb Logging
-To enable logging to Wandb, you can pass the --wandb <name-of-run> flag. This will log the training and evaluation metrics to Wandb. You will need to set the `WANDB_API_KEY`` and `WANDB_PROJECT`` environment variables in your environment. You can find your API key on your `wandb profile page<https://wandb.ai/profile>_`. To make this easy, you can create a `.env`` file in the root of the project with the following contents.
+To enable logging to Wandb, you can pass the --wandb <name-of-run> flag. This will log the training and evaluation metrics to Wandb. You will need to set the `WANDB_API_KEY`, `WANDB_ENTITY` and `WANDB_PROJECT`` environment variables in your environment. You can find your API key on your `wandb profile page<https://wandb.ai/profile>_`. To make this easy, you can create a `.env`` file in the root of the project with the following contents.
 
 .. code-block:: bash
 
