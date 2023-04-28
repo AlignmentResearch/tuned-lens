@@ -303,7 +303,7 @@ class Train:
             for i, h in enumerate(hidden_stats):
                 # bfloat16 has larger dynamic range than float16 and seems to be better
                 # for computing log softmax & KL loss
-                with th.autocast("cuda", dtype=th.bfloat16):
+                with th.autocast(self.dist.device.type, dtype=th.bfloat16):
                     logits = shift_preds(ddp_lens(h, idx=i), shift)
 
                     if self.loss == LossChoice.CE:
