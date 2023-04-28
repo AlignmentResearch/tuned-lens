@@ -5,7 +5,7 @@ FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 as base
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt update \
-    && apt install -y git tini libsndfile1-dev tesseract-ocr espeak-ng python3 python3-pip ffmpeg zstd \
+    && apt install -y git tini wget libsndfile1-dev tesseract-ocr espeak-ng python3 python3-pip ffmpeg zstd \
     && python3 -m pip install --upgrade --no-cache-dir pip requests
 
 # install pytorch

@@ -18,6 +18,8 @@ dependencies = [
     "torch>=1.13.0",
     "transformers",
     "huggingface_hub>=0.12.1",
+    "simple-parsing>=0.1.1",
+    "wandb>=0.15.0",
 ]
 version = "0.0.5"
 
@@ -48,7 +50,7 @@ notebooks = [
 ]
 
 [project.scripts]
-tuned-lens = "tuned_lens.__main__:run"
+tuned-lens = "tuned_lens.__main__:main"
 
 [tool.setuptools.packages.find]
 namespaces = false

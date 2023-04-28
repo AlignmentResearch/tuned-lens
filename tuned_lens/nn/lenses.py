@@ -299,15 +299,6 @@ class TunedLens(Lens):
         with open(path / config, "w") as f:
             json.dump(self.config.to_dict(), f)
 
-    def normalize_(self):
-        """Canonicalize the transforms by centering their weights and biases."""
-        for linear in self:
-            assert isinstance(linear, th.nn.Linear)
-
-            A, b = linear.weight.data, linear.bias.data
-            A -= A.mean(dim=0, keepdim=True)
-            b -= b.mean()
-
     def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Transform hidden state from layer `idx`."""
         # Note that we add the translator output residually, in contrast to the formula

@@ -3,9 +3,7 @@ from datasets import Dataset, DatasetDict
 from multiprocessing import cpu_count
 from transformers import PreTrainedTokenizerBase
 from typing import TypeVar, Union
-import logging
 import math
-import warnings
 
 
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
@@ -129,21 +127,3 @@ def get_columns_all_equal(dataset: Union[Dataset, DatasetDict]) -> list[str]:
         return columns
 
     return dataset.column_names
-
-
-def silence_datasets_messages():
-    """Silence the annoying wall of logging messages and warnings."""
-
-    def filter_fn(log_record):
-        msg = log_record.getMessage()
-        return (
-            "Found cached dataset" not in msg
-            and "Loading cached" not in msg
-            and "Using custom data configuration" not in msg
-        )
-
-    handler = logging.StreamHandler()
-    handler.addFilter(filter_fn)
-    logging.getLogger("datasets").addHandler(handler)
-
-    warnings.filterwarnings("ignore", category=FutureWarning, module="datasets")
