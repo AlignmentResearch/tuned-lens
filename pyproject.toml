@@ -16,7 +16,7 @@ dependencies = [
     "scikit-learn",
     "zstandard",
     "torch>=1.13.0",
-    "transformers",
+    "transformers>=4.28.1",
     "huggingface_hub>=0.12.1",
 ]
 version = "0.0.5"
