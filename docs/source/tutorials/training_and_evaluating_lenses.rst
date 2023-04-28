@@ -44,7 +44,8 @@ Once you have a lens file, either by training it yourself or by downloading it, 
 
 **Distributed Data Parallel Multi-GPU Training**
 
-You can also use `torch elastic launch <https://pytorch.org/docs/stable/elastic/run.html>`_ to do multi-GPU training. This will default to doing `distributed data parallel <https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html>`_ training. This requires that you cannot fit the model and lenses on a single GPU. Since we are almost always using some form of gradient accumulation, this usually speeds up training significantly.
+You can also use `torch elastic launch <https://pytorch.org/docs/stable/elastic/run.html>`_ to do multi-GPU training. This will default to doing `distributed data parallel <https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html>`_ training for the lens. Note
+that this still requires the transformer model itself to fit on a single GPU. However, since we are almost always using some form of gradient accumulation, this usually still speeds up training significantly.
 
 .. code-block:: console
 
@@ -59,7 +60,7 @@ You can also use `torch elastic launch <https://pytorch.org/docs/stable/elastic/
 
 **Fully Sharded Data Parallel Multi-GPU Training**
 
-If the model does not fit on a single GPU, you can also use `fully sharded data parallel <https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html>`_ training. Note that the lens is still trained using DDP, only the model is sharded. To enable this, you can pass the `--fsdp` flag.
+If the transformer model does not fit on a single GPU, you can also use `fully sharded data parallel <https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html>`_ training. Note that the lens is still trained using DDP, only the transformer itself is sharded. To enable this, you can pass the `--fsdp` flag.
 
 .. code-block:: console
 
@@ -73,11 +74,11 @@ If the model does not fit on a single GPU, you can also use `fully sharded data 
     --per_gpu_batch_size=1 \
     --fsdp
 
-Please not that cpu offloading is currently experimental. This substantially slows down training but allows for very large models to be run using less VRAM.
+You can also use cpu offloading to train lenses on very large models while using less VRAM it can be enabled with the `--cpu_offload` flag. However, this substantially slows down training and is still experimental.
 
-**Wandb Logging**
+**Weights & Biases Logging**
 
-To enable logging to Wandb, you can pass the `--wandb <name-of-run>` flag. This will log the training and evaluation metrics to Wandb. You will need to set the `WANDB_API_KEY`, `WANDB_ENTITY` and `WANDB_PROJECT`` environment variables in your environment. You can find your API key on your `wandb profile page <https://wandb.ai/settings>`_. To make this easy, you can create a `.env`` file in the root of the project with the following contents.
+To enable logging to `wandb`, you can pass the `--wandb <name-of-run>` flag. This will log the training and evaluation metrics to Wandb. You will need to set the `WANDB_API_KEY`, `WANDB_ENTITY` and `WANDB_PROJECT`` environment variables in your environment. You can find your API key on your `wandb profile page <https://wandb.ai/settings>`_. To make this easy, you can create a `.env`` file in the root of the project with the following contents.
 
 .. code-block:: bash
 
