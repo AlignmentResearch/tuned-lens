@@ -19,6 +19,7 @@ dependencies = [
     "transformers",
     "huggingface_hub>=0.12.1",
     "simple-parsing>=0.1.1",
+    "wandb>=0.15.0",
 ]
 version = "0.0.5"
 
