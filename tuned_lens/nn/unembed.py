@@ -1,12 +1,12 @@
 """Provides a class for mapping transformer hidden states to logits (and vice versa)."""
+import copy
+
 from dataclasses import dataclass
-from torch.autograd.functional import hessian
 from torch.distributions import Distribution
 from transformers import PreTrainedModel
-from typing import cast, Callable, Literal, Optional
-from tuned_lens.model_surgery import get_final_norm, get_transformer_layers
-from tuned_lens.stats import kl_divergence
-from tuned_lens.utils import maybe_unpack, tensor_hash
+from typing import cast, Literal, Optional
+from tuned_lens.model_surgery import get_final_norm
+from tuned_lens.utils import tensor_hash
 import torch as th
 
 
@@ -19,76 +19,34 @@ class InversionOutput:
     kl: th.Tensor
     loss: th.Tensor
     nfev: int
-    hessian: Optional[th.Tensor]
 
 
 class Unembed(th.nn.Module):
     """Module that maps transformer hidden states to logits (and vice versa)."""
 
-    transformer_layers: th.nn.ModuleList
     layer_norm: th.nn.LayerNorm
     unembedding: th.nn.Linear
-
-    _U_pinv: th.Tensor
 
     def __init__(
         self,
         model: PreTrainedModel,
-        extra_layers: int = 0,
     ):
         """Initialize unmebed.
 
         Args:
             model: A HuggingFace model from which to extract the unembedding matrix.
-            extra_layers: To leave at the end of the transformer.
         """
         super().__init__()
-        self.transformer_layers = th.nn.ModuleList()
-        # Initializing from scratch without a model
+        final_norm = get_final_norm(model)
 
-        raw_ln = get_final_norm(model)
-        assert raw_ln is not None
-
-        raw_unembed = model.get_output_embeddings()
-        if not isinstance(raw_unembed, th.nn.Linear):
+        unembeding_matrix = model.get_output_embeddings()
+        if not isinstance(unembeding_matrix, th.nn.Linear):
             # With nn.Linear we know that the unembedding matrix is .weight;
             # we don't want to guess incorrectly for other module classes.
             raise ValueError("Currently we only support nn.Linear unembeddings.")
 
-        U = raw_unembed.weight.data.float()
-        assert isinstance(U, th.Tensor)
-
-        vocab_size, d_model = U.shape
-        self.layer_norm = th.nn.LayerNorm(
-            d_model, elementwise_affine=False, eps=getattr(raw_ln, "eps", 1e-5)
-        )
-        self.unembedding = th.nn.Linear(d_model, vocab_size, device=U.device)
-
-        # Roll the LN bias into our unembedding Linear
-        gamma, beta = raw_ln.weight.data.float(), raw_ln.bias.data
-        if isinstance(beta, th.Tensor):
-            bias = beta.float() @ U.T
-
-            # GPT-J has a bias in the unembedding layer, so we need to add it
-            if raw_unembed.bias is not None:
-                bias += raw_unembed.bias.data.float()
-
-            self.unembedding.bias.data = bias.to(beta.dtype)
-
-        # Roll the LN diagonal scaling factor into our unembedding matrix
-        if isinstance(gamma, th.Tensor):
-            U = U * gamma
-
-        self.unembedding.weight.data = U.to(raw_unembed.weight.dtype)
-
-        # We precompute the pseudo-inverse of the unembedding matrix
-        self.register_buffer("_U_pinv", U.pinverse())
-
-        if extra_layers > 0:
-            _, layers = get_transformer_layers(model)
-            self.transformer_layers.extend(
-                layers[-self.config.extra_layers, :]  # type: ignore[arg-type]
-            )
+        self.layer_norm = copy.deepcopy(final_norm)
+        self.unembedding = copy.deepcopy(unembeding_matrix)
 
         # In general we don't want to finetune the unembed operation.
         self.requires_grad_(False)
@@ -98,47 +56,14 @@ class Unembed(th.nn.Module):
         parameter = self.unembedding.weight.data.detach().cpu().numpy()
         return tensor_hash(parameter)
 
-    def forward(self, h: th.Tensor, transform: Callable = lambda x: x) -> th.Tensor:
+    def forward(self, h: th.Tensor) -> th.Tensor:
         """Convert hidden states into logits."""
-        h = transform(h)
-        for layer in self.transformer_layers:
-            h = maybe_unpack(layer(h))
-
         return self.unembedding(self.layer_norm(h))
-
-    def metric_tensor(
-        self, h: th.Tensor, transform: Callable = lambda x: x
-    ) -> th.Tensor:
-        """Evaluate the pullback of the Fisher information metric at the point `h`."""
-        # The Fisher-Rao metric tensor is the Hessian of the KL divergence
-        import functorch as fth
-
-        def kl_fn(h_p: th.Tensor, h_q: th.Tensor) -> th.Tensor:
-            p = self(h_p, transform=transform)
-            q = self(h_q, transform=transform)
-            return kl_divergence(p, q)
-
-        hess_fn = fth.hessian(kl_fn, argnums=1)
-        if len(h.shape) == 2:
-            hess_fn = fth.vmap(hess_fn)
-
-        hess = hess_fn(h, h)
-        assert isinstance(hess, th.Tensor)
-        return hess
-
-    def back_translate(
-        self, h: th.Tensor, transform: Callable = lambda x: x, tol: float = 1e-4
-    ) -> th.Tensor:
-        """Project hidden states into logits and then back into hidden states."""
-        scale = h.norm(dim=-1, keepdim=True) / h.shape[-1] ** 0.5
-        logits = self(h, transform=transform)
-        return self.invert(logits, h0=th.randn_like(h), tol=tol).preimage * scale
 
     def invert(
         self,
         logits: th.Tensor,
         *,
-        compute_hessian: bool = False,
         h0: Optional[th.Tensor] = None,
         max_iter: int = 1000,
         optimizer: Literal["lbfgs", "sgd"] = "lbfgs",
@@ -146,7 +71,6 @@ class Unembed(th.nn.Module):
         prior: Optional[Distribution] = None,
         step_size: float = 1.0,
         tol: float = 1e-3,
-        transform: Callable = lambda x: x,
         weight: Optional[th.Tensor] = None,
     ) -> InversionOutput:
         """Project logits onto the image of the unemebed operation.
@@ -161,8 +85,6 @@ class Unembed(th.nn.Module):
 
         Args:
             logits: Tensor of shape `[..., vocab_size]` containing logits to invert.
-            compute_hessian: Whether to compute and return the Hessian of the inversion
-                objective at the solution.
             h0: Initial guess for the hidden state. If `None`, the least-squares
                 solution of the linear equation xU = logits is used, where U is the
                 unembedding matrix.
@@ -174,7 +96,6 @@ class Unembed(th.nn.Module):
                 the inversion.
             step_size: The step size for the optimizer.
             tol: Tolerance for the inversion objective.
-            transform: Callable = lambda x: x,
             weight: Optional tensor of shape `[..., vocab_size]` containing weights
                 for each vocabulary item. If `None`, all classes are weighted equally.
         """
@@ -183,7 +104,7 @@ class Unembed(th.nn.Module):
 
         if h0 is None:
             # Initialize with the Moore-Penrose pseudoinverse
-            h0 = logits @ self.U_pinv.mT
+            h0 = th.zeros((*leading_dims, d_model), device=logits.device)
 
         # Sanity check the shape of the initial hidden state. Can silently lead to
         # incorrect results due to broadcasting if we don't check this.
@@ -213,7 +134,7 @@ class Unembed(th.nn.Module):
             p *= weight
 
         def compute_loss(h: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
-            log_q = self(transform(h)).log_softmax(-1)
+            log_q = self(h).log_softmax(-1)
             kl = th.sum(p * (log_p - log_q), dim=-1).nanmean()
             loss = kl.clone()
 
@@ -256,17 +177,9 @@ class Unembed(th.nn.Module):
             output = InversionOutput(
                 preimage=self.layer_norm(h_star.data),
                 grad_norm=grad_norm,
-                hessian=None,
                 kl=kl.detach(),
                 loss=loss.detach(),
                 nfev=nfev,
             )
-
-            if compute_hessian:
-                hess = hessian(
-                    lambda x: compute_loss(x)[0], h_star.data, vectorize=True
-                )
-                assert isinstance(hess, th.Tensor)
-                output.hessian = hess
 
         return output
