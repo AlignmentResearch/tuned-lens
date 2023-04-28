@@ -73,10 +73,11 @@ If the model does not fit on a single GPU, you can also use `fully sharded data 
     --per_gpu_batch_size=1 \
     --fsdp
 
-Please not that cpue offloading is currently experimental. This substantially slows down training but allows for very large models to be run using less VRAM.
+Please not that cpu offloading is currently experimental. This substantially slows down training but allows for very large models to be run using less VRAM.
 
-Wandb Logging
-To enable logging to Wandb, you can pass the --wandb <name-of-run> flag. This will log the training and evaluation metrics to Wandb. You will need to set the `WANDB_API_KEY`, `WANDB_ENTITY` and `WANDB_PROJECT`` environment variables in your environment. You can find your API key on your `wandb profile page<https://wandb.ai/profile>_`. To make this easy, you can create a `.env`` file in the root of the project with the following contents.
+**Wandb Logging**
+
+To enable logging to Wandb, you can pass the `--wandb <name-of-run>` flag. This will log the training and evaluation metrics to Wandb. You will need to set the `WANDB_API_KEY`, `WANDB_ENTITY` and `WANDB_PROJECT`` environment variables in your environment. You can find your API key on your `wandb profile page <https://wandb.ai/settings>`_. To make this easy, you can create a `.env`` file in the root of the project with the following contents.
 
 .. code-block:: bash
 
@@ -85,4 +86,4 @@ To enable logging to Wandb, you can pass the --wandb <name-of-run> flag. This wi
     WANDB_ENTITY= # your-entity
     WANDB_PROJECT= # your-project-name
 
-Then you can source it when you start your shell by running `source .env`. For additional Wandb environment variables, see here<https://docs.wandb.ai/guides/track/advanced/environment-variables>_.
+Then you can source it when you start your shell by running `source .env`. For additional Wandb environment variables, `see here <https://docs.wandb.ai/guides/track/advanced/environment-variables>`_.
