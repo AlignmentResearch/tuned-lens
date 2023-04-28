@@ -336,13 +336,6 @@ class Train:
                 self._log(opt, step, losses, lens, nats_to_bpb)
                 losses.clear()
 
-            # Make the problem strictly convex with projected gradient descent,
-            # centering the affine transform at each step
-
-            # TODO this should be reviewed when we add support for other types of
-            # normalization beyond layer norm
-            lens.normalize_()
-
         if self.dist.primary:
             assert model_name is not None
             output = model_name if self.output is None else self.output
