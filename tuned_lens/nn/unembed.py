@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from torch.distributions import Distribution
 from transformers import PreTrainedModel
 from typing import cast, Literal, Optional
-from tuned_lens.model_surgery import get_final_norm
+from tuned_lens import model_surgery
 from tuned_lens.utils import tensor_hash
 import torch as th
 
@@ -24,7 +24,7 @@ class InversionOutput:
 class Unembed(th.nn.Module):
     """Module that maps transformer hidden states to logits (and vice versa)."""
 
-    layer_norm: th.nn.LayerNorm
+    final_norm: model_surgery.Norm
     unembedding: th.nn.Linear
 
     def __init__(
@@ -37,7 +37,7 @@ class Unembed(th.nn.Module):
             model: A HuggingFace model from which to extract the unembedding matrix.
         """
         super().__init__()
-        final_norm = get_final_norm(model)
+        final_norm = model_surgery.get_final_norm(model)
 
         unembeding_matrix = model.get_output_embeddings()
         if not isinstance(unembeding_matrix, th.nn.Linear):
@@ -45,7 +45,7 @@ class Unembed(th.nn.Module):
             # we don't want to guess incorrectly for other module classes.
             raise ValueError("Currently we only support nn.Linear unembeddings.")
 
-        self.layer_norm = copy.deepcopy(final_norm)
+        self.final_norm = copy.deepcopy(final_norm)
         self.unembedding = copy.deepcopy(unembeding_matrix)
 
         # In general we don't want to finetune the unembed operation.
@@ -58,7 +58,7 @@ class Unembed(th.nn.Module):
 
     def forward(self, h: th.Tensor) -> th.Tensor:
         """Convert hidden states into logits."""
-        return self.unembedding(self.layer_norm(h))
+        return self.unembedding(self.final_norm(h))
 
     def invert(
         self,
@@ -141,7 +141,7 @@ class Unembed(th.nn.Module):
             if prior_weight and prior is not None:
                 # We evaluate the prior density on the post-norm hidden state,
                 # to prevent the pre-norm hidden from collapsing towards zero.
-                h_ = self.layer_norm(h)
+                h_ = self.final_norm(h)
                 loss += prior_weight * -prior.log_prob(h_).mean()
 
             return loss, kl
@@ -175,7 +175,7 @@ class Unembed(th.nn.Module):
 
         with th.no_grad():
             output = InversionOutput(
-                preimage=self.layer_norm(h_star.data),
+                preimage=self.final_norm(h_star.data),
                 grad_norm=grad_norm,
                 kl=kl.detach(),
                 loss=loss.detach(),
