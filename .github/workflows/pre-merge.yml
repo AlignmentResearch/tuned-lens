@@ -68,7 +68,7 @@ jobs:
   docker-build-and-test:
     name: Build Docker image and run unit tests within it. Keeping track of coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
