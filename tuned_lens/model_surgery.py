@@ -88,7 +88,7 @@ def get_final_norm(model: tr.PreTrainedModel) -> Norm:
     if final_layer_norm is None:
         raise ValueError("Model does not have a final layer norm.")
 
-    assert isinstance(final_layer_norm, Norm)
+    assert isinstance(final_layer_norm, Norm.__args__)  # type: ignore
 
     return final_layer_norm
 
