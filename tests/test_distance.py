@@ -1,50 +1,6 @@
-from torch.distributions import Categorical, Dirichlet, kl_divergence
-from tuned_lens.stats import aitchison, aitchison_similarity, js_divergence, js_distance
+from torch.distributions import Categorical, kl_divergence
+from tuned_lens.stats import js_divergence, js_distance
 import torch as th
-
-
-def test_aitchison():
-    # Uniform and symmetric Dirichlet prior over the simplex
-    N, K = 100, 50_000
-    prior = Dirichlet(th.ones(K, dtype=th.float64))
-
-    log_x = prior.sample(th.Size([N])).log()
-    log_y = prior.sample(th.Size([N])).log()
-    log_z = prior.sample(th.Size([N])).log()
-    weights = prior.sample(th.Size([N]))
-
-    # Linearity:
-    # <ax + by, z> = a<x, z> + b<y, z>
-    a = th.randn(N, dtype=th.float64)
-    b = th.randn(N, dtype=th.float64)
-
-    th.testing.assert_close(
-        # <ax + by, z>
-        aitchison(
-            th.log_softmax(a[:, None] * log_x + b[:, None] * log_y, dim=-1),
-            log_z,
-            weight=weights,
-        ),
-        # a<x, z> + b<y, z>
-        (
-            a * aitchison(log_x, log_z, weight=weights)
-            + b * aitchison(log_y, log_z, weight=weights)
-        ),
-    )
-
-    # Positive definiteness
-    assert th.all(aitchison(log_x, log_x, weight=weights) >= 0)
-
-    # Symmetry
-    th.testing.assert_close(
-        aitchison(log_x, log_y, weight=weights), aitchison(log_y, log_x, weight=weights)
-    )
-
-    # Cosine similarity properties
-    self_similarities = aitchison_similarity(log_x, log_x, weight=weights)
-    similarities = aitchison_similarity(log_x, log_y, weight=weights)
-    assert th.all(similarities >= -1) and th.all(similarities <= 1)
-    th.testing.assert_close(self_similarities, th.ones_like(self_similarities))
 
 
 def test_js_divergence():
