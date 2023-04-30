@@ -3,5 +3,4 @@ from .unembed import (
     Unembed,
     InversionOutput,
 )
-from .downstream_wrapper import DownstreamWrapper
 from .lenses import Lens, TunedLens, TunedLensConfig, LogitLens
