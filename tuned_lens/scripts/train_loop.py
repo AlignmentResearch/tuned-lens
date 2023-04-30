@@ -1,25 +1,26 @@
 """Training loop for training a TunedLens model against a transformer on a dataset."""
-from collections import defaultdict
 import dataclasses
 import enum
-from typing import Optional
-from pathlib import Path
+from collections import defaultdict
+from dataclasses import dataclass
 from itertools import islice
+from pathlib import Path
+from typing import Optional
 
+import torch as th
 from simple_parsing import field
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel
+
 from tuned_lens import TunedLens
-from tuned_lens.utils import shift_labels, shift_preds, maybe_all_reduce
 from tuned_lens.scripts.ingredients import (
-    Model,
     Data,
     Distributed,
+    Model,
     Optimizer,
 )
-import torch as th
-from dataclasses import dataclass
+from tuned_lens.utils import maybe_all_reduce, shift_labels, shift_preds
 
 
 class LossChoice(enum.Enum):

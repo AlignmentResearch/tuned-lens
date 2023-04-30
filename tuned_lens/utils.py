@@ -1,13 +1,13 @@
 """Utilities for distributed training and handling nested collections of tensors."""
 
+import hashlib
 from itertools import islice
-from typing import cast, Any, Callable, Iterable, Sequence, Type, TypeVar, Union
+from typing import Any, Callable, Iterable, Sequence, Type, TypeVar, Union, cast
+
+import numpy as np
 import torch as th
 import torch.distributed as dist
-import hashlib
-import numpy as np
 from numpy.typing import NDArray
-
 
 T = TypeVar("T")
 

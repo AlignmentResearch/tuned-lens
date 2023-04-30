@@ -3,9 +3,9 @@ import pytest
 from plotly import graph_objects as go
 
 from tuned_lens.plotting.trajectory_plotting import (
-    _stride_keep_last,
-    TrajectoryStatistic,
     TrajectoryLabels,
+    TrajectoryStatistic,
+    _stride_keep_last,
 )
 
 

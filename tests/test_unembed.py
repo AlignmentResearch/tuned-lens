@@ -1,7 +1,8 @@
-from tuned_lens.nn import Unembed
-from tuned_lens.model_surgery import get_final_norm
-import transformers as tr
 import torch as th
+import transformers as tr
+
+from tuned_lens.model_surgery import get_final_norm
+from tuned_lens.nn import Unembed
 
 
 def correctness(random_small_model: tr.PreTrainedModel):

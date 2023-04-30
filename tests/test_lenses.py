@@ -1,11 +1,12 @@
-from tuned_lens.nn.unembed import Unembed
-from tuned_lens.nn.lenses import TunedLens, TunedLensConfig, LogitLens
+import tempfile
+
+import mock
+import pytest
+import torch as th
 import transformers as trf
 
-import tempfile
-import torch as th
-import pytest
-import mock
+from tuned_lens.nn.lenses import LogitLens, TunedLens, TunedLensConfig
+from tuned_lens.nn.unembed import Unembed
 
 
 @pytest.fixture

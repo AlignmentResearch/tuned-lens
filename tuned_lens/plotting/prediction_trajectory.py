@@ -4,19 +4,18 @@ import logging
 from dataclasses import dataclass
 from typing import Optional, Sequence, Union
 
-from ..nn.lenses import Lens
-from .token_formatter import TokenFormatter
-from .trajectory_plotting import TrajectoryStatistic, TrajectoryLabels
-
+import numpy as np
+import torch as th
+from numpy.typing import NDArray
 from transformers import (
     PreTrainedModel,
     PreTrainedTokenizer,
     PreTrainedTokenizerFast,
 )
 
-from numpy.typing import NDArray
-import numpy as np
-import torch as th
+from ..nn.lenses import Lens
+from .token_formatter import TokenFormatter
+from .trajectory_plotting import TrajectoryLabels, TrajectoryStatistic
 
 Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
 

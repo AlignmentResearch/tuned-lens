@@ -1,10 +1,10 @@
 """Tools for tokenizing and manipulating text datasets."""
-from datasets import Dataset, DatasetDict
-from multiprocessing import cpu_count
-from transformers import PreTrainedTokenizerBase
-from typing import TypeVar, Union
 import math
+from multiprocessing import cpu_count
+from typing import TypeVar, Union
 
+from datasets import Dataset, DatasetDict
+from transformers import PreTrainedTokenizerBase
 
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
 

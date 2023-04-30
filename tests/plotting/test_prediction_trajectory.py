@@ -1,9 +1,9 @@
+import numpy as np
 import pytest
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from tuned_lens.nn.lenses import LogitLens
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from tuned_lens.plotting import PredictionTrajectory
-import numpy as np
 
 
 @pytest.fixture
