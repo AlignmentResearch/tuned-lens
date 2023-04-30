@@ -248,8 +248,12 @@ class TunedLens(Lens):
         """
         artifact_kwargs = set(inspect.getfullargspec(load_lens_artifacts).kwonlyargs)
         load_kwargs = set(inspect.getfullargspec(th.load).kwonlyargs)
-        if unrecognized := [k not in (artifact_kwargs | load_kwargs) for k in kwargs]:
-            raise ValueError(f"Unrecognized keyword argument(s) {unrecognized}.")
+        if unrecognized := [
+            k for k in kwargs if k not in artifact_kwargs | load_kwargs
+        ]:
+            raise ValueError(
+                f"Unrecognized keyword argument(s) {', '.join(unrecognized)}."
+            )
 
         # Create the config
         config_path, ckpt_path = load_lens_artifacts(
@@ -264,7 +268,7 @@ class TunedLens(Lens):
         if config.unemebd_hash and unembed.unembedding_hash() != config.unemebd_hash:
             warning(
                 "The unembeding matrix hash does not match the lens' hash."
-                "This lens may have been trained with a different unembeding."
+                " This lens may have been trained with a different unembeding."
             )
 
         # Create the lens
