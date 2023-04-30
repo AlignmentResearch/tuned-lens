@@ -1,6 +1,7 @@
-from torch.distributions import Categorical, kl_divergence
-from tuned_lens.stats import js_divergence, js_distance
 import torch as th
+from torch.distributions import Categorical, kl_divergence
+
+from tuned_lens.stats import js_distance, js_divergence
 
 
 def test_js_divergence():

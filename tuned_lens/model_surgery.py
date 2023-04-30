@@ -1,10 +1,11 @@
 """Tools for finding and modifying components in a transformer model."""
 
 from contextlib import contextmanager
-from transformers import models
-import transformers as tr
 from typing import Any, Generator, TypeVar, Union
+
 import torch as th
+import transformers as tr
+from transformers import models
 
 
 def get_value_for_key(obj: Any, key: str) -> Any:

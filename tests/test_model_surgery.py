@@ -1,7 +1,8 @@
 import pytest
 import torch as th
-from tuned_lens import model_surgery
 from transformers import PreTrainedModel, models
+
+from tuned_lens import model_surgery
 
 
 def test_get_final_layer_norm_raises(opt_random_model: PreTrainedModel):

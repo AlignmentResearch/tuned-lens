@@ -1,13 +1,14 @@
 """Provides a class for mapping transformer hidden states to logits (and vice versa)."""
 import copy
-
 from dataclasses import dataclass
+from typing import Literal, Optional, cast
+
+import torch as th
 from torch.distributions import Distribution
 from transformers import PreTrainedModel
-from typing import cast, Literal, Optional
+
 from tuned_lens import model_surgery
 from tuned_lens.utils import tensor_hash
-import torch as th
 
 
 @dataclass

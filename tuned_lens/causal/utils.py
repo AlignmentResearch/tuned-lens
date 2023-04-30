@@ -1,10 +1,10 @@
 from typing import Optional
+
 import torch as th
 
 
 def derange(batch: th.Tensor, generator: Optional[th.Generator] = None) -> th.Tensor:
     """Shuffle a tensor along axis 0, making sure there are no fixed points."""
-
     # Things get more complicated if there are multiple ranks. We perform the
     # derangement *hierarchically*, first generating a shared permutation of the ranks
     indices = sample_derangement(

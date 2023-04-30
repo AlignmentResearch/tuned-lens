@@ -1,7 +1,8 @@
-from tuned_lens.nn import Unembed
-from tuned_lens.model_surgery import get_final_norm
-import transformers as tr
 import torch as th
+import transformers as tr
+
+from tuned_lens.model_surgery import get_final_norm
+from tuned_lens.nn import Unembed
 
 
 def back_translate(unembed: Unembed, h: th.Tensor, tol: float = 1e-4) -> th.Tensor:

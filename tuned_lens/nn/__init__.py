@@ -1,6 +1,6 @@
 """A set of PyTorch modules for transforming the residual streams of models."""
+from .lenses import Lens, LogitLens, TunedLens, TunedLensConfig
 from .unembed import (
-    Unembed,
     InversionOutput,
+    Unembed,
 )
-from .lenses import Lens, TunedLens, TunedLensConfig, LogitLens
