@@ -88,6 +88,9 @@ class Model:
     name: str
     """Name of model to use in the Huggingface Hub."""
 
+    int8: bool = field(action="store_true", default=False)
+    """Load the model weights in mixed int8 mode with `bitsandbytes`."""
+
     revision: str = "main"
     """Git revision to use for pretrained models."""
 
@@ -121,6 +124,8 @@ class Model:
         print(f"Loading pretrained weights for '{self.name}'...")
         model = AutoModelForCausalLM.from_pretrained(  # type: ignore
             self.name,
+            device_map={"": "cpu"}, # No-op required for load_in_8bit
+            load_in_8bit=self.int8,
             low_cpu_mem_usage=True,
             revision=self.revision,
             torch_dtype="auto",
