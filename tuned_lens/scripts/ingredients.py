@@ -1,19 +1,22 @@
 """Shared configuration for the scripts."""
+import enum
 import os
-from datasets import Dataset, DatasetDict, load_dataset
+from dataclasses import dataclass
 from functools import partial
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed.optim import ZeroRedundancyOptimizer
+from typing import Optional, Union
+
+import torch as th
+import torch.distributed as dist
+from datasets import Dataset, DatasetDict, load_dataset
+from simple_parsing import field
 from torch.distributed.fsdp import (
     CPUOffload,
     FullyShardedDataParallel,
     MixedPrecision,
 )
-import enum
-from typing import Optional, Union
-from dataclasses import dataclass
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-
+from torch.distributed.optim import ZeroRedundancyOptimizer
+from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -25,18 +28,12 @@ from transformers import (
 from tuned_lens.data import (
     chunk_and_tokenize,
 )
-
-from tuned_lens.utils import (
-    send_to_device,
-    TreeType,
-)
 from tuned_lens.model_surgery import get_transformer_layers
-import torch as th
-import torch.distributed as dist
-
-from simple_parsing import field
-
 from tuned_lens.nn.lenses import Lens
+from tuned_lens.utils import (
+    TreeType,
+    send_to_device,
+)
 
 
 @dataclass

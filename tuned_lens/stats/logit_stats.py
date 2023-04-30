@@ -1,7 +1,10 @@
-from torch.distributions import Dirichlet
+"""Online MLE for the Dirichlet distribution from which logits are sampled."""
 from typing import Optional
-from ..utils import maybe_all_reduce
+
 import torch as th
+from torch.distributions import Dirichlet
+
+from ..utils import maybe_all_reduce
 
 
 class LogitStats:
@@ -18,6 +21,7 @@ class LogitStats:
     sufficient_stats: Optional[th.Tensor]
 
     def __init__(self):
+        """Create a LogitStats object."""
         self.n = 0
         self.marginal_probs = None
         self.sufficient_stats = None
@@ -29,6 +33,7 @@ class LogitStats:
 
     @th.no_grad()
     def update(self, logits: th.Tensor, assume_normalized: bool = False):
+        """Update the sufficient statistics with a new batch of logits."""
         K = logits.shape[-1]
         logits = logits.reshape(-1, K).float()
         if not assume_normalized:

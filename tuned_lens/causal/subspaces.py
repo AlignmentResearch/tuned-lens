@@ -1,14 +1,16 @@
-"""Provides tools for extracting causal bases from models and ablating subspaces"""
+"""Provides tools for extracting causal bases from models and ablating subspaces."""
+from contextlib import contextmanager
+from typing import Iterable, Literal, NamedTuple, Optional, Sequence
+
+import torch as th
+import torch.distributed as dist
+import torch.nn.functional as F
+from tqdm.auto import trange
+
 from ..model_surgery import get_transformer_layers
 from ..nn import Lens
 from ..utils import maybe_all_reduce
 from .utils import derange
-from contextlib import contextmanager
-from tqdm.auto import trange
-from typing import Iterable, Literal, NamedTuple, Optional, Sequence
-import torch as th
-import torch.distributed as dist
-import torch.nn.functional as F
 
 
 @contextmanager
@@ -26,6 +28,8 @@ def ablate_subspace(
         A: Either a 2D matrix whose column space is to be removed, or a 1D vector whose
             span is to be removed.
         layer_index: The index of the layer to ablate.
+        mode: Which method to use for removing information along the subspace.
+            Defaults to `"zero"`.
         orthonormal: if True, `A` is assumed to be orthonormal.
     """
     _, layers = get_transformer_layers(model)
@@ -76,6 +80,8 @@ def extract_causal_bases(
         hiddens: A sequence of hidden states from the model.
         k: The number of basis vectors to compute for each layer.
         max_iter: The maximum number of iterations to run L-BFGS for each vector.
+        mode: Which method to use for removing information along the subspace.
+            Defaults to `"zero"`.
     """
     lens.requires_grad_(False)
 

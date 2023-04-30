@@ -1,7 +1,9 @@
-from torch.distributions import Dirichlet, kl_divergence
-from tuned_lens.stats import LogitStats
 import random
+
 import torch as th
+from torch.distributions import Dirichlet, kl_divergence
+
+from tuned_lens.stats import LogitStats
 
 
 def test_logit_stats_correctness():

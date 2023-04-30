@@ -1,5 +1,6 @@
-from tuned_lens.__main__ import main
 from pathlib import Path
+
+from tuned_lens.__main__ import main
 
 
 def test_eval_subcommand(

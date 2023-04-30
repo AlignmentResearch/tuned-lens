@@ -1,8 +1,9 @@
+from pathlib import Path
+
 import pytest
-from datasets import Dataset
 import torch as th
 import transformers as tr
-from pathlib import Path
+from datasets import Dataset
 
 
 @pytest.fixture(scope="module")

@@ -1,4 +1,5 @@
 import pytest
+
 from tuned_lens.plotting import TokenFormatter
 
 

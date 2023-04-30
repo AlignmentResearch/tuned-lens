@@ -1,11 +1,12 @@
 """Script to train or evaluate a set of tuned lenses for a language model."""
-from .scripts.train_loop import Train
-from .scripts.eval_loop import Eval
-from typing import Optional, Union
 from dataclasses import dataclass
+from typing import Optional, Union
 
 from simple_parsing import ArgumentParser, ConflictResolution
 from torch.distributed.elastic.multiprocessing.errors import record
+
+from .scripts.eval_loop import Eval
+from .scripts.train_loop import Train
 
 
 @dataclass

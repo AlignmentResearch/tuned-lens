@@ -1,7 +1,7 @@
 """Load lens artifacts from the hub or locally storage."""
-from typing import Optional
-from pathlib import Path
 import os
+from pathlib import Path
+from typing import Optional
 
 from huggingface_hub import hf_hub_download
 

@@ -1,29 +1,29 @@
 """Evaluation loop for the tuned lens model."""
-from pathlib import Path
 from collections import defaultdict
+from dataclasses import dataclass
 from itertools import islice
+from pathlib import Path
+from typing import Optional
 
+import torch as th
 from simple_parsing import field
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from typing import Optional
-from tuned_lens.stats import LogitStats
+
+from tuned_lens.nn.lenses import Lens, LogitLens, TunedLens
 from tuned_lens.scripts.ingredients import (
-    Model,
     Data,
     Distributed,
+    Model,
 )
-
-from tuned_lens.nn.lenses import TunedLens, LogitLens, Lens
+from tuned_lens.stats import LogitStats
 from tuned_lens.utils import (
-    shift_labels,
-    shift_preds,
+    maybe_all_reduce,
     pytree_map,
     pytree_stack,
-    maybe_all_reduce,
+    shift_labels,
+    shift_preds,
 )
-import torch as th
-from dataclasses import dataclass
 
 
 @dataclass

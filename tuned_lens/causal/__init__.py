@@ -1,7 +1,7 @@
 """Tools for finding and intervening on important subspaces of the residual stream."""
 from .subspaces import (
-    ablate_subspace,
     CausalBasis,
+    ablate_subspace,
     extract_causal_bases,
     remove_subspace,
 )

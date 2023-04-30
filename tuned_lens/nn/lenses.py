@@ -1,17 +1,18 @@
 """Provides lenses for decoding hidden states into logits."""
-from copy import deepcopy
-from dataclasses import dataclass, asdict
+import abc
 import inspect
+import json
+from copy import deepcopy
+from dataclasses import asdict, dataclass
 from logging import warning
 from pathlib import Path
-import json
-import abc
+from typing import Dict, Generator, Optional, Union
+
+import torch as th
+from transformers import PreTrainedModel
 
 from tuned_lens.load_artifacts import load_lens_artifacts
 from tuned_lens.nn.unembed import Unembed
-from transformers import PreTrainedModel
-from typing import Dict, Optional, Generator, Union
-import torch as th
 
 
 class Lens(abc.ABC, th.nn.Module):

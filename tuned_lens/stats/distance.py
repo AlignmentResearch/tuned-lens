@@ -1,10 +1,11 @@
+"""Various distance metrics for probability distributions."""
 import math
+
 import torch as th
 
 
 def js_divergence(logit_p: th.Tensor, logit_q: th.Tensor, dim: int = -1) -> th.Tensor:
-    """
-    Compute the Jensen-Shannon divergence between two sets of logits.
+    """Compute the Jensen-Shannon divergence between two sets of logits.
 
     Conceptually, the JSD is the info value of learning which of two distributions,
     P or Q, that a random variable is drawn from, starting from a uniform prior over
@@ -39,7 +40,7 @@ def kl_divergence(logit_p: th.Tensor, logit_q: th.Tensor, dim: int = -1) -> th.T
 
 
 def sqrtmh(x: th.Tensor) -> th.Tensor:
-    """Unique PSD square root of a Hermitian positive semi-definite matrix"""
+    """Unique PSD square root of a Hermitian positive semi-definite matrix."""
     dtype = x.dtype
 
     # This is actually precision-sensitive

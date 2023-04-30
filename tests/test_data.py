@@ -1,7 +1,9 @@
-from tuned_lens import data
-from datasets import Dataset
-import transformers as tr
 import math
+
+import transformers as tr
+from datasets import Dataset
+
+from tuned_lens import data
 
 
 def test_chunk_and_tokenize(

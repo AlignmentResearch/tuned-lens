@@ -1,13 +1,15 @@
 """Provides a class for mapping transformer hidden states to logits (and vice versa)."""
 from dataclasses import dataclass
+from typing import Callable, Literal, Optional, cast
+
+import torch as th
 from torch.autograd.functional import hessian
 from torch.distributions import Distribution
 from transformers import PreTrainedModel
-from typing import cast, Callable, Literal, Optional
+
 from tuned_lens.model_surgery import get_final_norm, get_transformer_layers
 from tuned_lens.stats import kl_divergence
 from tuned_lens.utils import maybe_unpack, tensor_hash
-import torch as th
 
 
 @dataclass

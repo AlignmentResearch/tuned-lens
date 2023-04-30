@@ -1,11 +1,10 @@
 """Contains utility classes for creating heatmap visualizations."""
 from dataclasses import dataclass
-from typing import Any, Dict
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from plotly import graph_objects as go
 import numpy as np
 from numpy.typing import NDArray
+from plotly import graph_objects as go
 
 
 @dataclass

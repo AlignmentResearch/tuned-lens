@@ -1,6 +1,7 @@
-from tuned_lens.causal import remove_subspace
 import pytest
 import torch as th
+
+from tuned_lens.causal import remove_subspace
 
 
 @pytest.mark.parametrize("d", list(range(1, 1000, 100)))
