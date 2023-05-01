@@ -217,11 +217,17 @@ class Train:
     def execute(self):
         """Trains a TunedLens model against a transformer on a dataset."""
         # Load model, tokenizer, data, and lens
-        device_map = self.dist.init()
+        self.dist.init()
         model = tokenizer = data = lens = nats_to_bpb = model_name = None
+
+        # Annoyingly, FSDP is incompatible with the `device_map` parameter on
+        # `from_pretrained`, because it adds forward hooks to the submodules that move
+        # things around to different devices. But `bitsandbytes` requires `device_map`
+        # to work at all. So we use `device_map` iff we're using FSDP.
+        load_device = self.dist.device if not self.dist.fsdp else None
         if self.dist.primary:
             # Let the primary processes populate the cache
-            model, tokenizer = self.model.load(device_map)
+            model, tokenizer = self.model.load(load_device)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
 
@@ -232,7 +238,7 @@ class Train:
 
         if not self.dist.primary:
             # Let the non-primary processes load from the cache
-            model, tokenizer = self.model.load(device_map, must_use_cache=True)
+            model, tokenizer = self.model.load(load_device, must_use_cache=True)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
 

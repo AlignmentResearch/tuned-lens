@@ -75,11 +75,14 @@ class Eval:
     def execute(self):
         """Trains a TunedLens model against a transformer on a dataset."""
         # Load model, tokenizer, data, and lens
-        device_map = self.dist.init()
+        self.dist.init()
         model = tokenizer = data = lens = nats_to_bpb = model_name = None
+
+        # See comment in train_loop.py for why we do this
+        load_device = self.dist.device if not self.dist.fsdp else None
         if self.dist.primary:
             # Let the primary processes populate the cache
-            model, tokenizer = self.model.load(device_map)
+            model, tokenizer = self.model.load(load_device)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.load_lens(model)
 
@@ -87,7 +90,7 @@ class Eval:
 
         if not self.dist.primary:
             # Let the non-primary processes load from the cache
-            model, tokenizer = self.model.load(device_map, must_use_cache=True)
+            model, tokenizer = self.model.load(load_device, must_use_cache=True)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.load_lens(model)
 

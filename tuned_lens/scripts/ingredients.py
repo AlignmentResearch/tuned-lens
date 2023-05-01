@@ -118,13 +118,13 @@ class Model:
         return tokenizer
 
     def load(
-        self, device_map: dict[str, th.device], must_use_cache: bool = False
+        self, device: Optional[th.device], must_use_cache: bool = False
     ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
         """Load the model and tokenizer."""
         print(f"Loading pretrained weights for '{self.name}'...")
         model = AutoModelForCausalLM.from_pretrained(  # type: ignore
             self.name,
-            device_map=device_map,
+            device_map={"": device} if device is not None else None,
             load_in_8bit=self.int8,
             low_cpu_mem_usage=True,
             revision=self.revision,
@@ -314,7 +314,7 @@ class Distributed:
             dataset = dataset.shard(self.world_size, self.rank)
         return dataset
 
-    def init(self) -> dict[str, th.device]:
+    def init(self):
         """Initialize distributed process group if started with elastic launch.
 
         Returns:
@@ -329,10 +329,6 @@ class Distributed:
                 th.cuda.is_available()
             ), "CUDA must be available for distributed training"
             th.cuda.set_device(self.local_rank)
-
-            return {"": th.device("cuda", self.local_rank)}
-
-        return {"": self.device}
 
     def barrier(self) -> None:
         """Barrier for all processes."""
