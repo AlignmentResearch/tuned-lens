@@ -1,10 +1,11 @@
-import tempfile
+from pathlib import Path
 
 import mock
 import pytest
 import torch as th
 import transformers as trf
 
+from tuned_lens.load_artifacts import load_lens_artifacts
 from tuned_lens.nn.lenses import LogitLens, TunedLens, TunedLensConfig
 from tuned_lens.nn.unembed import Unembed
 
@@ -77,14 +78,53 @@ def test_tuned_lens_forward(random_tuned_lens: TunedLens):
     assert th.allclose(logits_forward, logits)
 
 
-def test_tuned_lens_save_and_load(unembed: Unembed, random_tuned_lens: TunedLens):
+def test_tuned_lens_save_and_load(
+    unembed: Unembed, random_tuned_lens: TunedLens, tmp_path: Path
+):
     randn = th.randn(1, 10, 128)
 
     logits_before = random_tuned_lens(randn, 1)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        random_tuned_lens.save(tmpdir)
-        reloaded_tuned_lens = TunedLens.from_unembed_and_pretrained(
-            lens_resource_id=tmpdir, unembed=unembed
+    random_tuned_lens.save(tmp_path)
+    reloaded_tuned_lens = TunedLens.from_unembed_and_pretrained(
+        lens_resource_id=tmp_path, unembed=unembed
+    )
+    logits_after = reloaded_tuned_lens(randn, 1)
+    assert th.allclose(logits_before, logits_after)
+
+
+def test_from_model_and_pretrained_propogates_kwargs(
+    random_tuned_lens: TunedLens, unembed: Unembed, tmp_path: Path
+):
+    random_tuned_lens.save(tmp_path)
+
+    with mock.patch(
+        "tuned_lens.load_artifacts.load_lens_artifacts",
+        mock.MagicMock(
+            load_lens_artifacts,
+            return_value=(tmp_path / "config.json", tmp_path / "params.pt"),
+        ),
+    ) as mock_load_lens_artifacts:
+        mock_load_lens_artifacts.__code__.co_varnames = (
+            "resource_id",
+            "unembed",
+            "revision",
         )
-        logits_after = reloaded_tuned_lens(randn, 1)
-        assert th.allclose(logits_before, logits_after)
+        TunedLens.from_unembed_and_pretrained(
+            lens_resource_id="does not use", unembed=unembed, revision="foo"
+        )
+        assert mock_load_lens_artifacts.call_args.kwargs["revision"] == "foo"
+
+        with pytest.raises(TypeError):
+            # Should not just be able to pass any kwarg
+            TunedLens.from_unembed_and_pretrained(
+                lens_resource_id="does not use",
+                unembed=unembed,
+                revision="foo",
+                bad_kwarg="bar",
+            )
+
+        with pytest.raises(TypeError):
+            # Should not be able to specify both resource_id and and lens_resource_id
+            TunedLens.from_unembed_and_pretrained(
+                lens_resource_id="does not use", unembed=unembed, resource_id="bar"
+            )

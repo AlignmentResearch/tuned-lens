@@ -246,14 +246,12 @@ class TunedLens(Lens):
         Returns:
             A TunedLens instance.
         """
-        artifact_kwargs = set(
-            inspect.getfullargspec(load_artifacts.load_lens_artifacts).args
-        )
+        # Validate kwargs
+        load_artifact_varnames = load_artifacts.load_lens_artifacts.__code__.co_varnames
 
-        # Create the config
         config_path, ckpt_path = load_artifacts.load_lens_artifacts(
             resource_id=lens_resource_id,
-            **{k: v for k, v in kwargs.items() if k in artifact_kwargs},
+            **{k: v for k, v in kwargs.items() if k in load_artifact_varnames},
         )
 
         with open(config_path, "r") as f:
@@ -269,10 +267,11 @@ class TunedLens(Lens):
         # Create the lens
         lens = cls(unembed, config)
 
+        th_load_kwargs = {
+            **{k: v for k, v in kwargs.items() if k not in load_artifact_varnames}
+        }
         # Load parameters
-        state = th.load(
-            ckpt_path, **{k: v for k, v in kwargs.items() if k not in artifact_kwargs}
-        )
+        state = th.load(ckpt_path, **th_load_kwargs)
 
         lens.layer_translators.load_state_dict(state)
 
