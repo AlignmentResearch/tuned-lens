@@ -263,7 +263,7 @@ class TunedLens(Lens):
         if config.unemebd_hash and unembed.unembedding_hash() != config.unemebd_hash:
             warning(
                 "The unembeding matrix hash does not match the lens' hash."
-                " This lens may have been trained with a different unembeding."
+                "This lens may have been trained with a different unembedding."
             )
 
         # Create the lens
