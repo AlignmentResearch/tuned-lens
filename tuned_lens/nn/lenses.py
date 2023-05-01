@@ -11,7 +11,7 @@ from typing import Dict, Generator, Optional, Union
 import torch as th
 from transformers import PreTrainedModel
 
-from tuned_lens.load_artifacts import load_lens_artifacts
+from tuned_lens import load_artifacts
 from tuned_lens.nn.unembed import Unembed
 
 
@@ -243,15 +243,12 @@ class TunedLens(Lens):
         Returns:
             A TunedLens instance.
         """
-        artifact_kwargs = set(inspect.getfullargspec(load_lens_artifacts).kwonlyargs)
-        load_kwargs = set(inspect.getfullargspec(th.load).kwonlyargs)
-        if unrecognized := [k not in (artifact_kwargs | load_kwargs) for k in kwargs]:
-            raise ValueError(f"Unrecognized keyword argument(s) {unrecognized}.")
+        # Validate kwargs
+        load_artifact_varnames = load_artifacts.load_lens_artifacts.__code__.co_varnames
 
-        # Create the config
-        config_path, ckpt_path = load_lens_artifacts(
-            lens_resource_id,
-            **{k: v for k, v in kwargs.items() if k in artifact_kwargs},
+        config_path, ckpt_path = load_artifacts.load_lens_artifacts(
+            resource_id=lens_resource_id,
+            **{k: v for k, v in kwargs.items() if k in load_artifact_varnames},
         )
 
         with open(config_path, "r") as f:
@@ -261,16 +258,17 @@ class TunedLens(Lens):
         if config.unemebd_hash and unembed.unembedding_hash() != config.unemebd_hash:
             warning(
                 "The unembeding matrix hash does not match the lens' hash."
-                "This lens may have been trained with a different unembeding."
+                "This lens may have been trained with a different unembedding."
             )
 
         # Create the lens
         lens = cls(unembed, config)
 
+        th_load_kwargs = {
+            **{k: v for k, v in kwargs.items() if k not in load_artifact_varnames}
+        }
         # Load parameters
-        state = th.load(
-            ckpt_path, **{k: v for k, v in kwargs.items() if k in load_kwargs}
-        )
+        state = th.load(ckpt_path, **th_load_kwargs)
 
         lens.layer_translators.load_state_dict(state)
 

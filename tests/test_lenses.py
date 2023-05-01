@@ -1,10 +1,11 @@
-import tempfile
+from pathlib import Path
 
 import mock
 import pytest
 import torch as th
 import transformers as trf
 
+from tuned_lens.load_artifacts import load_lens_artifacts
 from tuned_lens.nn.lenses import LogitLens, TunedLens, TunedLensConfig
 from tuned_lens.nn.unembed import Unembed
 
@@ -52,7 +53,7 @@ def tuned_lens_config():
 
 
 @pytest.fixture
-def tuned_lens(tuned_lens_config, unembed):
+def random_tuned_lens(tuned_lens_config, unembed):
     tuned_lens = TunedLens(
         unembed,
         tuned_lens_config,
@@ -70,31 +71,60 @@ def test_tuned_lens_from_model(random_small_model: trf.PreTrainedModel):
     assert tuned_lens.config.d_model == random_small_model.config.hidden_size
 
 
-def test_tuned_lens_forward(tuned_lens: TunedLens):
+def test_tuned_lens_forward(random_tuned_lens: TunedLens):
     randn = th.randn(1, 10, 128)
-    logits_forward = tuned_lens.forward(randn, 0)
-    logits = tuned_lens.unembed.forward(randn + tuned_lens[0](randn))
+    logits_forward = random_tuned_lens.forward(randn, 0)
+    logits = random_tuned_lens.unembed.forward(randn + random_tuned_lens[0](randn))
     assert th.allclose(logits_forward, logits)
 
 
-def test_tuned_lens_save_and_load(unembed: Unembed, tuned_lens: TunedLens):
+def test_tuned_lens_save_and_load(
+    unembed: Unembed, random_tuned_lens: TunedLens, tmp_path: Path
+):
     randn = th.randn(1, 10, 128)
 
-    logits_before = tuned_lens(randn, 1)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tuned_lens.save(tmpdir)
-        tuned_lens = TunedLens.from_unembed_and_pretrained(
-            lens_resource_id=tmpdir, unembed=unembed
+    logits_before = random_tuned_lens(randn, 1)
+    random_tuned_lens.save(tmp_path)
+    reloaded_tuned_lens = TunedLens.from_unembed_and_pretrained(
+        lens_resource_id=tmp_path, unembed=unembed
+    )
+    logits_after = reloaded_tuned_lens(randn, 1)
+    assert th.allclose(logits_before, logits_after)
+
+
+def test_from_model_and_pretrained_propogates_kwargs(
+    random_tuned_lens: TunedLens, unembed: Unembed, tmp_path: Path
+):
+    random_tuned_lens.save(tmp_path)
+
+    with mock.patch(
+        "tuned_lens.load_artifacts.load_lens_artifacts",
+        mock.MagicMock(
+            load_lens_artifacts,
+            return_value=(tmp_path / "config.json", tmp_path / "params.pt"),
+        ),
+    ) as mock_load_lens_artifacts:
+        mock_load_lens_artifacts.__code__.co_varnames = (
+            "resource_id",
+            "unembed",
+            "revision",
         )
-        logits_after = tuned_lens(randn, 1)
-        assert th.allclose(logits_before, logits_after)
-
-
-def test_tuned_lens_from_unemebd_and_pretrained_raises(unembed: Unembed):
-    with pytest.raises(ValueError, match="Unrecognized keyword argument"):
         TunedLens.from_unembed_and_pretrained(
-            unembed=unembed,
-            lens_resource_id="will-never-reach",
-            banana="non-existent",
-            apple=1,
+            lens_resource_id="does not use", unembed=unembed, revision="foo"
         )
+        assert mock_load_lens_artifacts.call_args.kwargs["revision"] == "foo"
+
+        with pytest.raises(TypeError):
+            # Should not just be able to pass any kwarg
+            TunedLens.from_unembed_and_pretrained(
+                lens_resource_id="does not use",
+                unembed=unembed,
+                revision="foo",
+                bad_kwarg="bar",
+            )
+
+        with pytest.raises(TypeError):
+            # Should not be able to specify both resource_id and and lens_resource_id
+            TunedLens.from_unembed_and_pretrained(
+                lens_resource_id="does not use", unembed=unembed, resource_id="bar"
+            )
