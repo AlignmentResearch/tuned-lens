@@ -1,4 +1,3 @@
-import re
 import tempfile
 
 import mock
@@ -53,7 +52,7 @@ def tuned_lens_config():
 
 
 @pytest.fixture
-def tuned_lens(tuned_lens_config, unembed):
+def random_tuned_lens(tuned_lens_config, unembed):
     tuned_lens = TunedLens(
         unembed,
         tuned_lens_config,
@@ -71,33 +70,21 @@ def test_tuned_lens_from_model(random_small_model: trf.PreTrainedModel):
     assert tuned_lens.config.d_model == random_small_model.config.hidden_size
 
 
-def test_tuned_lens_forward(tuned_lens: TunedLens):
+def test_tuned_lens_forward(random_tuned_lens: TunedLens):
     randn = th.randn(1, 10, 128)
-    logits_forward = tuned_lens.forward(randn, 0)
-    logits = tuned_lens.unembed.forward(randn + tuned_lens[0](randn))
+    logits_forward = random_tuned_lens.forward(randn, 0)
+    logits = random_tuned_lens.unembed.forward(randn + random_tuned_lens[0](randn))
     assert th.allclose(logits_forward, logits)
 
 
-def test_tuned_lens_save_and_load(unembed: Unembed, tuned_lens: TunedLens):
+def test_tuned_lens_save_and_load(unembed: Unembed, random_tuned_lens: TunedLens):
     randn = th.randn(1, 10, 128)
 
-    logits_before = tuned_lens(randn, 1)
+    logits_before = random_tuned_lens(randn, 1)
     with tempfile.TemporaryDirectory() as tmpdir:
-        tuned_lens.save(tmpdir)
-        tuned_lens = TunedLens.from_unembed_and_pretrained(
+        random_tuned_lens.save(tmpdir)
+        reloaded_tuned_lens = TunedLens.from_unembed_and_pretrained(
             lens_resource_id=tmpdir, unembed=unembed
         )
-        logits_after = tuned_lens(randn, 1)
+        logits_after = reloaded_tuned_lens(randn, 1)
         assert th.allclose(logits_before, logits_after)
-
-
-def test_tuned_lens_from_unemebd_and_pretrained_raises(unembed: Unembed):
-    with pytest.raises(
-        ValueError, match=re.escape("Unrecognized keyword argument(s) banana, apple.")
-    ):
-        TunedLens.from_unembed_and_pretrained(
-            unembed=unembed,
-            lens_resource_id="will-never-reach",
-            banana="non-existent",
-            apple=1,
-        )

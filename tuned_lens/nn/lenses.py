@@ -11,7 +11,7 @@ from typing import Dict, Generator, Optional, Union
 import torch as th
 from transformers import PreTrainedModel
 
-from tuned_lens.load_artifacts import load_lens_artifacts
+from tuned_lens import load_artifacts
 from tuned_lens.nn.unembed import Unembed
 
 
@@ -246,18 +246,13 @@ class TunedLens(Lens):
         Returns:
             A TunedLens instance.
         """
-        artifact_kwargs = set(inspect.getfullargspec(load_lens_artifacts).kwonlyargs)
-        load_kwargs = set(inspect.getfullargspec(th.load).kwonlyargs)
-        if unrecognized := [
-            k for k in kwargs if k not in artifact_kwargs | load_kwargs
-        ]:
-            raise ValueError(
-                f"Unrecognized keyword argument(s) {', '.join(unrecognized)}."
-            )
+        artifact_kwargs = set(
+            inspect.getfullargspec(load_artifacts.load_lens_artifacts).args
+        )
 
         # Create the config
-        config_path, ckpt_path = load_lens_artifacts(
-            lens_resource_id,
+        config_path, ckpt_path = load_artifacts.load_lens_artifacts(
+            resource_id=lens_resource_id,
             **{k: v for k, v in kwargs.items() if k in artifact_kwargs},
         )
 
@@ -276,7 +271,7 @@ class TunedLens(Lens):
 
         # Load parameters
         state = th.load(
-            ckpt_path, **{k: v for k, v in kwargs.items() if k in load_kwargs}
+            ckpt_path, **{k: v for k, v in kwargs.items() if k not in artifact_kwargs}
         )
 
         lens.layer_translators.load_state_dict(state)
