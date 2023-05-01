@@ -66,16 +66,13 @@ class LogitLens(Lens):
     def from_model(
         cls,
         model: PreTrainedModel,
-        extra_layers: int = 0,
     ) -> "LogitLens":
         """Create a LogitLens from a pretrained model.
 
         Args:
             model: A pretrained model from the transformers library you wish to inspect.
-            extra_layers: The number of extra layers to apply to the residual stream
-                before decoding into logits.
         """
-        unembed = Unembed(model, extra_layers)
+        unembed = Unembed(model)
         return cls(unembed)
 
     def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
