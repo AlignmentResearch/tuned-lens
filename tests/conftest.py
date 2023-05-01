@@ -26,7 +26,7 @@ def text_dataset(text_dataset_path: Path) -> Dataset:
         "bigscience/bloom-560m",
         "EleutherAI/gpt-neo-125M",
         "facebook/opt-125m",
-        "mockmodel/llamma-tiny",
+        "mockmodel/llama-tiny",
         "gpt2",
     ],
 )
@@ -36,7 +36,7 @@ def random_small_model(request: str) -> tr.PreTrainedModel:
 
     # We use a random model with the correct config instead of downloading the
     # whole pretrained checkpoint.
-    if small_model_name == "mockmodel/llamma-tiny":
+    if small_model_name == "mockmodel/llama-tiny":
         config = tr.LlamaConfig(
             vocab_size=32_000,
             hidden_size=128,
