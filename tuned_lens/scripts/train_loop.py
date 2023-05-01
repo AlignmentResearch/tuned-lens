@@ -20,7 +20,7 @@ from tuned_lens.scripts.ingredients import (
     Model,
     Optimizer,
 )
-from tuned_lens.utils import maybe_all_reduce, shift_labels, shift_preds
+from tuned_lens.utils import maybe_all_reduce, shift_labels, shift_preds, pytree_map
 
 
 class LossChoice(enum.Enum):
@@ -217,11 +217,11 @@ class Train:
     def execute(self):
         """Trains a TunedLens model against a transformer on a dataset."""
         # Load model, tokenizer, data, and lens
-        self.dist.init()
+        device_map = self.dist.init()
         model = tokenizer = data = lens = nats_to_bpb = model_name = None
         if self.dist.primary:
             # Let the primary processes populate the cache
-            model, tokenizer = self.model.load()
+            model, tokenizer = self.model.load(device_map)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
 
@@ -232,7 +232,7 @@ class Train:
 
         if not self.dist.primary:
             # Let the non-primary processes load from the cache
-            model, tokenizer = self.model.load(must_use_cache=True)
+            model, tokenizer = self.model.load(device_map, must_use_cache=True)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
 
@@ -275,12 +275,13 @@ class Train:
         pbar = tqdm(islice(dl, total_batches), desc="Training", total=total_batches)
         for batch_idx, batch in enumerate(pbar, start=1):
             assert isinstance(batch, dict)
-            batch = self.dist.send_to_device(batch)
+
             with th.no_grad():
+                batch = self.dist.send_to_device(batch)
                 output = model(**batch, output_hidden_states=True)
 
             final_logits = output.logits
-            hidden_stats = output.hidden_states[:-1]
+            hidden_states = output.hidden_states[:-1]
 
             shift = self.token_shift
             if self.loss == LossChoice.CE:
@@ -290,7 +291,7 @@ class Train:
                 if shift is None:
                     shift = 1
             elif self.loss == LossChoice.KL:
-                labels = final_logits.log_softmax(dim=-1)
+                labels = final_logits.float().log_softmax(dim=-1)
 
                 # Match the *current* token distribution by default
                 if shift is None:
@@ -301,9 +302,10 @@ class Train:
             labels = shift_labels(labels, shift)
 
             # We do this sequentially to save VRAM
-            for i, h in enumerate(hidden_stats):
-                # bfloat16 has larger dynamic range than float16 and seems to be better
-                # for computing log softmax & KL loss
+            for i, h in enumerate(hidden_states):
+                # We use bfloat16 because it has a larger dynamic range than float16
+                # and it seems to remove the need for doing grad scaling, which is very
+                # annoying to set up in the context of multiple backward passes.
                 with th.autocast(self.dist.device.type, dtype=th.bfloat16):
                     logits = shift_preds(ddp_lens(h, idx=i), shift)
 

@@ -118,17 +118,18 @@ class Model:
         return tokenizer
 
     def load(
-        self, must_use_cache: bool = False
+        self, device_map: dict[str, th.device], must_use_cache: bool = False
     ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
         """Load the model and tokenizer."""
         print(f"Loading pretrained weights for '{self.name}'...")
         model = AutoModelForCausalLM.from_pretrained(  # type: ignore
             self.name,
-            device_map={"": "cpu"}, # No-op required for load_in_8bit
+            device_map=device_map,
             load_in_8bit=self.int8,
             low_cpu_mem_usage=True,
             revision=self.revision,
-            torch_dtype="auto",
+            # `bitsandbytes` requires fp16 weights
+            torch_dtype=th.float16 if self.int8 else "auto",
             local_files_only=must_use_cache,
         )
 
@@ -261,7 +262,11 @@ class Distributed:
     @property
     def device(self) -> th.device:
         """The device associated with this process."""
-        return th.device("cuda") if th.cuda.is_available() else th.device("cpu")
+        return (
+            th.device("cuda", self.local_rank)
+            if th.cuda.is_available()
+            else th.device("cpu")
+        )
 
     def shard_model(
         self, model: PreTrainedModel
@@ -289,7 +294,10 @@ class Distributed:
         elif self.cpu_offload:
             raise ValueError("CPU offload requires FSDP.")
         else:
-            model.to(self.device)
+            # We don't need to move the model to the appropriate device because we
+            # used device_map when loading it. When load_in_8bit=True, trying to move
+            # the model actually throws an error.
+            # model.to(self.device)
             return model
 
     def distribute_lens(self, lens: Lens) -> Union[DDP, Lens]:
@@ -306,8 +314,13 @@ class Distributed:
             dataset = dataset.shard(self.world_size, self.rank)
         return dataset
 
-    def init(self) -> None:
-        """Initialize distributed process group if started with elastic launch."""
+    def init(self) -> dict[str, th.device]:
+        """Initialize distributed process group if started with elastic launch.
+        
+        Returns:
+            Dictionary which can be passed to `device_map` in HF's `from_pretrained`
+            methods.
+        """
         # Support both distributed and non-distributed training
         local_rank = os.environ.get("LOCAL_RANK")
         if local_rank is not None:
@@ -316,6 +329,10 @@ class Distributed:
                 th.cuda.is_available()
             ), "CUDA must be available for distributed training"
             th.cuda.set_device(self.local_rank)
+        
+            return {"": th.device("cuda", self.local_rank)}
+        
+        return {"": self.device}
 
     def barrier(self) -> None:
         """Barrier for all processes."""
