@@ -20,7 +20,7 @@ from tuned_lens.scripts.ingredients import (
     Model,
     Optimizer,
 )
-from tuned_lens.utils import maybe_all_reduce, shift_labels, shift_preds, pytree_map
+from tuned_lens.utils import maybe_all_reduce, shift_labels, shift_preds
 
 
 class LossChoice(enum.Enum):

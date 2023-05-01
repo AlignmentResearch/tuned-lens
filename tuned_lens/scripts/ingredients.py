@@ -316,7 +316,7 @@ class Distributed:
 
     def init(self) -> dict[str, th.device]:
         """Initialize distributed process group if started with elastic launch.
-        
+
         Returns:
             Dictionary which can be passed to `device_map` in HF's `from_pretrained`
             methods.
@@ -329,9 +329,9 @@ class Distributed:
                 th.cuda.is_available()
             ), "CUDA must be available for distributed training"
             th.cuda.set_device(self.local_rank)
-        
+
             return {"": th.device("cuda", self.local_rank)}
-        
+
         return {"": self.device}
 
     def barrier(self) -> None:
