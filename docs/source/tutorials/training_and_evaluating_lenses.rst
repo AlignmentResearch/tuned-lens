@@ -84,13 +84,13 @@ If the transformer model does not fit on a single GPU, you can also use `fully s
     --per_gpu_batch_size=1 \
     --fsdp
 
-You can also use cpu offloading to train lenses on very large models while using less VRAM it can be enabled with the `--cpu_offload` flag. However, this substantially slows down training and is still experimental.
+You can also use cpu offloading to train lenses on very large models while using less VRAM it can be enabled with the ``--cpu_offload`` flag. However, this substantially slows down training and is still experimental.
 
 ++++++++++++++++++++++++
 Weights & Biases Logging
 ++++++++++++++++++++++++
 
-To enable logging to `wandb`, you can pass the `--wandb <name-of-run>` flag. This will log the training and evaluation metrics to Wandb. You will need to set the `WANDB_API_KEY`, `WANDB_ENTITY` and `WANDB_PROJECT`` environment variables in your environment. You can find your API key on your `wandb profile page <https://wandb.ai/settings>`_. To make this easy, you can create a `.env`` file in the root of the project with the following contents.
+To enable logging to ``wandb``, you can pass the ``--wandb <name-of-run>`` flag. This will log the training and evaluation metrics to ``wandb``. You will need to set the ``WANDB_API_KEY``, ``WANDB_ENTITY`` and ``WANDB_PROJECT`` environment variables in your environment. You can find your API key on your `wandb profile page <https://wandb.ai/settings>`_. To make this easy, you can create a ``.env`` file in the root of the project with the following contents.
 
 .. code-block:: bash
 
@@ -99,4 +99,4 @@ To enable logging to `wandb`, you can pass the `--wandb <name-of-run>` flag. Thi
     WANDB_ENTITY= # your-entity
     WANDB_PROJECT= # your-project-name
 
-Then you can source it when you start your shell by running `source .env`. For additional Wandb environment variables, `see here <https://docs.wandb.ai/guides/track/advanced/environment-variables>`_.
+Then you can source it when you start your shell by running ``source .env``. For additional ``wandb`` environment variables, `see here <https://docs.wandb.ai/guides/track/advanced/environment-variables>`_.

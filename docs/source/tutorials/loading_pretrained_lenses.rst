@@ -61,4 +61,4 @@ Note the folder structure must look as follows:
     ├── config.json
     └── params.pt
 
-If you saved the model using ``tuned_lens.save("path/to/folder")`` then this should already be the case.
+If you saved the model using :code:`tuned_lens.save("path/to/folder")` then this should already be the case.
