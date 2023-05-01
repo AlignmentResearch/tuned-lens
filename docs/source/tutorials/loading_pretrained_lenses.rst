@@ -1,11 +1,13 @@
 .. _loading-pertained-lenses:
     How to train and evaluate lenses on the pile
 
-==========================
+##########################
 Loading a pre-trained lens
-==========================
+##########################
 
-**From the hugging face API**
++++++++++++++++++++++++++
+From the hugging face API
++++++++++++++++++++++++++
 
 .. _pre-trained lenses folder: https://huggingface.co/spaces/AlignmentResearch/tuned-lens/tree/main/lens
 
@@ -24,7 +26,9 @@ a model that was used to train it so first load the model and then the lens.
 If you want to load from your own code space you can override the default
 by providing the correct environment variables see :ref:`tuned\_lens.load\_artifacts`.
 
-**From the a local folder**
++++++++++++++++++++++++
+From the a local folder
++++++++++++++++++++++++
 
 If you have trained a lens and want to load it for inference simply pass the
 model used to train it and the folder you saved it to.
