@@ -112,6 +112,8 @@ class Train:
             config=dataclasses.asdict(self),
             group=model_name,
             name=self.wandb,
+            project="tuned-lens",
+            entity="eleutherai",
         )
         wandb.watch(lens)
 

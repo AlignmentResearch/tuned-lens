@@ -71,7 +71,10 @@ class Data:
                 )
 
         processed, nats_to_bpb = chunk_and_tokenize(
-            dataset, tokenizer, text_key=self.text_column, max_length=self.max_length
+            dataset,
+            tokenizer,
+            text_key=self.text_column,
+            max_length=self.max_length,
         )
 
         print(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
