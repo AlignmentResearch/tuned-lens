@@ -57,6 +57,17 @@ def chunk_and_tokenize(
             truncation=True,
         )
 
+        if overflow := output.pop("overflowing_tokens"):
+            # Tokenizers that work like this return unnested lists of ints
+            assert isinstance(output["input_ids"][0], int)
+
+            # Chunk the overflow into batches of size `chunk_size`
+            chunks = [output["input_ids"]] + [
+                overflow[i * chunk_size : (i + 1) * chunk_size]
+                for i in range(math.ceil(len(overflow) / chunk_size))
+            ]
+            output = {"input_ids": chunks}
+
         total_tokens = sum(len(ids) for ids in output["input_ids"])
         total_bytes = len(joined_text.encode("utf-8"))
 
