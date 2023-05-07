@@ -42,9 +42,6 @@ class Eval:
     seed: int = 42
     """Random seed used for data shuffling."""
 
-    grad_alignment: Optional[bool] = field(action="store_true")
-    """Evaluate gradient alignment."""
-
     limit: Optional[int] = None
     """Number of batches to evaluate on. If None, will use the entire dataset."""
 
@@ -60,8 +57,6 @@ class Eval:
 
     per_gpu_batch_size: int = 1
     """Number of samples to try to fit on a GPU at once."""
-
-    residual_stats: bool = field(action="store_true")
 
     def load_lens(self, model) -> Lens:
         """Load the tuned lens model."""
