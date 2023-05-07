@@ -40,11 +40,15 @@ docs = [
     "nbsphinx",
 ]
 test = [
+    "sentencepiece>=0.1.99",
     "pytest-skip-slow",
     "pytest-cov",
     "nbmake",
     "pytest",
     "mock",
+]
+slow_tokenizers = [
+    "sentencepiece>=0.1.99"
 ]
 notebooks = [
     "ipywidgets",
