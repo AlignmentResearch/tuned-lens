@@ -71,7 +71,7 @@ class Eval:
                 lenses[
                     f"tuned[{model.config.name_or_path}]"
                 ] = TunedLens.from_model_and_pretrained(model, self.lens_name)
-            elif match := re.match(r"tuned\[([a-z0-9\-]+)\]", lens_type):
+            elif match := re.match(r"tuned\[([a-zA-Z0-9/\.\-]+)\]", lens_type):
                 model_name = match.group(1)
                 new_model = AutoModelForCausalLM.from_pretrained(  # type: ignore
                     model_name,
