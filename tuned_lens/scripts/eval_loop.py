@@ -1,4 +1,5 @@
 """Evaluation loop for the tuned lens model."""
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -39,20 +40,20 @@ class Eval:
 
     dist: Distributed
 
-    lens_name: str = field(alias=["-l"])
-    """Path to the tuned lens model."""
-
     output: Path = field(alias=["-o"])
     """Folder to save the eval results to."""
 
-    lens_types: list[str] = field(default_factory=lambda: ["tuned", "logit"])
+    lens_name: Optional[str] = field(alias=["-l"], default=None)
+    """Path to the tuned lens model."""
+
+    lens_types: list[str] = field(default_factory=lambda: ["logit"])
     """Types of lenses to evaluate."""
 
     seed: int = 42
     """Random seed used for data shuffling."""
 
-    limit: Optional[int] = None
-    """Number of batches to evaluate on. If None, will use the entire dataset."""
+    tokens: Optional[int] = None
+    """Number of tokens to evaluate on. If None, will use the entire dataset."""
 
     token_shift: Optional[int] = None
     """How to shift the labels wrt the input tokens (1 = next token, 0 = current token,
@@ -68,10 +69,18 @@ class Eval:
             if lens_type == "logit":
                 lenses["logit"] = LogitLens.from_model(model)
             elif lens_type == "tuned":
+                if self.lens_name is None:
+                    raise ValueError(
+                        "Must specify a lens name when evaluating a tuned lens."
+                    )
                 lenses[
                     f"tuned[{model.config.name_or_path}]"
                 ] = TunedLens.from_model_and_pretrained(model, self.lens_name)
             elif match := re.match(r"tuned\[([a-zA-Z0-9/\.\-]+)\]", lens_type):
+                if self.lens_name is None:
+                    raise ValueError(
+                        "Must specify a lens name when evaluating a tuned lens."
+                    )
                 model_name = match.group(1)
                 new_model = AutoModelForCausalLM.from_pretrained(  # type: ignore
                     model_name,
@@ -84,6 +93,13 @@ class Eval:
             else:
                 raise ValueError(f"Unknown lens type: {lens_type}")
         return lenses
+
+    def calculate_batch_limit(self, tokens_per_sample: int):
+        """Calculate the total number of batches to evaluate on."""
+        assert self.tokens is not None
+        global_batch_size = self.dist.world_size * self.per_gpu_batch_size
+        tokens_per_batch = global_batch_size * tokens_per_sample
+        return self.tokens // tokens_per_batch
 
     @th.autocast("cuda", enabled=th.cuda.is_available())
     @th.no_grad()
@@ -122,9 +138,15 @@ class Eval:
         for lens in lenses.values():
             lens.eval()
 
-        if self.limit:
-            dl = islice(dl, self.limit)
-            total = self.limit
+        if self.tokens is not None:
+            tokens_per_sample = len(data[0]["input_ids"])
+            batch_limit = self.calculate_batch_limit(tokens_per_sample)
+            assert batch_limit > 0, "Batch limit must be positive."
+            assert batch_limit <= len(
+                dl
+            ), "Not enough data to evaluate on that many tokens."
+            dl = islice(dl, batch_limit)
+            total = batch_limit
         else:
             total = len(dl)
 
@@ -148,6 +170,7 @@ class Eval:
 
             shift = self.token_shift if self.token_shift is not None else 1
             final_lps = output.logits.log_softmax(dim=-1)
+
             final_probs = final_lps.exp()
             assert not th.isnan(output.logits).any(), "Logits are NaN"
 
@@ -165,19 +188,31 @@ class Eval:
                     lens_lps = lens(h, idx=j).log_softmax(dim=-1)
                     lens_probs = lens_lps.exp()
 
+                    # Handle the case where the model has more/less tokens than the lens
+                    if final_lps.shape[-1] != lens_lps.shape[-1]:
+                        logging.warning(
+                            "Lens has different number of tokens than model."
+                        )
+
+                    common_vocab = min(final_lps.shape[-1], lens_lps.shape[-1])
+                    trunc_final_lps = final_lps[..., :common_vocab]
+                    trunc_lens_lps = lens_lps[..., :common_vocab]
+                    trunc_final_probs = final_probs[..., :common_vocab]
+                    trunc_lens_probs = lens_probs[..., :common_vocab]
+
                     batch_output[lens_type]["ce"][
                         name
                     ] = th.nn.functional.cross_entropy(
-                        shift_preds(lens_lps, shift).flatten(0, 1),
+                        shift_preds(trunc_lens_lps, shift).flatten(0, 1),
                         labels.flatten(),
                         reduction="none",
                     )
 
                     batch_output[lens_type]["entropy"][name] = th.sum(
-                        -lens_probs * lens_lps, dim=-1
+                        -trunc_lens_probs * trunc_lens_lps, dim=-1
                     )
                     batch_output[lens_type]["kl"][name] = th.sum(
-                        final_probs * (final_lps - lens_lps), dim=-1
+                        trunc_final_probs * (trunc_final_lps - trunc_lens_lps), dim=-1
                     )
 
             batch_output["baseline_ce"]["final"] = th.nn.functional.cross_entropy(

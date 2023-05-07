@@ -10,7 +10,7 @@ def test_eval_subcommand(
     args = (
         f"eval --data.name {text_dataset_path}"
         f" --model.name {gpt2_random_model_local_path}"
-        " --limit 20 --max_length 128"
+        " --tokens 4000 --max_length 128"
         f" --output {tmp_path}"
     )
     args = args.split()
