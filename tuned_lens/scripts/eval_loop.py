@@ -5,6 +5,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import torch as th
 from simple_parsing import field
 from torch.utils.data import DataLoader
@@ -200,16 +201,27 @@ class Eval:
         pbar.close()
         agg = pytree_map(lambda x: nats_to_bpb * x.mean(), pytree_stack(batches))
         agg = pytree_map(lambda x: maybe_all_reduce(x), agg)
+        agg = pytree_map(lambda x: x.cpu().numpy(), agg)
+        assert isinstance(agg, dict)
+
+        batches = pytree_map(lambda x: nats_to_bpb * x, pytree_stack(batches))
+        batches = pytree_map(lambda x: maybe_all_reduce(x), batches)
+        batches = pytree_map(lambda x: x.cpu().numpy(), batches)
+        assert isinstance(batches, dict)
+
         if self.dist.primary:
-            th.save(agg, root_dir / "aggregate_metrics.pt")
+            np.savez_compressed(root_dir / "batches.npz", **batches)
+            np.savez(root_dir / "aggregate_metrics.npz", **agg)
 
         if self.transfer:
             agg_transfer = pytree_map(
                 lambda x: nats_to_bpb * x.mean(0), pytree_stack(transfer_batches)
             )
             agg_transfer = pytree_map(lambda x: maybe_all_reduce(x), agg_transfer)
+            agg_transfer = pytree_map(lambda x: x.cpu().numpy(), agg_transfer)
+
             if self.dist.primary:
-                th.save(agg_transfer, root_dir / "aggregate_transfer_metrics.pt")
+                th.save(agg_transfer, root_dir / "aggregate_transfer_metrics.npz")
 
         for stats in lens_statistics:
             stats.all_reduce_()
