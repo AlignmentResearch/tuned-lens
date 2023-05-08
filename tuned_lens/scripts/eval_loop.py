@@ -241,6 +241,8 @@ class Eval:
 
         if self.dist.primary:
             np.savez_compressed(
-                root_dir / "batches.npz", **flatten(batches, reducer="dot")
+                root_dir / "batches.npz", **flatten(batches, reducer="tuple")
             )
-            np.savez(root_dir / "aggregate_metrics.npz", **flatten(agg, reducer="dot"))
+            np.savez(
+                root_dir / "aggregate_metrics.npz", **flatten(agg, reducer="tuple")
+            )
