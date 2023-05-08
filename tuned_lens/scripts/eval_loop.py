@@ -1,4 +1,5 @@
 """Evaluation loop for the tuned lens model."""
+import json
 import logging
 import re
 from collections import defaultdict
@@ -7,9 +8,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import torch as th
-from flatten_dict import flatten
 from simple_parsing import field
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
@@ -231,18 +230,17 @@ class Eval:
         pbar.close()
         agg = pytree_map(lambda x: nats_to_bpb * x.mean(), pytree_stack(batches))
         agg = pytree_map(lambda x: maybe_all_reduce(x), agg)
-        agg = pytree_map(lambda x: x.cpu().numpy(), agg)
+        agg = pytree_map(lambda x: x.cpu().numpy().item(), agg)
         assert isinstance(agg, dict)
 
-        batches = pytree_map(lambda x: nats_to_bpb * x, pytree_stack(batches))
+        batches = pytree_map(lambda x: nats_to_bpb * x, batches)
         batches = pytree_map(lambda x: maybe_all_reduce(x), batches)
-        batches = pytree_map(lambda x: x.cpu().numpy(), batches)
-        assert isinstance(batches, dict)
+        batches = pytree_map(lambda x: x.cpu().item(), batches)
+        assert isinstance(batches, list)
 
         if self.dist.primary:
-            np.savez_compressed(
-                root_dir / "batches.npz", **flatten(batches, reducer="tuple")
-            )
-            np.savez(
-                root_dir / "aggregate_metrics.npz", **flatten(agg, reducer="tuple")
-            )
+            with (root_dir / "batches.jsonl").open("w") as f:
+                json.dump(batches, f)
+
+            with (root_dir / "aggregate_metrics.json").open("w") as f:
+                json.dump(agg, f)
