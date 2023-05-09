@@ -91,7 +91,7 @@ class Model:
     name: str
     """Name of model to use in the Huggingface Hub."""
 
-    precision: Literal["auto", "bfloat16" "float16", "float32", "int8"] = "auto"
+    precision: Literal["auto", "bfloat16", "float16", "float32", "int8"] = "auto"
     """Precision in which to load the model weights."""
 
     revision: str = "main"
