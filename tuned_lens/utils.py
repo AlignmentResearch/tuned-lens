@@ -1,6 +1,7 @@
 """Utilities for distributed training and handling nested collections of tensors."""
 
 import hashlib
+from contextlib import contextmanager
 from itertools import islice
 from typing import Any, Callable, Iterable, Sequence, Type, TypeVar, Union, cast
 
@@ -109,6 +110,19 @@ T = TypeVar("T")
 def pairwise(it: Iterable[T]) -> Iterable[tuple[T, T]]:
     """Iterate over pairs of elements in an iterable."""
     yield from zip(it, islice(it, 1, None))
+
+
+@contextmanager
+def handle_name_conflicts():
+    """Provide better error messages."""
+    try:
+        yield
+    except OSError as e:
+        raise RuntimeError(
+            "HuggingFace is throwing an error during a `from_pretrained` call. Check "
+            "your CWD to ensure there are no folders with names that may conflict "
+            "with the model name you provided."
+        ) from e
 
 
 # Define pytree type recursively- this works for Pylance but unfortunately not MyPy

@@ -92,8 +92,17 @@ class Train:
         else:
             lens = TunedLens.from_model_and_pretrained(model, self.lens_name_or_path)
 
+        dtypes = {p.dtype for p in lens.parameters()}
+        assert (
+            len(dtypes) == 1
+        ), f"Expected all parameters to have the same dtype, got {dtypes}"
+
+        lens_dtype = next(iter(dtypes))
         lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
-        print(f"Tuned lens parameter memory usage: {lens_size / 2 ** 20:.2f} MB")
+
+        # Include the optimizer state in the memory usage
+        num_bytes = lens_size * (self.opt.per_parameter_optim_state_size() + 1)
+        print(f"Tuned lens memory usage: {num_bytes / 2 ** 20:.2f} MB in {lens_dtype}")
 
         if self.constant:
             for probe in lens:

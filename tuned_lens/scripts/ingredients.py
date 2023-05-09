@@ -3,7 +3,7 @@ import enum
 import os
 from dataclasses import dataclass
 from functools import partial
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import torch as th
 import torch.distributed as dist
@@ -32,6 +32,7 @@ from tuned_lens.model_surgery import get_transformer_layers
 from tuned_lens.nn.lenses import Lens
 from tuned_lens.utils import (
     TreeType,
+    handle_name_conflicts,
     send_to_device,
 )
 
@@ -91,8 +92,8 @@ class Model:
     name: str
     """Name of model to use in the Huggingface Hub."""
 
-    int8: bool = field(action="store_true", default=False)
-    """Load the model weights in mixed int8 mode with `bitsandbytes`."""
+    precision: Literal["auto", "bfloat16", "float16", "float32", "int8"] = "auto"
+    """Precision in which to load the model weights."""
 
     revision: str = "main"
     """Git revision to use for pretrained models."""
@@ -109,13 +110,14 @@ class Model:
 
     def load_tokenizer(self, must_use_cache: bool = False) -> PreTrainedTokenizerBase:
         """Load the tokenizer from huggingface hub."""
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.tokenizer or self.name,
-            revision=self.revision,
-            use_fast=not self.slow_tokenizer,
-            tokenizer_type=self.tokenizer_type,
-            local_files_only=must_use_cache,
-        )
+        with handle_name_conflicts():
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.tokenizer or self.name,
+                revision=self.revision,
+                use_fast=not self.slow_tokenizer,
+                tokenizer_type=self.tokenizer_type,
+                local_files_only=must_use_cache,
+            )
 
         assert isinstance(tokenizer, PreTrainedTokenizerBase)
         return tokenizer
@@ -131,16 +133,28 @@ class Model:
             must_use_cache: If True, will raise an error if the model is not cached.
         """
         print(f"Loading pretrained weights for '{self.name}'...")
-        model = AutoModelForCausalLM.from_pretrained(  # type: ignore
-            self.name,
-            device_map={"": device} if device is not None else None,
-            load_in_8bit=self.int8,
-            low_cpu_mem_usage=True,
-            revision=self.revision,
-            # `bitsandbytes` requires fp16 weights
-            torch_dtype=th.float16 if self.int8 else "auto",
-            local_files_only=must_use_cache,
-        )
+        try:
+            dtype = {
+                "auto": "auto",
+                "bfloat16": th.bfloat16,
+                "float16": th.float16,
+                "float32": th.float32,
+                # `bitsandbytes` requires weights to initially be in fp16
+                "int8": th.float16,
+            }[self.precision]
+        except KeyError as e:
+            raise ValueError(f"Unknown precision: {self.precision}") from e
+
+        with handle_name_conflicts():
+            model = AutoModelForCausalLM.from_pretrained(  # type: ignore
+                self.name,
+                device_map={"": device} if device is not None else None,
+                load_in_8bit=self.precision == "int8",
+                low_cpu_mem_usage=True,
+                revision=self.revision,
+                torch_dtype=dtype,
+                local_files_only=must_use_cache,
+            )
 
         assert isinstance(model, PreTrainedModel)
         model.eval()
@@ -231,6 +245,10 @@ class Optimizer:
             opt = opt_class(params, **config)  # type: ignore[call-arg]
 
         return opt
+
+    def per_parameter_optim_state_size(self) -> int:
+        """The number of elements in the optimizer state per parameter."""
+        return 2 if self.optimizer == OptimizerOption.ADAM else 1
 
 
 @dataclass

@@ -90,7 +90,7 @@ You can also use cpu offloading to train lenses on very large models while using
 Loading the Model Weights in int8
 ++++++++++++++++++++++++++++++++++
 
-The `--int8` flag can be used to load the model's weights in a quantized int8 format. The `bitsandbytes` library must be installed for this to work. This should reduce VRAM usage by roughly a factor of two relative to float16 precision. Unfortunately, this option cannot be combined with `--fsdp` or `--cpu_offload`.
+The `--precision int8` flag can be used to load the model's weights in a quantized int8 format. The `bitsandbytes` library must be installed for this to work. This should reduce VRAM usage by roughly a factor of two relative to float16 precision. Unfortunately, this option cannot be combined with `--fsdp` or `--cpu_offload`.
 
 ++++++++++++++++++++++++
 Weights & Biases Logging
