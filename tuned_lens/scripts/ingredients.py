@@ -123,7 +123,13 @@ class Model:
     def load(
         self, device: Optional[th.device], must_use_cache: bool = False
     ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
-        """Load the model and tokenizer."""
+        """Load the model and tokenizer.
+
+        Args:
+            device: The device to load the model on. Implemented with the `device_map`
+                argument of `AutoModelForCausalLM.from_pretrained`.
+            must_use_cache: If True, will raise an error if the model is not cached.
+        """
         print(f"Loading pretrained weights for '{self.name}'...")
         model = AutoModelForCausalLM.from_pretrained(  # type: ignore
             self.name,
@@ -274,7 +280,7 @@ class Distributed:
     def shard_model(
         self, model: PreTrainedModel
     ) -> Union[FullyShardedDataParallel, PreTrainedModel]:
-        """Shard the model using Fully Sharded Data Parallelism."""
+        """Shard the model using Fully Sharded Data Parallelism if needed."""
         if self.fsdp:
             _, layers = get_transformer_layers(model)
             layer_cls = type(layers[0])
@@ -297,10 +303,6 @@ class Distributed:
         elif self.cpu_offload:
             raise ValueError("CPU offload requires FSDP.")
         else:
-            # We don't need to move the model to the appropriate device because we
-            # used device_map when loading it. When load_in_8bit=True, trying to move
-            # the model actually throws an error.
-            # model.to(self.device)
             return model
 
     def distribute_lens(self, lens: Lens) -> Union[DDP, Lens]:
@@ -318,12 +320,7 @@ class Distributed:
         return dataset
 
     def init(self):
-        """Initialize distributed process group if started with elastic launch.
-
-        Returns:
-            Dictionary which can be passed to `device_map` in HF's `from_pretrained`
-            methods.
-        """
+        """Initialize distributed process group if started with elastic launch."""
         # Support both distributed and non-distributed training
         local_rank = os.environ.get("LOCAL_RANK")
         if local_rank is not None:
