@@ -32,7 +32,7 @@ from tuned_lens.model_surgery import get_transformer_layers
 from tuned_lens.nn.lenses import Lens
 from tuned_lens.utils import (
     TreeType,
-    prevent_name_conflicts,
+    handle_name_conflicts,
     send_to_device,
 )
 
@@ -110,7 +110,7 @@ class Model:
 
     def load_tokenizer(self, must_use_cache: bool = False) -> PreTrainedTokenizerBase:
         """Load the tokenizer from huggingface hub."""
-        with prevent_name_conflicts():
+        with handle_name_conflicts():
             tokenizer = AutoTokenizer.from_pretrained(
                 self.tokenizer or self.name,
                 revision=self.revision,
@@ -145,7 +145,7 @@ class Model:
         except KeyError as e:
             raise ValueError(f"Unknown precision: {self.precision}") from e
 
-        with prevent_name_conflicts():
+        with handle_name_conflicts():
             model = AutoModelForCausalLM.from_pretrained(  # type: ignore
                 self.name,
                 device_map={"": device} if device is not None else None,

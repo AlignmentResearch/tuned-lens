@@ -1,10 +1,8 @@
 """Utilities for distributed training and handling nested collections of tensors."""
 
 import hashlib
-import os
 from contextlib import contextmanager
 from itertools import islice
-from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterable, Sequence, Type, TypeVar, Union, cast
 
 import numpy as np
@@ -115,15 +113,16 @@ def pairwise(it: Iterable[T]) -> Iterable[tuple[T, T]]:
 
 
 @contextmanager
-def prevent_name_conflicts():
-    """Temporarily change cwd to a temporary directory, to prevent name conflicts."""
-    with TemporaryDirectory() as tmp:
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp)
-            yield
-        finally:
-            os.chdir(old_cwd)
+def handle_name_conflicts():
+    """Provide better error messages."""
+    try:
+        yield
+    except OSError as e:
+        raise RuntimeError(
+            "HuggingFace is throwing an error during a `from_pretrained` call. Check "
+            "your CWD to ensure there are no folders with names that may conflict "
+            "with the model name you provided."
+        ) from e
 
 
 # Define pytree type recursively- this works for Pylance but unfortunately not MyPy
