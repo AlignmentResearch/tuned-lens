@@ -1,7 +1,10 @@
 """Utilities for distributed training and handling nested collections of tensors."""
 
 import hashlib
+import os
+from contextlib import contextmanager
 from itertools import islice
+from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterable, Sequence, Type, TypeVar, Union, cast
 
 import numpy as np
@@ -109,6 +112,18 @@ T = TypeVar("T")
 def pairwise(it: Iterable[T]) -> Iterable[tuple[T, T]]:
     """Iterate over pairs of elements in an iterable."""
     yield from zip(it, islice(it, 1, None))
+
+
+@contextmanager
+def prevent_name_conflicts():
+    """Temporarily change cwd to a temporary directory, to prevent name conflicts."""
+    with TemporaryDirectory() as tmp:
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp)
+            yield
+        finally:
+            os.chdir(old_cwd)
 
 
 # Define pytree type recursively- this works for Pylance but unfortunately not MyPy

@@ -32,6 +32,7 @@ from tuned_lens.model_surgery import get_transformer_layers
 from tuned_lens.nn.lenses import Lens
 from tuned_lens.utils import (
     TreeType,
+    prevent_name_conflicts,
     send_to_device,
 )
 
@@ -109,13 +110,14 @@ class Model:
 
     def load_tokenizer(self, must_use_cache: bool = False) -> PreTrainedTokenizerBase:
         """Load the tokenizer from huggingface hub."""
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.tokenizer or self.name,
-            revision=self.revision,
-            use_fast=not self.slow_tokenizer,
-            tokenizer_type=self.tokenizer_type,
-            local_files_only=must_use_cache,
-        )
+        with prevent_name_conflicts():
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.tokenizer or self.name,
+                revision=self.revision,
+                use_fast=not self.slow_tokenizer,
+                tokenizer_type=self.tokenizer_type,
+                local_files_only=must_use_cache,
+            )
 
         assert isinstance(tokenizer, PreTrainedTokenizerBase)
         return tokenizer
@@ -143,15 +145,16 @@ class Model:
         except KeyError as e:
             raise ValueError(f"Unknown precision: {self.precision}") from e
 
-        model = AutoModelForCausalLM.from_pretrained(  # type: ignore
-            self.name,
-            device_map={"": device} if device is not None else None,
-            load_in_8bit=self.precision == "int8",
-            low_cpu_mem_usage=True,
-            revision=self.revision,
-            torch_dtype=dtype,
-            local_files_only=must_use_cache,
-        )
+        with prevent_name_conflicts():
+            model = AutoModelForCausalLM.from_pretrained(  # type: ignore
+                self.name,
+                device_map={"": device} if device is not None else None,
+                load_in_8bit=self.precision == "int8",
+                low_cpu_mem_usage=True,
+                revision=self.revision,
+                torch_dtype=dtype,
+                local_files_only=must_use_cache,
+            )
 
         assert isinstance(model, PreTrainedModel)
         model.eval()
