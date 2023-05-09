@@ -32,6 +32,7 @@ def unembed():
     mock_unembed = mock.MagicMock(Unembed)
     W = th.randn(100, 128)
     mock_unembed.forward = lambda x: th.matmul(x, W.T)
+    mock_unembed.unembedding = th.nn.Linear(128, 100)
     mock_unembed.unembedding_hash.return_value = 42
     return mock_unembed
 
