@@ -86,6 +86,12 @@ If the transformer model does not fit on a single GPU, you can also use `fully s
 
 You can also use cpu offloading to train lenses on very large models while using less VRAM it can be enabled with the ``--cpu_offload`` flag. However, this substantially slows down training and is still experimental.
 
+++++++++++++++++++++++++++++++++++
+Loading the Model Weights in int8
+++++++++++++++++++++++++++++++++++
+
+The `--precision int8` flag can be used to load the model's weights in a quantized int8 format. The `bitsandbytes` library must be installed for this to work. This should reduce VRAM usage by roughly a factor of two relative to float16 precision. Unfortunately, this option cannot be combined with `--fsdp` or `--cpu_offload`.
+
 ++++++++++++++++++++++++
 Weights & Biases Logging
 ++++++++++++++++++++++++
