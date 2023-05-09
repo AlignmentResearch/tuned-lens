@@ -57,8 +57,8 @@ def chunk_and_tokenize(
             truncation=True,
         )
 
-        if overflow := output.pop("overflowing_tokens"):
-            # Tokenizers that work like this return unnested lists of ints
+        if overflow := output.pop("overflowing_tokens", None):
+            # Slow Tokenizers return unnested lists of ints
             assert isinstance(output["input_ids"][0], int)
 
             # Chunk the overflow into batches of size `chunk_size`
