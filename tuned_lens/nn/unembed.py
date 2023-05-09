@@ -59,7 +59,7 @@ class Unembed(th.nn.Module):
 
     def unembedding_hash(self) -> str:
         """Hash the unmbedding matrix to identify the model."""
-        parameter = self.unembedding.weight.data.detach().cpu().numpy()
+        parameter = self.unembedding.weight.data.detach().cpu().float().numpy()
         return tensor_hash(parameter)
 
     def forward(self, h: th.Tensor) -> th.Tensor:
