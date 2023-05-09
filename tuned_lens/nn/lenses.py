@@ -151,8 +151,12 @@ class TunedLens(Lens):
         unembed_hash = unembed.unembedding_hash()
         config.unemebd_hash = unembed_hash
 
+        # The unembedding might be int8 if we're using bitsandbytes
+        w = unembed.unembedding.weight
+        dtype = w.dtype if th.is_floating_point(w) else th.float16
+
         translator = th.nn.Linear(
-            config.d_model, config.d_model, bias=config.bias, dtype=unembed.dtype
+            config.d_model, config.d_model, bias=config.bias, dtype=dtype
         )
         translator.weight.data.zero_()
         translator.bias.data.zero_()
