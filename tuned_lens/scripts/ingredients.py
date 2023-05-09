@@ -3,7 +3,7 @@ import enum
 import os
 from dataclasses import dataclass
 from functools import partial
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import torch as th
 import torch.distributed as dist
@@ -88,6 +88,9 @@ class Model:
     name: str
     """Name of model to use in the Huggingface Hub."""
 
+    precision: Literal["auto", "bfloat16" "float16", "float32"] = "auto"
+    """Precision in which to load the model weights."""
+
     revision: str = "main"
     """Git revision to use for pretrained models."""
 
@@ -119,11 +122,21 @@ class Model:
     ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
         """Load the model and tokenizer."""
         print(f"Loading pretrained weights for '{self.name}'...")
+        try:
+            dtype = {
+                "auto": "auto",
+                "bfloat16": th.bfloat16,
+                "float16": th.float16,
+                "float32": th.float32,
+            }[self.precision]
+        except KeyError as e:
+            raise ValueError(f"Unknown precision: {self.precision}") from e
+
         model = AutoModelForCausalLM.from_pretrained(  # type: ignore
             self.name,
             low_cpu_mem_usage=True,
             revision=self.revision,
-            torch_dtype="auto",
+            torch_dtype=dtype,
             local_files_only=must_use_cache,
         )
 

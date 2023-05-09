@@ -151,7 +151,9 @@ class TunedLens(Lens):
         unembed_hash = unembed.unembedding_hash()
         config.unemebd_hash = unembed_hash
 
-        translator = th.nn.Linear(config.d_model, config.d_model, bias=config.bias)
+        translator = th.nn.Linear(
+            config.d_model, config.d_model, bias=config.bias, dtype=unembed.dtype
+        )
         translator.weight.data.zero_()
         translator.bias.data.zero_()
 

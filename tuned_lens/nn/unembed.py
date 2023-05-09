@@ -52,6 +52,11 @@ class Unembed(th.nn.Module):
         # In general we don't want to finetune the unembed operation.
         self.requires_grad_(False)
 
+    @property
+    def dtype(self) -> th.dtype:
+        """The dtype of the unembedding matrix."""
+        return self.unembedding.weight.dtype
+
     def unembedding_hash(self) -> str:
         """Hash the unmbedding matrix to identify the model."""
         parameter = self.unembedding.weight.data.detach().cpu().numpy()
