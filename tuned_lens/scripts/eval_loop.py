@@ -42,9 +42,6 @@ class Eval:
     seed: int = 42
     """Random seed used for data shuffling."""
 
-    grad_alignment: Optional[bool] = field(action="store_true")
-    """Evaluate gradient alignment."""
-
     limit: Optional[int] = None
     """Number of batches to evaluate on. If None, will use the entire dataset."""
 
@@ -73,7 +70,7 @@ class Eval:
     @th.autocast("cuda", enabled=th.cuda.is_available())
     @th.no_grad()
     def execute(self):
-        """Trains a TunedLens model against a transformer on a dataset."""
+        """Evaluates a TunedLens model against a transformer on a dataset."""
         # Load model, tokenizer, data, and lens
         self.dist.init()
         model = tokenizer = data = lens = nats_to_bpb = model_name = None
@@ -139,8 +136,7 @@ class Eval:
         pbar = tqdm(dl, desc="Evaluating", position=self.dist.rank, total=total)
         for batch in pbar:
             batch = self.dist.send_to_device(batch)
-            with th.no_grad():
-                output = model(**batch, output_hidden_states=True)
+            output = model(**batch, output_hidden_states=True)
 
             hidden_states = output.hidden_states[-1:]
 

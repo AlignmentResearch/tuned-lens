@@ -246,6 +246,10 @@ class Optimizer:
 
         return opt
 
+    def per_parameter_optim_state_size(self) -> int:
+        """The number of elements in the optimizer state per parameter."""
+        return 2 if self.optimizer == OptimizerOption.ADAM else 1
+
 
 @dataclass
 class Distributed:
