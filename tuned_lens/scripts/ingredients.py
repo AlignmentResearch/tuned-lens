@@ -71,7 +71,10 @@ class Data:
                 )
 
         processed, nats_to_bpb = chunk_and_tokenize(
-            dataset, tokenizer, text_key=self.text_column, max_length=self.max_length
+            dataset,
+            tokenizer,
+            text_key=self.text_column,
+            max_length=self.max_length,
         )
 
         print(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
@@ -87,6 +90,9 @@ class Model:
 
     name: str
     """Name of model to use in the Huggingface Hub."""
+
+    int8: bool = field(action="store_true", default=False)
+    """Load the model weights in mixed int8 mode with `bitsandbytes`."""
 
     revision: str = "main"
     """Git revision to use for pretrained models."""
@@ -115,15 +121,24 @@ class Model:
         return tokenizer
 
     def load(
-        self, must_use_cache: bool = False
+        self, device: Optional[th.device], must_use_cache: bool = False
     ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
-        """Load the model and tokenizer."""
+        """Load the model and tokenizer.
+
+        Args:
+            device: The device to load the model on. Implemented with the `device_map`
+                argument of `AutoModelForCausalLM.from_pretrained`.
+            must_use_cache: If True, will raise an error if the model is not cached.
+        """
         print(f"Loading pretrained weights for '{self.name}'...")
         model = AutoModelForCausalLM.from_pretrained(  # type: ignore
             self.name,
+            device_map={"": device} if device is not None else None,
+            load_in_8bit=self.int8,
             low_cpu_mem_usage=True,
             revision=self.revision,
-            torch_dtype="auto",
+            # `bitsandbytes` requires fp16 weights
+            torch_dtype=th.float16 if self.int8 else "auto",
             local_files_only=must_use_cache,
         )
 
@@ -256,12 +271,16 @@ class Distributed:
     @property
     def device(self) -> th.device:
         """The device associated with this process."""
-        return th.device("cuda") if th.cuda.is_available() else th.device("cpu")
+        return (
+            th.device("cuda", self.local_rank)
+            if th.cuda.is_available()
+            else th.device("cpu")
+        )
 
     def shard_model(
         self, model: PreTrainedModel
     ) -> Union[FullyShardedDataParallel, PreTrainedModel]:
-        """Shard the model using Fully Sharded Data Parallelism."""
+        """Shard the model using Fully Sharded Data Parallelism if needed."""
         if self.fsdp:
             _, layers = get_transformer_layers(model)
             layer_cls = type(layers[0])
@@ -284,7 +303,6 @@ class Distributed:
         elif self.cpu_offload:
             raise ValueError("CPU offload requires FSDP.")
         else:
-            model.to(self.device)
             return model
 
     def distribute_lens(self, lens: Lens) -> Union[DDP, Lens]:
@@ -301,7 +319,7 @@ class Distributed:
             dataset = dataset.shard(self.world_size, self.rank)
         return dataset
 
-    def init(self) -> None:
+    def init(self):
         """Initialize distributed process group if started with elastic launch."""
         # Support both distributed and non-distributed training
         local_rank = os.environ.get("LOCAL_RANK")
