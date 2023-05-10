@@ -224,9 +224,6 @@ class Eval:
             )
             batches.append(pytree_map(th.mean, batch_output))  # type: ignore[arg-type]
 
-            # Keep the processes synced
-            self.dist.barrier()
-
         pbar.close()
         agg = pytree_map(lambda x: nats_to_bpb * x.mean(), pytree_stack(batches))
         agg = pytree_map(lambda x: maybe_all_reduce(x), agg)
