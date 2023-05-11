@@ -147,7 +147,7 @@ class Eval:
             dl = islice(dl, batch_limit)
             total = batch_limit
         else:
-            total = len(dl)
+            total = len(dl) - len(dl) % self.dist.world_size
 
         root_dir = self.output
 
