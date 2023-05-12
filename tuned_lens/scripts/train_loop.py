@@ -3,23 +3,21 @@ import dataclasses
 import enum
 from collections import defaultdict
 from dataclasses import dataclass
-from itertools import islice
 from pathlib import Path
 from typing import Optional
 
 import torch as th
 from simple_parsing import field
-from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.optim import ZeroRedundancyOptimizer
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LambdaLR
+from torchdata.dataloader2 import DataLoader2
+from tqdm.auto import trange
 from transformers import PreTrainedModel
 
+import tuned_lens.scripts.ingredients as ing
 from tuned_lens import TunedLens
-from tuned_lens.scripts.ingredients import (
-    Data,
-    Distributed,
-    Model,
-    Optimizer,
-)
 from tuned_lens.utils import maybe_all_reduce, shift_labels, shift_preds
 
 
@@ -31,40 +29,74 @@ class LossChoice(enum.Enum):
 
 
 @dataclass
+class State:
+    """All of the stateful information in the training loop."""
+
+    dataloader: DataLoader2
+    lens: TunedLens
+    opt: Optimizer
+    scheduler: LambdaLR
+    nats_to_bpb: float
+    step: int = 0
+
+    def load(self, snapshot_file: Path, device: th.device) -> None:
+        """Load a snapshot file."""
+        print(f"Loading snapshot from {snapshot_file}...")
+        snapshot = th.load(snapshot_file, map_location=device)
+        self.step = snapshot["step"]
+        self.lens.load_state_dict(snapshot["lens"])
+        self.opt.load_state_dict(snapshot["optim"])
+        self.scheduler.load_state_dict(snapshot["scheduler"])
+        self.dataloader.load_state_dict(snapshot["dataloader"])
+
+    def save(self, snapshot_file: Path) -> None:
+        """Save a snapshot file."""
+        print(f"Saving snapshot to {snapshot_file}...")
+        if isinstance(self.opt, ZeroRedundancyOptimizer):
+            self.opt.consolidate_state_dict()
+
+        th.save(
+            {
+                "lens": self.lens.state_dict(),
+                "optim": self.opt.state_dict(),
+                "scheduler": self.scheduler.state_dict(),
+                "dataloader": self.dataloader.state_dict(),
+                "step": self.step,
+            },
+            snapshot_file,
+        )
+
+
+@dataclass
 class Train:
     """Training loop for the tuned lens."""
 
-    model: Model
+    model: ing.Model
     """Model configuration."""
 
-    data: Data
+    data: ing.Data
     """Data configuration."""
 
-    opt: Optimizer
+    opt: ing.Optimizer
     """Optimizer configuration."""
 
-    dist: Distributed
+    dist: ing.Distributed
     """Configuration for how to distribute the training."""
+
+    output: Path = field(alias=["-o"])
+    """Directory to save the lenses to."""
 
     seed: int = 42
     """Random seed for data shuffling."""
 
     lens_name_or_path: Optional[str] = field(alias=["-l"], default=None)
+    """Name of a pretrained lens to load for fine-tuning."""
 
-    constant: Optional[bool] = field(action="store_true")
+    bias_only: Optional[bool] = field(action="store_true")
     """Train only the bias term."""
 
     num_steps: int = 250
     """Number of training steps."""
-
-    output: Optional[Path] = field(alias=["-o"], default=None)
-    """File to save the lenses to. Defaults to the model name."""
-
-    pre_ln: Optional[bool] = field(action="store_true")
-    """Apply layer norm before, and not after, each probe."""
-
-    separate_unembeddings: Optional[bool] = field(action="store_true")
-    """Learn a separate unembedding for each layer."""
 
     tokens_per_step: int = 2**18
     """Number of tokens per step."""
@@ -72,18 +104,23 @@ class Train:
     wandb: Optional[str] = None
     """Name of run in Weights & Biases."""
 
-    wandb_upload_checkpoints: Optional[bool] = field(action="store_true")
-    """Upload checkpoints to Weights & Biases."""
-
     token_shift: Optional[int] = None
     """How to shift the labels wrt the input tokens (1 = next token, 0 = current token,
     -1 = previous token, etc.)"""
 
-    per_gpu_batch_size: int = 1
-    """Number of samples to try to fit on a GPU at once."""
+    checkpoint_freq: Optional[int] = None
+    """Steps between saving a checkpoint. If None, no checkpoints are saved."""
+
+    checkpoint_dir: Optional[Path] = None
+    """Directory to save checkpoints to. If None, will use <output>/checkpoints."""
 
     loss: LossChoice = LossChoice.KL
     """Loss function to use."""
+
+    def __post_init__(self):
+        """Set defaults for some fields."""
+        if self.checkpoint_dir is None:
+            self.checkpoint_dir = self.output / "checkpoints"
 
     def get_lens(self, model: PreTrainedModel) -> TunedLens:
         """Load or create a TunedLens model."""
@@ -95,7 +132,7 @@ class Train:
         lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
         print(f"Tuned lens parameter memory usage: {lens_size / 2 ** 20:.2f} MB")
 
-        if self.constant:
+        if self.bias_only:
             for probe in lens:
                 probe.weight.requires_grad_(False)
 
@@ -162,26 +199,31 @@ class Train:
 
         wandb.log(log_dict)
 
-    def _save_model(self, tuned_lens: TunedLens, model_name: str):
-        """Save the model to disk and try to upload to wandb if enabled."""
-        if not self.dist.primary:
-            return
+    def snapshot(self, state: State):
+        """Save a snapshot of the training process to disk."""
+        if self.dist.primary:
+            assert self.checkpoint_dir is not None
+            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            state.save(self.checkpoint_dir / f"snapshot_{state.step}.pth")
 
-        assert model_name is not None
-        output = model_name if self.output is None else self.output
-        print(f"Saving lens to {output}")
-        tuned_lens.save(output)
+    def load_recent_snapshot(self, state: State) -> None:
+        """Load the most recent snapshot of the training process from disk."""
+        assert self.checkpoint_dir is not None
 
-        if self.wandb and self.wandb_upload_checkpoints:
-            import wandb
+        if not self.checkpoint_dir.exists():
+            return None
 
-            artifact = wandb.Artifact(
-                name="final_checkpoint",
-                type="checkpoint",
-                description="A trained lens.",
-            )
-            artifact.add_dir(output)
-            wandb.log_artifact(artifact)
+        # Find the folder containing the most recent snapshot
+        snapshot_location = max(
+            self.checkpoint_dir.glob("snapshot_*.pth"),
+            key=lambda p: int(p.stem.split("_")[1]),
+            default=None,
+        )
+
+        if snapshot_location is None:
+            return None
+
+        state.load(snapshot_location, self.dist.device)
 
     def calculate_gradient_accumulation_steps(self, tokens_per_sample: int) -> int:
         """Calculate the number of batches of data to process before taking a step."""
@@ -193,7 +235,7 @@ class Train:
                 f"divisible by the number of tokens per sample ({tokens_per_sample})."
             )
 
-        global_batch_size = self.per_gpu_batch_size * self.dist.world_size
+        global_batch_size = self.dist.per_gpu_batch_size * self.dist.world_size
         grad_acc_steps, rem = divmod(samples_per_step, global_batch_size)
         if rem:
             # If the number of samples per step isn't divisible by the global batch
@@ -214,19 +256,15 @@ class Train:
             print(f"Using {self.tokens_per_step:_} tokens per training step.")
         return grad_acc_steps
 
-    def execute(self):
-        """Trains a TunedLens model against a transformer on a dataset."""
-        # Load model, tokenizer, data, and lens
+    def setup(self) -> tuple[State, PreTrainedModel | FSDP, int]:
+        """Initialize the training process."""
         self.dist.init()
-        model = tokenizer = data = lens = nats_to_bpb = model_name = None
+        model = tokenizer = data = lens = nats_to_bpb = None
         if self.dist.primary:
             # Let the primary processes populate the cache
             model, tokenizer = self.model.load()
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
-
-            *_, model_name = model.config.name_or_path.split("/")
-            self._init_logging(model_name, lens)
 
         self.dist.barrier()  # Wait for primary to finish filling the cache
 
@@ -238,33 +276,41 @@ class Train:
 
         assert model and tokenizer and data and lens and nats_to_bpb
 
-        # Shard the model using fully shared data parallel
-        model = self.dist.shard_model(model)
-        # Distribute the lens across the GPUS using distributed data parallel
-        ddp_lens = self.dist.distribute_lens(lens)
-        # Shard the dataset for use with distributed data parallel
-        data = self.dist.shard_dataset(data)
-
-        dl = DataLoader(
-            data.shuffle(seed=self.seed),  # type: ignore[arg-type]
-            batch_size=self.per_gpu_batch_size,
-        )
-
-        # Don't train the unembedding matrix or final layer norm
-        params = [p for p in ddp_lens.parameters() if p.requires_grad]
-
-        # Create the optimizer and scheduler
+        dl = self.dist.data_loader(data)
+        params = [p for p in lens.parameters() if p.requires_grad]
         opt = self.opt.create_optim(params)
         scheduler = self.opt.create_scheduler(opt, self.num_steps)
 
+        # Distribute the lens across the GPUS using distributed data parallel
+        ddp_lens = self.dist.distribute_lens(lens)
+
+        state = State(
+            step=0,
+            lens=ddp_lens,  # type: ignore
+            opt=opt,
+            scheduler=scheduler,
+            dataloader=dl,
+            nats_to_bpb=nats_to_bpb,
+        )
+
+        self.load_recent_snapshot(state)
+
+        # Shard the model using fully shared data parallel
+        model = self.dist.shard_model(model)
+
         tokens_per_sample = len(data[0]["input_ids"])
-
         grad_acc_steps = self.calculate_gradient_accumulation_steps(tokens_per_sample)
+        self.dist.barrier()  # Wait for all processes to finish setup
+        print("All processes have completed setup.")
+        return state, model, grad_acc_steps
 
-        if self.dist.cpu_offload and grad_acc_steps > 1:
-            raise ValueError("CPU offloading cannot be used with gradient accumulation")
+    def execute(self):
+        """Trains a TunedLens model against a transformer on a dataset."""
+        # Load model, tokenizer, data, and lens
+        state, model, grad_acc_steps = self.setup()
 
         losses = defaultdict(list)
+        init_batches = state.step * grad_acc_steps
         total_batches = self.num_steps * grad_acc_steps
 
         # Wait for all processes to finish setup
@@ -272,9 +318,17 @@ class Train:
         print("All processes have completed setup. Starting training.")
 
         # Main training loop
-        pbar = tqdm(islice(dl, total_batches), desc="Training", total=total_batches)
-        for batch_idx, batch in enumerate(pbar, start=1):
-            assert isinstance(batch, dict)
+        t = trange(
+            init_batches,
+            total_batches,
+            desc="Training",
+            initial=init_batches,
+            total=total_batches,
+        )
+        for batch_idx, batch in zip(t, state.dataloader):
+            print(f"{batch['input_ids']=}")
+            assert isinstance(batch, dict), f"Expected dict, got {type(batch)}"
+
             batch = self.dist.send_to_device(batch)
             with th.no_grad():
                 output = model(**batch, output_hidden_states=True)
@@ -305,7 +359,7 @@ class Train:
                 # bfloat16 has larger dynamic range than float16 and seems to be better
                 # for computing log softmax & KL loss
                 with th.autocast(self.dist.device.type, dtype=th.bfloat16):
-                    logits = shift_preds(ddp_lens(h, idx=i), shift)
+                    logits = shift_preds(state.lens(h, idx=i), shift)
 
                     if self.loss == LossChoice.CE:
                         loss = th.nn.functional.cross_entropy(
@@ -329,16 +383,24 @@ class Train:
                 scaled_loss.backward()
 
             step, rem = divmod(batch_idx, grad_acc_steps)
-            if rem == 0:
-                th.nn.utils.clip_grad_norm_(lens.parameters(), 1.0)
-                opt.step()
-                opt.zero_grad(set_to_none=False)
-                scheduler.step()
-                self._log(opt, step, losses, lens, nats_to_bpb)
+            if rem == grad_acc_steps - 1:
+                th.nn.utils.clip_grad_norm_(state.lens.parameters(), 1.0)
+                state.opt.step()
+                state.opt.zero_grad(set_to_none=False)
+                state.scheduler.step()
+                self._log(state.opt, step, losses, state.lens, state.nats_to_bpb)
                 losses.clear()
+                state.step = step + 1
+                if (
+                    self.checkpoint_freq
+                    and step % self.checkpoint_freq == self.checkpoint_freq - 1
+                ):
+                    self.snapshot(state)
 
         if self.dist.primary:
-            assert model_name is not None
-            output = model_name if self.output is None else self.output
-            print(f"Saving lens to {output}")
-            lens.save(output)
+            print(f"Saving lens to {self.output}")
+            if isinstance(state.lens, th.nn.parallel.DistributedDataParallel):
+                lens = state.lens.module
+            else:
+                lens = state.lens
+            lens.save(self.output)

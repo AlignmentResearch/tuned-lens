@@ -24,6 +24,8 @@ def test_train_subcommand(
         f"train --data.name {text_dataset_path}"
         f" --model.name {gpt2_random_model_local_path}"
         " --max_length 128"
+        " --num_steps 4"
+        " --checkpoint_freq 2"
         f" --output {tmp_path}"
     )
     args = args.split()
