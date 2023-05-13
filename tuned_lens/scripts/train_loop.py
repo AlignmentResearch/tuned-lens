@@ -1,6 +1,7 @@
 """Training loop for training a TunedLens model against a transformer on a dataset."""
 import dataclasses
 import enum
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -227,9 +228,15 @@ class Train:
             return None
 
         # Find the folder containing the most recent snapshot
+        def sort_key_from_path(p: Path):
+            if match := re.match(r".*snapshot_(\d+)\.pth", str(p)):
+                return int(match.group(1))
+            else:
+                return -1
+
         snapshot_location = max(
             self.checkpoint_dir.glob("snapshot_*.pth"),
-            key=lambda p: int(p.stem.split("_")[1]),
+            key=sort_key_from_path,
             default=None,
         )
 
