@@ -53,6 +53,9 @@ slow_tokenizers = [
 notebooks = [
     "ipywidgets",
 ]
+8bit = [
+    "bitsandbytes",
+]
 
 [project.scripts]
 tuned-lens = "tuned_lens.__main__:main"

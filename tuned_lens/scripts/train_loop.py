@@ -133,8 +133,17 @@ class Train:
         else:
             lens = TunedLens.from_model_and_pretrained(model, self.lens_name_or_path)
 
+        dtypes = {p.dtype for p in lens.parameters()}
+        assert (
+            len(dtypes) == 1
+        ), f"Expected all parameters to have the same dtype, got {dtypes}"
+
+        lens_dtype = next(iter(dtypes))
         lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
-        print(f"Tuned lens parameter memory usage: {lens_size / 2 ** 20:.2f} MB")
+
+        # Include the optimizer state in the memory usage
+        num_bytes = lens_size * (self.opt.per_parameter_optim_state_size() + 1)
+        print(f"Tuned lens memory usage: {num_bytes / 2 ** 20:.2f} MB in {lens_dtype}")
 
         if self.bias_only:
             for probe in lens:
@@ -280,9 +289,16 @@ class Train:
         """Initialize the training process."""
         self.dist.init()
         model = tokenizer = data = lens = nats_to_bpb = None
+
+        # Annoyingly, FSDP is incompatible with the `device_map` parameter on
+        # `from_pretrained`, because it adds forward hooks to the submodules that move
+        # things around to different devices. But `bitsandbytes` requires `device_map`
+        # to work at all. So we use `device_map` iff we're using FSDP.
+        load_device = self.dist.device if not self.dist.fsdp else None
+
         if self.dist.primary:
             # Let the primary processes populate the cache
-            model, tokenizer = self.model.load()
+            model, tokenizer = self.model.load(load_device)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
 
@@ -290,7 +306,7 @@ class Train:
 
         if not self.dist.primary:
             # Let the non-primary processes load from the cache
-            model, tokenizer = self.model.load(must_use_cache=True)
+            model, tokenizer = self.model.load(load_device, must_use_cache=True)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
 
@@ -350,16 +366,17 @@ class Train:
             initial=init_batches,
             total=total_batches,
         )
+        # TODO this currently silently fails if the dataloader is exhausted
         for batch_idx, batch in zip(t, state.dataloader):
             print(f"{batch['input_ids']=}")
             assert isinstance(batch, dict), f"Expected dict, got {type(batch)}"
 
-            batch = self.dist.send_to_device(batch)
             with th.no_grad():
+                batch = self.dist.send_to_device(batch)
                 output = model(**batch, output_hidden_states=True)
 
             final_logits = output.logits
-            hidden_stats = output.hidden_states[:-1]
+            hidden_states = output.hidden_states[:-1]
 
             shift = self.token_shift
             if self.loss == LossChoice.CE:
@@ -369,7 +386,7 @@ class Train:
                 if shift is None:
                     shift = 1
             elif self.loss == LossChoice.KL:
-                labels = final_logits.log_softmax(dim=-1)
+                labels = final_logits.float().log_softmax(dim=-1)
 
                 # Match the *current* token distribution by default
                 if shift is None:
@@ -380,9 +397,10 @@ class Train:
             labels = shift_labels(labels, shift)
 
             # We do this sequentially to save VRAM
-            for i, h in enumerate(hidden_stats):
-                # bfloat16 has larger dynamic range than float16 and seems to be better
-                # for computing log softmax & KL loss
+            for i, h in enumerate(hidden_states):
+                # We use bfloat16 because it has a larger dynamic range than float16
+                # and it seems to remove the need for doing grad scaling, which is very
+                # annoying to set up in the context of multiple backward passes.
                 with th.autocast(self.dist.device.type, dtype=th.bfloat16):
                     logits = shift_preds(state.lens(h, idx=i), shift)
 
