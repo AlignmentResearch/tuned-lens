@@ -5,7 +5,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import torch as th
 from simple_parsing import field
@@ -285,7 +285,7 @@ class Train:
             print(f"Using {self.tokens_per_step:_} tokens per training step.")
         return grad_acc_steps
 
-    def setup(self) -> tuple[State, PreTrainedModel | FSDP, int]:
+    def setup(self) -> tuple[State, Union[PreTrainedModel, FSDP], int]:
         """Initialize the training process."""
         self.dist.init()
         model = tokenizer = data = lens = nats_to_bpb = None
