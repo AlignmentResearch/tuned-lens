@@ -36,6 +36,7 @@ class State:
     lens: TunedLens
     opt: Optimizer
     scheduler: LambdaLR
+    wandb_id: Optional[str]
     nats_to_bpb: float
     step: int = 0
 
@@ -44,6 +45,7 @@ class State:
         print(f"Loading snapshot from {snapshot_file}...")
         snapshot = th.load(snapshot_file, map_location=device)
         self.step = snapshot["step"]
+        self.wandb_id = snapshot["wandb_id"]
         self.lens.load_state_dict(snapshot["lens"])
         self.opt.load_state_dict(snapshot["optim"])
         self.scheduler.load_state_dict(snapshot["scheduler"])
@@ -62,6 +64,7 @@ class State:
                 "scheduler": self.scheduler.state_dict(),
                 "dataloader": self.dataloader.state_dict(),
                 "step": self.step,
+                "wandb_id": self.wandb_id,
             },
             snapshot_file,
         )
@@ -138,7 +141,15 @@ class Train:
 
         return lens
 
-    def _init_logging(self, model_name: str, lens: TunedLens):
+    def _get_wandb_id(self) -> Optional[str]:
+        if not self.dist.primary or not self.wandb:
+            return None
+
+        from wandb.sdk.lib import runid
+
+        return runid.generate_id()
+
+    def _init_logging(self, model_name: str, lens: TunedLens, wandb_id: Optional[str]):
         """Initialize logging to weights and biases."""
         if not self.dist.primary or not self.wandb:
             return
@@ -149,6 +160,8 @@ class Train:
             config=dataclasses.asdict(self),
             group=model_name,
             name=self.wandb,
+            id=wandb_id,
+            resume="allow",
         )
         wandb.watch(lens)
 
@@ -286,6 +299,7 @@ class Train:
 
         state = State(
             step=0,
+            wandb_id=self._get_wandb_id(),
             lens=ddp_lens,  # type: ignore
             opt=opt,
             scheduler=scheduler,
@@ -297,6 +311,10 @@ class Train:
 
         # Shard the model using fully shared data parallel
         model = self.dist.shard_model(model)
+
+        self._init_logging(
+            model_name=self.model.name, lens=state.lens, wandb_id=state.wandb_id
+        )
 
         tokens_per_sample = len(data[0]["input_ids"])
         grad_acc_steps = self.calculate_gradient_accumulation_steps(tokens_per_sample)
