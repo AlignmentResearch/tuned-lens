@@ -265,8 +265,6 @@ class Distributed:
 
     nccl_timeout: int = 1200  # 20 minutes
     """Timeout for NCCL operations in seconds."""
-    seed: int = 0
-    """Seed used for shuffling the data."""
 
     per_gpu_batch_size: int = 1
     """The batch size per GPU."""

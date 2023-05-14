@@ -130,6 +130,7 @@ class Eval:
         # No need to use DDP
         lenses = {name: lens.to(self.dist.device) for name, lens in lenses.items()}
         dl = self.dist.data_loader(data)
+        dl.seed(self.seed)
 
         for lens in lenses.values():
             lens.eval()
