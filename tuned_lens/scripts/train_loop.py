@@ -368,7 +368,6 @@ class Train:
         )
         # TODO this currently silently fails if the dataloader is exhausted
         for batch_idx, batch in zip(t, state.dataloader):
-            print(f"{batch['input_ids']=}")
             assert isinstance(batch, dict), f"Expected dict, got {type(batch)}"
 
             with th.no_grad():
@@ -431,7 +430,10 @@ class Train:
                 state.opt.step()
                 state.opt.zero_grad(set_to_none=False)
                 state.scheduler.step()
-                self._log(state.opt, step, losses, state.lens, state.nats_to_bpb)
+
+                # Unwrap the lens from DDP if needed
+                lens = getattr(state.lens, "module", state.lens)
+                self._log(state.opt, step, losses, lens, state.nats_to_bpb)
                 losses.clear()
                 state.step = step + 1
                 if (
@@ -442,8 +444,7 @@ class Train:
 
         if self.dist.primary:
             print(f"Saving lens to {self.output}")
-            if isinstance(state.lens, th.nn.parallel.DistributedDataParallel):
-                lens = state.lens.module
-            else:
-                lens = state.lens
+
+            # Unwrap the lens from DDP if needed
+            lens = getattr(state.lens, "module", state.lens)
             lens.save(self.output)
