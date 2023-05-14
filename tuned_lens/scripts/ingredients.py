@@ -17,6 +17,7 @@ from torch.distributed.fsdp import (
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torchdata import dataloader2, datapipes
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -261,6 +262,12 @@ class Distributed:
     cpu_offload: bool = field(action="store_true")
     """Use CPU offloading. Must be combined with fsdp"""
 
+    seed: int = 0
+    """Seed used for shuffling the data."""
+
+    per_gpu_batch_size: int = 1
+    """The batch size per GPU."""
+
     @property
     def rank(self) -> int:
         """The rank of this process.
@@ -331,11 +338,22 @@ class Distributed:
         else:
             return lens.to(self.device)
 
-    def shard_dataset(self, dataset: Dataset) -> Dataset:
+    def data_loader(
+        self,
+        dataset: Dataset,
+    ) -> dataloader2.DataLoader2:
         """Shard the dataset based on local rank."""
-        if dist.is_initialized():
-            dataset = dataset.shard(self.world_size, self.rank)
-        return dataset
+        dp = datapipes.iter.IterableWrapper(dataset)
+        if self.world_size > 1:
+            rs = dataloader2.DistributedReadingService()
+        else:
+            rs = None
+
+        dp = dp.shuffle()
+        dp = dp.sharding_filter()
+        dp = dp.batch(self.per_gpu_batch_size)
+        dp = dp.collate()
+        return dataloader2.DataLoader2(dp, reading_service=rs)
 
     def init(self):
         """Initialize distributed process group if started with elastic launch."""

@@ -7,7 +7,6 @@ from typing import Optional
 
 import torch as th
 from simple_parsing import field
-from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from tuned_lens.nn.lenses import Lens, LogitLens, TunedLens
@@ -36,14 +35,14 @@ class Eval:
 
     dist: Distributed
 
+    limit: int
+    """Number of batches to evaluate on. If None, will use the entire dataset."""
+
     lens: Optional[str] = field(alias=["-l"], default=None)
     """Path to the tuned lens model."""
 
     seed: int = 42
     """Random seed used for data shuffling."""
-
-    limit: Optional[int] = None
-    """Number of batches to evaluate on. If None, will use the entire dataset."""
 
     output: Optional[Path] = field(alias=["-o"], default=None)
     """JSON file to save the eval results to."""
@@ -54,9 +53,6 @@ class Eval:
     token_shift: Optional[int] = None
     """How to shift the labels wrt the input tokens (1 = next token, 0 = current token,
     -1 = previous token, etc.)"""
-
-    per_gpu_batch_size: int = 1
-    """Number of samples to try to fit on a GPU at once."""
 
     residual_stats: bool = field(action="store_true")
 
@@ -97,20 +93,12 @@ class Eval:
         # Note since we are not training we can just move the lens to the device.
         # No need to use DDP
         lens = lens.to(self.dist.device)
-        data = self.dist.shard_dataset(data)
-
-        dl = DataLoader(
-            data.shuffle(seed=self.seed),  # type: ignore[arg-type],
-            batch_size=self.per_gpu_batch_size,
-        )
+        dl = self.dist.data_loader(data)
 
         lens.eval()
 
-        if self.limit:
-            dl = islice(dl, self.limit)
-            total = self.limit
-        else:
-            total = len(dl)
+        dl = islice(dl, self.limit)
+        total = self.limit
 
         *_, model_name = model.config.name_or_path.split("/")
 
