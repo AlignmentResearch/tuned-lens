@@ -10,7 +10,6 @@ from typing import Optional
 
 import torch as th
 from simple_parsing import field
-from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, PreTrainedModel
 
@@ -103,13 +102,16 @@ class Eval:
     @th.autocast("cuda", enabled=th.cuda.is_available())
     @th.no_grad()
     def execute(self):
-        """Trains a TunedLens model against a transformer on a dataset."""
+        """Evaluates a TunedLens model against a transformer on a dataset."""
         # Load model, tokenizer, data, and lens
         self.dist.init()
         model = tokenizer = data = lenses = nats_to_bpb = None
+
+        # See comment in train_loop.py for why we do this
+        load_device = self.dist.device if not self.dist.fsdp else None
         if self.dist.primary:
             # Let the primary processes populate the cache
-            model, tokenizer = self.model.load()
+            model, tokenizer = self.model.load(load_device)
             data, nats_to_bpb = self.data.load(tokenizer)
             lenses = self.load_lens(model)
 
@@ -117,7 +119,7 @@ class Eval:
 
         if not self.dist.primary:
             # Let the non-primary processes load from the cache
-            model, tokenizer = self.model.load(must_use_cache=True)
+            model, tokenizer = self.model.load(load_device, must_use_cache=True)
             data, nats_to_bpb = self.data.load(tokenizer)
             lenses = self.load_lens(model)
 
@@ -127,12 +129,7 @@ class Eval:
         # Note since we are not training we can just move the lens to the device.
         # No need to use DDP
         lenses = {name: lens.to(self.dist.device) for name, lens in lenses.items()}
-        data = self.dist.shard_dataset(data)
-
-        dl = DataLoader(
-            data.shuffle(seed=self.seed),  # type: ignore[arg-type],
-            batch_size=self.per_gpu_batch_size,
-        )
+        dl = self.dist.data_loader(data)
 
         for lens in lenses.values():
             lens.eval()
@@ -141,13 +138,10 @@ class Eval:
             tokens_per_sample = len(data[0]["input_ids"])
             batch_limit = self.calculate_batch_limit(tokens_per_sample)
             assert batch_limit > 0, "Batch limit must be positive."
-            assert batch_limit <= len(
-                dl
-            ), "Not enough data to evaluate on that many tokens."
             dl = islice(dl, batch_limit)
             total = batch_limit
         else:
-            total = len(dl) - len(dl) % self.dist.world_size
+            total = len(data) // self.dist.world_size
 
         root_dir = self.output
 
@@ -162,8 +156,7 @@ class Eval:
         pbar = tqdm(dl, desc="Evaluating", position=self.dist.rank, total=total)
         for batch in pbar:
             batch = self.dist.send_to_device(batch)
-            with th.no_grad():
-                output = model(**batch, output_hidden_states=True)
+            output = model(**batch, output_hidden_states=True)
 
             hidden_states = output.hidden_states[:-1]
 

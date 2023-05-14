@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import torch as th
 import torch.distributed as dist
@@ -18,6 +18,7 @@ from torch.distributed.fsdp import (
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torchdata import dataloader2, datapipes
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -33,6 +34,7 @@ from tuned_lens.model_surgery import get_transformer_layers
 from tuned_lens.nn.lenses import Lens
 from tuned_lens.utils import (
     TreeType,
+    handle_name_conflicts,
     send_to_device,
 )
 
@@ -72,7 +74,10 @@ class Data:
                 )
 
         processed, nats_to_bpb = chunk_and_tokenize(
-            dataset, tokenizer, text_key=self.text_column, max_length=self.max_length
+            dataset,
+            tokenizer,
+            text_key=self.text_column,
+            max_length=self.max_length,
         )
 
         print(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
@@ -89,6 +94,9 @@ class Model:
     name: str
     """Name of model to use in the Huggingface Hub."""
 
+    precision: Literal["auto", "bfloat16", "float16", "float32", "int8"] = "auto"
+    """Precision in which to load the model weights."""
+
     revision: str = "main"
     """Git revision to use for pretrained models."""
 
@@ -104,29 +112,51 @@ class Model:
 
     def load_tokenizer(self, must_use_cache: bool = False) -> PreTrainedTokenizerBase:
         """Load the tokenizer from huggingface hub."""
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.tokenizer or self.name,
-            revision=self.revision,
-            use_fast=not self.slow_tokenizer,
-            tokenizer_type=self.tokenizer_type,
-            local_files_only=must_use_cache,
-        )
+        with handle_name_conflicts():
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.tokenizer or self.name,
+                revision=self.revision,
+                use_fast=not self.slow_tokenizer,
+                tokenizer_type=self.tokenizer_type,
+                local_files_only=must_use_cache,
+            )
 
         assert isinstance(tokenizer, PreTrainedTokenizerBase)
         return tokenizer
 
     def load(
-        self, must_use_cache: bool = False
+        self, device: Optional[th.device], must_use_cache: bool = False
     ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
-        """Load the model and tokenizer."""
+        """Load the model and tokenizer.
+
+        Args:
+            device: The device to load the model on. Implemented with the `device_map`
+                argument of `AutoModelForCausalLM.from_pretrained`.
+            must_use_cache: If True, will raise an error if the model is not cached.
+        """
         print(f"Loading pretrained weights for '{self.name}'...")
-        model = AutoModelForCausalLM.from_pretrained(  # type: ignore
-            self.name,
-            low_cpu_mem_usage=True,
-            revision=self.revision,
-            torch_dtype="auto",
-            local_files_only=must_use_cache,
-        )
+        try:
+            dtype = {
+                "auto": "auto",
+                "bfloat16": th.bfloat16,
+                "float16": th.float16,
+                "float32": th.float32,
+                # `bitsandbytes` requires weights to initially be in fp16
+                "int8": th.float16,
+            }[self.precision]
+        except KeyError as e:
+            raise ValueError(f"Unknown precision: {self.precision}") from e
+
+        with handle_name_conflicts():
+            model = AutoModelForCausalLM.from_pretrained(  # type: ignore
+                self.name,
+                device_map={"": device} if device is not None else None,
+                load_in_8bit=self.precision == "int8",
+                low_cpu_mem_usage=True,
+                revision=self.revision,
+                torch_dtype=dtype,
+                local_files_only=must_use_cache,
+            )
 
         assert isinstance(model, PreTrainedModel)
         model.eval()
@@ -218,6 +248,10 @@ class Optimizer:
 
         return opt
 
+    def per_parameter_optim_state_size(self) -> int:
+        """The number of elements in the optimizer state per parameter."""
+        return 2 if self.optimizer == OptimizerOption.ADAM else 1
+
 
 @dataclass
 class Distributed:
@@ -231,6 +265,11 @@ class Distributed:
 
     nccl_timeout: int = 1200  # 20 minutes
     """Timeout for NCCL operations in seconds."""
+    seed: int = 0
+    """Seed used for shuffling the data."""
+
+    per_gpu_batch_size: int = 1
+    """The batch size per GPU."""
 
     @property
     def rank(self) -> int:
@@ -260,12 +299,16 @@ class Distributed:
     @property
     def device(self) -> th.device:
         """The device associated with this process."""
-        return th.device("cuda") if th.cuda.is_available() else th.device("cpu")
+        return (
+            th.device("cuda", self.local_rank)
+            if th.cuda.is_available()
+            else th.device("cpu")
+        )
 
     def shard_model(
         self, model: PreTrainedModel
     ) -> Union[FullyShardedDataParallel, PreTrainedModel]:
-        """Shard the model using Fully Sharded Data Parallelism."""
+        """Shard the model using Fully Sharded Data Parallelism if needed."""
         if self.fsdp:
             _, layers = get_transformer_layers(model)
             layer_cls = type(layers[0])
@@ -288,7 +331,6 @@ class Distributed:
         elif self.cpu_offload:
             raise ValueError("CPU offload requires FSDP.")
         else:
-            model.to(self.device)
             return model
 
     def distribute_lens(self, lens: Lens) -> Union[DDP, Lens]:
@@ -299,13 +341,24 @@ class Distributed:
         else:
             return lens.to(self.device)
 
-    def shard_dataset(self, dataset: Dataset) -> Dataset:
+    def data_loader(
+        self,
+        dataset: Dataset,
+    ) -> dataloader2.DataLoader2:
         """Shard the dataset based on local rank."""
-        if dist.is_initialized():
-            dataset = dataset.shard(self.world_size, self.rank)
-        return dataset
+        dp = datapipes.iter.IterableWrapper(dataset)
+        if self.world_size > 1:
+            rs = dataloader2.DistributedReadingService()
+        else:
+            rs = None
 
-    def init(self) -> None:
+        dp = dp.shuffle()
+        dp = dp.sharding_filter()
+        dp = dp.batch(self.per_gpu_batch_size)
+        dp = dp.collate()
+        return dataloader2.DataLoader2(dp, reading_service=rs)
+
+    def init(self):
         """Initialize distributed process group if started with elastic launch."""
         # Support both distributed and non-distributed training
         local_rank = os.environ.get("LOCAL_RANK")

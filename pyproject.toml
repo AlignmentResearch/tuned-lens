@@ -15,6 +15,7 @@ dependencies = [
     "plotly>=5.13.1",
     "scikit-learn",
     "zstandard",
+    "torchdata>=0.6.0",
     "torch>=1.13.0",
     "transformers>=4.28.1",
     "huggingface_hub>=0.12.1",
@@ -52,6 +53,9 @@ slow_tokenizers = [
 ]
 notebooks = [
     "ipywidgets",
+]
+8bit = [
+    "bitsandbytes",
 ]
 
 [project.scripts]
