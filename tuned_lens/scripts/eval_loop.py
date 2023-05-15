@@ -1,6 +1,5 @@
 """Evaluation loop for the tuned lens model."""
 import json
-import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import islice
@@ -166,31 +165,19 @@ class Eval:
                     lens_lps = lens(h, idx=j).log_softmax(dim=-1)
                     lens_probs = lens_lps.exp()
 
-                    # Handle the case where the model has more/less tokens than the lens
-                    if final_lps.shape[-1] != lens_lps.shape[-1]:
-                        logging.warning(
-                            "Lens has different number of tokens than model."
-                        )
-
-                    common_vocab = min(final_lps.shape[-1], lens_lps.shape[-1])
-                    trunc_final_lps = final_lps[..., :common_vocab]
-                    trunc_lens_lps = lens_lps[..., :common_vocab]
-                    trunc_final_probs = final_probs[..., :common_vocab]
-                    trunc_lens_probs = lens_probs[..., :common_vocab]
-
                     batch_output[lens_type]["ce"][
                         name
                     ] = th.nn.functional.cross_entropy(
-                        shift_preds(trunc_lens_lps, shift).flatten(0, 1),
+                        shift_preds(lens_lps, shift).flatten(0, 1),
                         labels.flatten(),
                         reduction="none",
                     )
 
                     batch_output[lens_type]["entropy"][name] = th.sum(
-                        -trunc_lens_probs * trunc_lens_lps, dim=-1
+                        -lens_probs * lens_lps, dim=-1
                     )
                     batch_output[lens_type]["kl"][name] = th.sum(
-                        trunc_final_probs * (trunc_final_lps - trunc_lens_lps), dim=-1
+                        final_probs * (final_lps - lens_lps), dim=-1
                     )
 
             batch_output["baseline_ce"]["final"] = th.nn.functional.cross_entropy(
