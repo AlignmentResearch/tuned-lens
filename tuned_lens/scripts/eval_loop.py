@@ -4,7 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import torch as th
 from simple_parsing import field
@@ -25,6 +25,8 @@ from tuned_lens.utils import (
     shift_preds,
 )
 
+LensType = Literal["logit", "tuned"]
+
 
 @dataclass
 class Eval:
@@ -42,7 +44,7 @@ class Eval:
     lens_name: Optional[str] = field(alias=["-l"], default=None)
     """Path to the tuned lens model."""
 
-    lens_types: list[str] = field(default_factory=lambda: ["logit"])
+    lens_types: list[LensType] = field(default_factory=lambda: ["logit"])
     """Types of lenses to evaluate can be a combination of (logit|tuned)."""
 
     seed: int = 42
@@ -51,12 +53,15 @@ class Eval:
     tokens: Optional[int] = None
     """Number of tokens to evaluate on. If None, will use the entire dataset."""
 
-    token_shift: Optional[int] = None
+    token_shift: int = field(default=1)
     """How to shift the labels wrt the input tokens (1 = next token, 0 = current token,
     -1 = previous token, etc.)"""
 
     per_gpu_batch_size: int = 1
     """Number of samples to try to fit on a GPU at once."""
+
+    layer_transfer: bool = field(action="store_true")
+    """Evaluate the transfer of the lens to different layers of the transformer."""
 
     def load_lens(self, model: PreTrainedModel) -> dict[str, Lens]:
         """Load the tuned lens model."""
@@ -82,6 +87,48 @@ class Eval:
         global_batch_size = self.dist.world_size * self.per_gpu_batch_size
         tokens_per_batch = global_batch_size * tokens_per_sample
         return self.tokens // tokens_per_batch
+
+    def _evaluate_lenses_on_hidden(
+        self,
+        lenses: dict[str, Lens],
+        hidden: th.Tensor,
+        layer: int,
+        final_probs: th.Tensor,
+        final_lps: th.Tensor,
+        labels: th.Tensor,
+        batch_output: defaultdict,
+    ):
+        """Evaluate a lens at a given layer. Batch output is modified in place.
+
+        Args:
+            lenses: The dictionary of lenses to evaluate on this hidden state.
+            hidden: (batch x seq x d_model) The hidden states of the transformer.
+            layer: The layer this hidden state is from.
+            final_probs: (batch x seq x vocab) The final probabilities of
+                the transformer.
+            final_lps: (batch x seq x vocab) The final log probabilities
+                of the transformer.
+            labels: (batch x seq) The labels for the transformer.
+            batch_output: Where to store the logging results.
+        """
+        for lens_type, lens in lenses.items():
+            layer_name = f"layer_{layer}"
+            lens_lps = lens(hidden, idx=layer).log_softmax(dim=-1)
+            lens_probs = lens_lps.exp()
+
+            batch_output[lens_type]["ce"][layer_name] = th.nn.functional.cross_entropy(
+                shift_preds(lens_lps, self.token_shift).flatten(0, 1),
+                labels.flatten(),
+                reduction="none",
+            )
+
+            batch_output[lens_type]["entropy"][layer_name] = th.sum(
+                -lens_probs * lens_lps, dim=-1
+            )
+
+            batch_output[lens_type]["kl"][layer_name] = th.sum(
+                final_probs * (final_lps - lens_lps), dim=-1
+            )
 
     @th.autocast("cuda", enabled=th.cuda.is_available())
     @th.no_grad()
@@ -145,13 +192,12 @@ class Eval:
 
             hidden_states = output.hidden_states[:-1]
 
-            shift = self.token_shift if self.token_shift is not None else 1
             final_lps = output.logits.log_softmax(dim=-1)
 
             final_probs = final_lps.exp()
             assert not th.isnan(output.logits).any(), "Logits are NaN"
 
-            labels = shift_labels(batch["input_ids"], shift)
+            labels = shift_labels(batch["input_ids"], self.token_shift)
 
             def nested_dict():
                 return defaultdict(nested_dict)
@@ -160,28 +206,18 @@ class Eval:
 
             # Compute tuned lens eval and statistics if applicable
             for j, h in zip(range(L), hidden_states):
-                name = f"layer_{j}"
-                for lens_type, lens in lenses.items():
-                    lens_lps = lens(h, idx=j).log_softmax(dim=-1)
-                    lens_probs = lens_lps.exp()
-
-                    batch_output[lens_type]["ce"][
-                        name
-                    ] = th.nn.functional.cross_entropy(
-                        shift_preds(lens_lps, shift).flatten(0, 1),
-                        labels.flatten(),
-                        reduction="none",
-                    )
-
-                    batch_output[lens_type]["entropy"][name] = th.sum(
-                        -lens_probs * lens_lps, dim=-1
-                    )
-                    batch_output[lens_type]["kl"][name] = th.sum(
-                        final_probs * (final_lps - lens_lps), dim=-1
-                    )
+                self._evaluate_lenses_on_hidden(
+                    lenses=lenses,
+                    hidden=h,
+                    layer=j,
+                    final_probs=final_probs,
+                    final_lps=final_lps,
+                    labels=labels,
+                    batch_output=batch_output,
+                )
 
             batch_output["baseline_ce"]["final"] = th.nn.functional.cross_entropy(
-                shift_preds(final_lps, shift).flatten(0, 1),
+                shift_preds(final_lps, self.token_shift).flatten(0, 1),
                 labels.flatten(),
                 reduction="none",
             )
