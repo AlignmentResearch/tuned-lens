@@ -136,15 +136,15 @@ class Eval:
                 for i in range(total_layers):
                     trans_name = f"layer_{i}"
                     transfer_lps = lens(hidden, idx=i).log_softmax(dim=-1)
-                    batch_output[lens_type][trans_name][
+                    batch_output[lens_type]["layer_transfer"]["ce"][trans_name][
                         layer_name
                     ] = th.nn.functional.cross_entropy(
                         shift_preds(transfer_lps, self.token_shift).flatten(0, 1),
                         labels.flatten(),
                     )
-                    batch_output[lens_type][trans_name][layer_name] = th.sum(
-                        lens_probs * (lens_lps - transfer_lps), dim=-1
-                    ).mean()
+                    batch_output[lens_type]["layer_transfer"]["kl"][trans_name][
+                        layer_name
+                    ] = th.sum(lens_probs * (lens_lps - transfer_lps), dim=-1).mean()
 
     @th.autocast("cuda", enabled=th.cuda.is_available())
     @th.no_grad()
