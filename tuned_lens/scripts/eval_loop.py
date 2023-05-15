@@ -97,6 +97,7 @@ class Eval:
         final_lps: th.Tensor,
         labels: th.Tensor,
         batch_output: defaultdict,
+        total_layers: int,
     ):
         """Evaluate a lens at a given layer. Batch output is modified in place.
 
@@ -110,6 +111,7 @@ class Eval:
                 of the transformer.
             labels: (batch x seq) The labels for the transformer.
             batch_output: Where to store the logging results.
+            total_layers: The total number of layers in the transformer.
         """
         for lens_type, lens in lenses.items():
             layer_name = f"layer_{layer}"
@@ -129,6 +131,20 @@ class Eval:
             batch_output[lens_type]["kl"][layer_name] = th.sum(
                 final_probs * (final_lps - lens_lps), dim=-1
             )
+
+            if self.layer_transfer:
+                for i in range(total_layers):
+                    trans_name = f"layer_{i}"
+                    transfer_lps = lens(hidden, idx=i).log_softmax(dim=-1)
+                    batch_output[lens_type][trans_name][
+                        layer_name
+                    ] = th.nn.functional.cross_entropy(
+                        shift_preds(transfer_lps, self.token_shift).flatten(0, 1),
+                        labels.flatten(),
+                    )
+                    batch_output[lens_type][trans_name][layer_name] = th.sum(
+                        lens_probs * (lens_lps - transfer_lps), dim=-1
+                    ).mean()
 
     @th.autocast("cuda", enabled=th.cuda.is_available())
     @th.no_grad()
@@ -214,6 +230,7 @@ class Eval:
                     final_lps=final_lps,
                     labels=labels,
                     batch_output=batch_output,
+                    total_layers=L,
                 )
 
             batch_output["baseline_ce"]["final"] = th.nn.functional.cross_entropy(
