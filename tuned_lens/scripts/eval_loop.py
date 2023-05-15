@@ -1,7 +1,6 @@
 """Evaluation loop for the tuned lens model."""
 import json
 import logging
-import re
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import islice
@@ -11,7 +10,7 @@ from typing import Optional
 import torch as th
 from simple_parsing import field
 from tqdm.auto import tqdm
-from transformers import AutoModelForCausalLM, PreTrainedModel
+from transformers import PreTrainedModel
 
 from tuned_lens.nn.lenses import Lens, LogitLens, TunedLens
 from tuned_lens.scripts.ingredients import (
@@ -45,7 +44,7 @@ class Eval:
     """Path to the tuned lens model."""
 
     lens_types: list[str] = field(default_factory=lambda: ["logit"])
-    """Types of lenses to evaluate."""
+    """Types of lenses to evaluate can be a combination of (logit|tuned)."""
 
     seed: int = 42
     """Random seed used for data shuffling."""
@@ -71,22 +70,8 @@ class Eval:
                     raise ValueError(
                         "Must specify a lens name when evaluating a tuned lens."
                     )
-                lenses[
-                    f"tuned[{model.config.name_or_path}]"
-                ] = TunedLens.from_model_and_pretrained(model, self.lens_name)
-            elif match := re.match(r"tuned\[([a-zA-Z0-9/\.\-]+)\]", lens_type):
-                if self.lens_name is None:
-                    raise ValueError(
-                        "Must specify a lens name when evaluating a tuned lens."
-                    )
-                model_name = match.group(1)
-                new_model = AutoModelForCausalLM.from_pretrained(  # type: ignore
-                    model_name,
-                    low_cpu_mem_usage=True,
-                    torch_dtype="auto",
-                )
-                lenses[f"tuned[{model_name}]"] = TunedLens.from_model_and_pretrained(
-                    new_model, self.lens_name
+                lenses["tuned"] = TunedLens.from_model_and_pretrained(
+                    model, self.lens_name
                 )
             else:
                 raise ValueError(f"Unknown lens type: {lens_type}")
