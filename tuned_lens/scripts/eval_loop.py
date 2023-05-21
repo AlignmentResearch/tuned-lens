@@ -17,6 +17,7 @@ from tuned_lens.scripts.ingredients import (
     Distributed,
     Model,
 )
+from tuned_lens.stats import LogitStats
 from tuned_lens.utils import (
     maybe_all_reduce,
     pytree_map,
@@ -26,6 +27,10 @@ from tuned_lens.utils import (
 )
 
 LensType = Literal["logit", "tuned"]
+
+
+def _nested_dict():
+    return defaultdict(_nested_dict)
 
 
 @dataclass
@@ -63,6 +68,9 @@ class Eval:
     layer_transfer: bool = field(action="store_true")
     """Evaluate the transfer of the lens to different layers of the transformer."""
 
+    record_logit_stats: bool = field(action="store_true")
+    """Record the statistics of the marginal token distribution at each layer."""
+
     def load_lens(self, model: PreTrainedModel) -> dict[str, Lens]:
         """Load the tuned lens model."""
         lenses = {}
@@ -88,6 +96,47 @@ class Eval:
         tokens_per_batch = global_batch_size * tokens_per_sample
         return self.tokens // tokens_per_batch
 
+    def _initialize_logit_stats_recorders(
+        self, lenses: dict[str, Lens], total_layers: int
+    ):
+        if self.record_logit_stats:
+            self.logit_stats_recorders = {
+                lens_type: {f"layer_{i}": LogitStats() for i in range(total_layers)}
+                for lens_type in lenses.keys()
+            }
+            self.logit_stats_recorder_final = LogitStats()
+        else:
+            self.logit_stats_recorders = None
+            self.logit_stats_recorder_final = None
+
+    def _record_logit_stats(self, logp: th.Tensor, layer: int, lens_type: str):
+        if self.logit_stats_recorders is not None:
+            self.logit_stats_recorders[lens_type][f"layer_{layer}"].update(
+                logp, assume_normalized=True
+            )
+
+    def _record_logit_stats_final(self, logp: th.Tensor):
+        if self.logit_stats_recorder_final is not None:
+            self.logit_stats_recorder_final.update(logp, assume_normalized=True)
+
+    def _save_logit_stats(self) -> defaultdict:
+        logit_stats = _nested_dict()
+        if self.logit_stats_recorders is not None:
+            for lens_type, recorders in self.logit_stats_recorders.items():
+                for layer, recorder in recorders.items():
+                    recorder.all_reduce_()
+                    logit_stats[lens_type]["logit_stats"][layer] = (
+                        recorder.marginal_probs.cpu().numpy().tolist()
+                    )
+
+        if self.logit_stats_recorder_final is not None:
+            self.logit_stats_recorder_final.all_reduce_()
+            logit_stats["baseline"]["logit_stats"]["final"] = (
+                self.logit_stats_recorder_final.marginal_probs.cpu().numpy().tolist()
+            )
+
+        return logit_stats
+
     def _evaluate_lenses_on_hidden(
         self,
         lenses: dict[str, Lens],
@@ -112,11 +161,14 @@ class Eval:
             labels: (batch x seq) The labels for the transformer.
             batch_output: Where to store the logging results.
             total_layers: The total number of layers in the transformer.
+            logp_stats: where to record the logging results.
         """
         for lens_type, lens in lenses.items():
             layer_name = f"layer_{layer}"
             lens_lps = lens(hidden, idx=layer).log_softmax(dim=-1)
             lens_probs = lens_lps.exp()
+
+            self._record_logit_stats(lens_lps, layer, lens_type)
 
             batch_output[lens_type]["ce"][layer_name] = th.nn.functional.cross_entropy(
                 shift_preds(lens_lps, self.token_shift).flatten(0, 1),
@@ -191,11 +243,14 @@ class Eval:
         else:
             total = len(data) // self.dist.world_size
 
+        L = model.config.num_hidden_layers
+
+        self._initialize_logit_stats_recorders(lenses, L)
+
         root_dir = self.output
 
         root_dir.mkdir(exist_ok=True, parents=True)
 
-        L = model.config.num_hidden_layers
         batches = []
 
         self.dist.barrier()
@@ -215,10 +270,7 @@ class Eval:
 
             labels = shift_labels(batch["input_ids"], self.token_shift)
 
-            def nested_dict():
-                return defaultdict(nested_dict)
-
-            batch_output = nested_dict()
+            batch_output = _nested_dict()
 
             # Compute tuned lens eval and statistics if applicable
             for j, h in zip(range(L), hidden_states):
@@ -233,20 +285,24 @@ class Eval:
                     total_layers=L,
                 )
 
-            batch_output["baseline_ce"]["final"] = th.nn.functional.cross_entropy(
+            batch_output["baseline"]["ce"]["final"] = th.nn.functional.cross_entropy(
                 shift_preds(final_lps, self.token_shift).flatten(0, 1),
                 labels.flatten(),
                 reduction="none",
             )
-            batch_output["baseline_entropy"]["final"] = th.sum(
+            batch_output["baseline"]["entropy"]["final"] = th.sum(
                 -final_probs * final_lps, dim=-1
             )
+
             batches.append(pytree_map(th.mean, batch_output))  # type: ignore[arg-type]
+
+            self._record_logit_stats_final(final_lps)
 
         pbar.close()
         agg = pytree_map(lambda x: nats_to_bpb * x.mean(), pytree_stack(batches))
         agg = pytree_map(lambda x: maybe_all_reduce(x), agg)
         agg = pytree_map(lambda x: x.cpu().numpy().item(), agg)
+
         assert isinstance(agg, dict)
 
         batches = pytree_map(lambda x: nats_to_bpb * x, batches)
@@ -254,9 +310,15 @@ class Eval:
         batches = pytree_map(lambda x: x.cpu().item(), batches)
         assert isinstance(batches, list)
 
+        logit_stats = self._save_logit_stats()
+
         if self.dist.primary:
             with (root_dir / "batches.jsonl").open("w") as f:
                 json.dump(batches, f)
 
             with (root_dir / "aggregate_metrics.json").open("w") as f:
                 json.dump(agg, f)
+
+            if self.record_logit_stats:
+                with (root_dir / "logit_stats.json").open("w") as f:
+                    json.dump(logit_stats, f)

@@ -26,6 +26,7 @@ def test_train_subcommand(
         " --max_length 128"
         " --num_steps 4"
         " --checkpoint_freq 2"
+        " --record_logit_stats"
         f" --output {tmp_path}"
     )
     args = args.split()

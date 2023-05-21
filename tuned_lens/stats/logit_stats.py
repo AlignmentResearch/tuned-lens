@@ -16,20 +16,37 @@ class LogitStats:
     likelihood distribution is computed on request using L-BFGS.
     """
 
-    n: int
+    n: Optional[th.Tensor]
     marginal_probs: Optional[th.Tensor]
     sufficient_stats: Optional[th.Tensor]
 
-    def __init__(self):
+    def __init__(
+        self,
+        n: Optional[th.Tensor] = None,
+        marginal_probs: Optional[th.Tensor] = None,
+        sufficient_stats: Optional[th.Tensor] = None,
+    ):
         """Create a LogitStats object."""
-        self.n = 0
-        self.marginal_probs = None
-        self.sufficient_stats = None
+        self.n = None
+        self.marginal_probs = marginal_probs
+        self.sufficient_stats = sufficient_stats
 
     def all_reduce_(self):
         """All-reduce the stats across all processes."""
-        if self.sufficient_stats is not None:
-            maybe_all_reduce(self.sufficient_stats)
+        if (
+            self.sufficient_stats is not None
+            and self.marginal_probs is not None
+            and self.n is not None
+        ):
+            n_x_sufficient_stats = self.n * self.sufficient_stats
+            n_x_marginal_probs = self.n * self.marginal_probs
+            maybe_all_reduce(n_x_sufficient_stats, op="sum")
+            maybe_all_reduce(n_x_marginal_probs, op="sum")
+            maybe_all_reduce(self.n, op="sum")
+            self.sufficient_stats = n_x_sufficient_stats / self.n
+            self.marginal_probs = n_x_marginal_probs / self.n
+        else:
+            raise ValueError("Attempting to reduce an uninitialized LogitStats object")
 
     @th.no_grad()
     def update(self, logits: th.Tensor, assume_normalized: bool = False):
@@ -40,12 +57,18 @@ class LogitStats:
             logits = logits.log_softmax(dim=-1)
 
         N = logits.shape[0]
+        if self.n is None:
+            self.n = th.tensor(0, dtype=th.int64, device=logits.device)
+        elif len(self.n.shape) > 0:
+            raise ValueError(f"Expected n to be a scaler but got {self.n.shape=}")
+
         if self.marginal_probs is None:
             self.marginal_probs = logits.new_zeros(K)
+        elif self.marginal_probs.shape[-1] != K:
+            raise ValueError(f"Expected {self.marginal_probs.shape[-1]} but got {K}")
+
         if self.sufficient_stats is None:
             self.sufficient_stats = logits.new_zeros(K)
-        elif self.sufficient_stats.shape[-1] != K:
-            raise ValueError(f"Expected {self.sufficient_stats.shape[-1]} but got {K}")
 
         # Online mean update for the marginal probabilities
         delta = logits.exp().mean(0) - self.marginal_probs
