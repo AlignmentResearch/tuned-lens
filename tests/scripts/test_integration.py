@@ -10,6 +10,7 @@ def test_eval_subcommand(
     args = (
         f"eval --data.name {text_dataset_path}"
         f" --model.name {gpt2_random_model_local_path}"
+        " --record_logit_stats"
         " --tokens 4000 --max_length 128"
         f" --output {tmp_path}"
     )
@@ -26,7 +27,6 @@ def test_train_subcommand(
         " --max_length 128"
         " --num_steps 4"
         " --checkpoint_freq 2"
-        " --record_logit_stats"
         f" --output {tmp_path}"
     )
     args = args.split()
