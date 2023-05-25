@@ -4,6 +4,7 @@ notebooks/memorization.ipynb
 lens/
 .cvsignore
 wandb/
+.vscode/tasks.json
 
 
 # Byte-compiled / optimized / DLL files
