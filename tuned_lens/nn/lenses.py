@@ -106,7 +106,7 @@ class TunedLensConfig:
     # The revision of the base model this lens was tuned for.
     base_model_revision: Optional[str] = None
     # The hash of the base's unembed model this lens was tuned for.
-    unemebd_hash: Optional[str] = None
+    unembed_hash: Optional[str] = None
     # The name of the lens type.
     lens_type: str = "linear_tuned_lens"
 
@@ -149,7 +149,7 @@ class TunedLens(Lens):
 
         self.config = config
         unembed_hash = unembed.unembedding_hash()
-        config.unemebd_hash = unembed_hash
+        config.unembed_hash = unembed_hash
 
         # The unembedding might be int8 if we're using bitsandbytes
         w = unembed.unembedding.weight
@@ -261,7 +261,7 @@ class TunedLens(Lens):
             config = TunedLensConfig.from_dict(json.load(f))
 
         # validate the unembed is the same as the one used to train the lens
-        if config.unemebd_hash and unembed.unembedding_hash() != config.unemebd_hash:
+        if config.unembed_hash and unembed.unembedding_hash() != config.unembed_hash:
             warning(
                 "The unembeding matrix hash does not match the lens' hash."
                 "This lens may have been trained with a different unembedding."
