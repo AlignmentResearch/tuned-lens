@@ -3,7 +3,7 @@ import enum
 import os
 from dataclasses import dataclass
 from functools import partial
-from typing import Literal, Optional, Union
+from typing import Optional, Union
 
 import torch as th
 import torch.distributed as dist
@@ -25,6 +25,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     get_linear_schedule_with_warmup,
 )
+from typing_extensions import Literal
 
 from tuned_lens.data import (
     chunk_and_tokenize,
