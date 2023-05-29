@@ -80,10 +80,13 @@ def opt_random_model() -> tr.PreTrainedModel:
 
 
 @pytest.fixture(scope="module")
-def gpt2_random_model_local_path(
+def gpt2_tiny_random_model_local_path(
     tmpdir_factory, gpt2_tokenizer: tr.PreTrainedTokenizerBase
 ):
     config = tr.AutoConfig.from_pretrained("gpt2")
+    config.n_heads = 2
+    config.n_embed = 8
+    config.n_layers = 2
     model = tr.AutoModelForCausalLM.from_config(config)
     assert isinstance(model, tr.PreTrainedModel)
     tmp_path = tmpdir_factory.mktemp("gpt2_random_model_local")
