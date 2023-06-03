@@ -3,8 +3,16 @@
 from contextlib import contextmanager
 from typing import Any, Generator, TypeVar, Union
 
+try:
+    import transformer_lens as tl
+
+    _transformer_lens_available = True
+except ImportError:
+    _transformer_lens_available = False
+
 import torch as th
 import transformers as tr
+from torch import nn
 from transformers import models
 
 
@@ -54,15 +62,38 @@ def assign_key_path(model: T, key_path: str, value: Any) -> Generator[T, None, N
         set_key_path_(model, key_path, old_value)
 
 
-Norm = Union[th.nn.LayerNorm, models.llama.modeling_llama.LlamaRMSNorm]
+Model = Union[tr.PreTrainedModel, "tl.HookedTransformer"]
+Norm = Union[th.nn.LayerNorm, models.llama.modeling_llama.LlamaRMSNorm, nn.Module]
 
 
-def get_final_norm(model: tr.PreTrainedModel) -> Norm:
+def get_unembeding_matrix(model: Model) -> nn.Linear:
+    """The final linear tranformation from the model hidden state to the output."""
+    if isinstance(model, tr.PreTrainedModel):
+        unembed = model.get_output_embeddings()
+        if not isinstance(unembed, nn.Linear):
+            raise ValueError("We currently only support linear unemebdings")
+        return unembed
+    elif _transformer_lens_available and isinstance(model, tl.HookedTransformer):
+        linear = nn.Linear(
+            in_features=model.cfg.d_model,
+            out_features=model.cfg.d_vocab_out,
+        )
+        linear.bias.data = model.unembed.b_U
+        linear.weight.data = model.unembed.W_U.transpose(0, 1)
+        return linear
+    else:
+        raise ValueError(f"Model class {type(model)} not recognized!")
+
+
+def get_final_norm(model: Model) -> Norm:
     """Get the final norm from a model.
 
     This isn't standardized across models, so this will need to be updated as
     we add new models.
     """
+    if _transformer_lens_available and isinstance(model, tl.HookedTransformer):
+        return model.ln_final
+
     if not hasattr(model, "base_model"):
         raise ValueError("Model does not have a `base_model` attribute.")
 
@@ -94,7 +125,7 @@ def get_final_norm(model: tr.PreTrainedModel) -> Norm:
     return final_layer_norm
 
 
-def get_transformer_layers(model: tr.PreTrainedModel) -> tuple[str, th.nn.ModuleList]:
+def get_transformer_layers(model: Model) -> tuple[str, th.nn.ModuleList]:
     """Get the decoder layers from a model.
 
     Args:
@@ -106,6 +137,7 @@ def get_transformer_layers(model: tr.PreTrainedModel) -> tuple[str, th.nn.Module
     Raises:
         ValueError: If no such list exists.
     """
+    # TODO implement this so that we can do hooked transformer training.
     if not hasattr(model, "base_model"):
         raise ValueError("Model does not have a `base_model` attribute.")
 

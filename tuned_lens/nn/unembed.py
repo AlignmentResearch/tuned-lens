@@ -5,7 +5,6 @@ from typing import Literal, Optional, cast
 
 import torch as th
 from torch.distributions import Distribution
-from transformers import PreTrainedModel
 
 from tuned_lens import model_surgery
 from tuned_lens.utils import tensor_hash
@@ -30,7 +29,7 @@ class Unembed(th.nn.Module):
 
     def __init__(
         self,
-        model: PreTrainedModel,
+        model: model_surgery.Model,
     ):
         """Initialize unmebed.
 
@@ -39,12 +38,7 @@ class Unembed(th.nn.Module):
         """
         super().__init__()
         final_norm = model_surgery.get_final_norm(model)
-
-        unembeding_matrix = model.get_output_embeddings()
-        if not isinstance(unembeding_matrix, th.nn.Linear):
-            # With nn.Linear we know that the unembedding matrix is .weight;
-            # we don't want to guess incorrectly for other module classes.
-            raise ValueError("Currently we only support nn.Linear unembeddings.")
+        unembeding_matrix = model_surgery.get_unembeding_matrix(model)
 
         self.final_norm = copy.deepcopy(final_norm)
         self.unembedding = copy.deepcopy(unembeding_matrix)

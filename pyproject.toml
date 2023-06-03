@@ -39,11 +39,15 @@ docs = [
 ]
 test = [
     "sentencepiece>=0.1.99",
+    "transformer-lens>=1.2.2",
     "pytest-skip-slow",
     "pytest-cov",
     "nbmake",
     "pytest",
     "mock",
+]
+transformer_lens = [
+    "transformer-lens>=1.2.2"
 ]
 slow_tokenizers = [
     "sentencepiece>=0.1.99"

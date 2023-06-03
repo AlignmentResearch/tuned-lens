@@ -72,7 +72,7 @@ class TrajectoryStatistic:
             the layer dimension, and the color of each cell is the value of
             the statistic.
         """
-        labels = np.array(["input", *map(str, range(1, self.num_layers - 1)), "output"])
+        labels = np.array([*map(str, range(self.num_layers - 1)), "output"])
 
         color_matrix = self.stats
 

@@ -1,8 +1,10 @@
 import numpy as np
 import pytest
+import torch as th
+import transformer_lens as tl
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from tuned_lens.nn.lenses import LogitLens
+from tuned_lens.nn.lenses import LogitLens, TunedLens, Unembed
 from tuned_lens.plotting import PredictionTrajectory
 
 
@@ -67,6 +69,28 @@ def test_prediction_trajectory_from_lens_and_model_smoke(model_and_tokenizer, le
     assert traj.num_layers == model.config.n_layer
     assert traj.num_tokens == len(input_ids)
     assert traj.vocab_size == model.config.vocab_size
+
+
+def test_prediction_trajectory_from_cache():
+    model = tl.HookedTransformer.from_pretrained("facebook/opt-125m", device="cpu")
+    lens = TunedLens.from_unembed_and_pretrained(
+        unembed=Unembed(model),
+        lens_resource_id="facebook/opt-125m",
+    )
+    input_ids = [23, 23, 23, 23, 23, 23, 23, 23]
+    targets = input_ids[:]
+    with th.inference_mode():
+        logits, cache = model.run_with_cache(
+            input=th.tensor([input_ids]), return_type="logits"
+        )
+        assert isinstance(logits, th.Tensor)
+        PredictionTrajectory.from_lens_and_cache(
+            lens=lens,
+            cache=cache,
+            model_logits=logits,
+            input_ids=input_ids,
+            targets=targets,
+        )
 
 
 def test_largest_prob_labels_smoke(prediction_trajectory_with_tokenizer):

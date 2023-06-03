@@ -2,7 +2,14 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Sequence, Union
+from typing import Literal, Optional, Sequence, Union
+
+try:
+    import transformer_lens as tl
+
+    _transformer_lens_available = True
+except ImportError:
+    _transformer_lens_available = False
 
 import numpy as np
 import torch as th
@@ -18,6 +25,9 @@ from .token_formatter import TokenFormatter
 from .trajectory_plotting import TrajectoryLabels, TrajectoryStatistic
 
 Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
+ResidualComponent = Literal[
+    "resid_pre", "resid_mid", "resid_post", "attn_out", "mlp_out"
+]
 
 
 @dataclass
@@ -79,6 +89,75 @@ class PredictionTrajectory:
         return np.exp(self.log_probs)
 
     @classmethod
+    def from_lens_and_cache(
+        cls,
+        lens: Lens,
+        input_ids: Sequence[int],
+        cache: "tl.ActivationCache",
+        model_logits: th.Tensor,
+        targets: Optional[Sequence[int]] = None,
+        residual_component: ResidualComponent = "resid_pre",
+    ) -> "PredictionTrajectory":
+        """Construct a prediction trajectory from a set of residual stream vectors.
+
+        Args:
+            lens: A lens to use to produce the predictions
+            cache: the activation cache produced by running the model.
+            input_ids: Ids that where input into the model.
+            model_logits: the models final output logits.
+            targets: the targets the model is trying to predict. Used for cross entropy
+                visualization.
+            residual_component: Name of the stream vector being visualized.
+
+        Returns:
+            PredictionTrajectory constructed from the residual stream vectors.
+        """
+        if targets is not None and len(input_ids) != len(targets):
+            raise ValueError(
+                f"Length of input_ids {len(input_ids)} does not"
+                f" match targets {len(targets)}"
+            )
+
+        # TODO deal with batch size
+        tokenizer = cache.model.tokenizer
+        traj_log_probs = []
+        for layer in range(cache.model.cfg.n_layers):
+            hidden = cache[residual_component, layer]
+            if len(input_ids) != hidden.shape[-2]:
+                raise ValueError(
+                    f"Length of input ids {len(input_ids)} does "
+                    f"not match cache sequence length {hidden.shape[-2]}."
+                )
+
+            logits = lens.forward(hidden, layer)
+
+            traj_log_probs.append(
+                logits.log_softmax(dim=-1).squeeze().detach().cpu().numpy()
+            )
+
+        model_log_probs = model_logits.log_softmax(-1).squeeze().detach().cpu().numpy()
+
+        # Add model predictions
+        if traj_log_probs[-1].shape[-1] != model_log_probs.shape[-1]:
+            logging.warning(
+                "Lens vocab size does not match model vocab size."
+                "Truncating model outputs to match lens vocab size."
+            )
+        # Handle the case where the model has more/less tokens than the lens
+        min_logit = -np.finfo(model_log_probs.dtype).max
+        trunc_model_log_probs = np.full_like(traj_log_probs[-1], min_logit)
+        trunc_model_log_probs[..., : model_log_probs.shape[-1]] = model_log_probs
+
+        traj_log_probs.append(trunc_model_log_probs)
+
+        return cls(
+            tokenizer=tokenizer,
+            log_probs=np.array(traj_log_probs),
+            targets=np.array(targets) if targets is not None else None,
+            input_ids=np.array(input_ids),
+        )
+
+    @classmethod
     def from_lens_and_model(
         cls,
         lens: Lens,
@@ -86,8 +165,7 @@ class PredictionTrajectory:
         input_ids: Sequence[int],
         tokenizer: Optional[Tokenizer] = None,
         targets: Optional[Sequence[int]] = None,
-        start_pos: int = 0,
-        end_pos: Optional[int] = None,
+        slice: slice = slice(None),
         mask_input: bool = False,
     ) -> "PredictionTrajectory":
         """Constructs a slice of the model's prediction trajectory.
@@ -98,8 +176,7 @@ class PredictionTrajectory:
             tokenizer : The tokenizer to use for decoding the predictions.
             input_ids : The input ids to pass to the model.
             targets : The targets for the input sequence.
-            start_pos : The start position of the slice across the sequence dimension.
-            end_pos : The end position of the slice accross the sequence dimension.
+            slice: The slice of the position dimension to record.
             mask_input : whether to forbid the lens from predicting the input tokens.
 
         Returns:
@@ -111,19 +188,17 @@ class PredictionTrajectory:
 
         # Slice arrays the specified range
         model_log_probs = (
-            outputs.logits[..., start_pos:end_pos, :]
+            outputs.logits[..., slice, :]
             .log_softmax(-1)
             .squeeze()
             .detach()
             .cpu()
             .numpy()
         )
-        stream = [h[..., start_pos:end_pos, :] for h in outputs.hidden_states]
+        stream = [h[..., slice, :] for h in outputs.hidden_states]
 
-        input_ids_np = np.array(input_ids[start_pos:end_pos])
-        targets_np = (
-            np.array(targets[start_pos:end_pos]) if targets is not None else None
-        )
+        input_ids_np = np.array(input_ids[slice])
+        targets_np = np.array(targets[slice]) if targets is not None else None
 
         # Create the stream of log probabilities from the lens
         traj_log_probs = []
