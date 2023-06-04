@@ -3,6 +3,14 @@ import copy
 from dataclasses import dataclass
 from typing import Literal, Optional, cast
 
+try:
+    # Needed for the docs to build without complaining
+    import transformer_lens as tl  # noqa: F401
+
+    _transformer_lens_available = True
+except ImportError:
+    _transformer_lens_available = False
+
 import torch as th
 from torch.distributions import Distribution
 
