@@ -44,10 +44,14 @@ class TrajectoryStatistic:
     def __post_init__(self) -> None:
         """Validate class invariants."""
         assert len(self.stats.shape) == 2
+
         assert self.labels is None or (
             self.labels.label_strings.shape == self.stats.shape
-            and self.labels.sequence_labels.shape[0] == self.stats.shape[1]
-        )
+        ), f"{self.labels.label_strings.shape} != {self.stats.shape}"
+
+        assert self.labels is None or (
+            self.labels.sequence_labels.shape[-1] == self.stats.shape[-1]
+        ), f"{self.labels.sequence_labels.shape[-1]} != {self.stats.shape[-1]}"
 
     @property
     def num_layers(self) -> int:

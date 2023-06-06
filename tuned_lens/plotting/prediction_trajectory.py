@@ -40,43 +40,70 @@ class PredictionTrajectory:
     aspects of the trajectory.
     """
 
-    # The log probabilities of the predictions for each hidden layer + the models logits
-    # Shape: (num_layers, seq_len, vocab_size)
     log_probs: NDArray[np.float32]
+    """(n_layers, seq_len, vocab_size) or (batch, n_layers, seq_len, vocab_size)
+    The log probabilities of the predictions for each hidden layer + the models
+    logits"""
+
     input_ids: NDArray[np.int64]
+    """(seq_len,) or (batch, seq_len)"""
+
     targets: Optional[NDArray[np.int64]] = None
+    """(seq_len,) or (batch, seq_len)"""
+
     tokenizer: Optional[Tokenizer] = None
 
     def __post_init__(self) -> None:
         """Validate class invariants."""
-        assert len(self.log_probs.shape) == 3, "log_probs.shape: {}".format(
+        assert len(self.log_probs.shape) in (3, 4), "log_probs.shape: {}".format(
             self.log_probs.shape
         )
+        assert len(self.input_ids.shape) in (1, 2), "input_ids.shape: {}".format(
+            self.input_ids.shape
+        )
         assert (
-            self.log_probs.shape[1] == self.input_ids.shape[0]
+            len(self.log_probs.shape) == len(self.input_ids.shape) + 2
         ), "log_probs.shape: {}, input_ids.shape: {}".format(
             self.log_probs.shape, self.input_ids.shape
         )
+        if len(self.log_probs.shape) == 4:
+            assert (
+                self.log_probs.shape[0] == self.input_ids.shape[0]
+            ), "log_probs.shape: {}, input_ids.shape: {}".format(
+                self.log_probs.shape, self.input_ids.shape
+            )
+
         assert (
-            self.targets is None or self.targets.shape[0] == self.input_ids.shape[0]
+            self.log_probs.shape[-2] == self.input_ids.shape[-1]
+        ), "log_probs.shape: {}, input_ids.shape: {}".format(
+            self.log_probs.shape, self.input_ids.shape
+        )
+
+        assert (
+            self.targets is None or self.targets.shape == self.input_ids.shape
         ), "targets.shape: {}, input_ids.shape: {}".format(
             self.targets.shape, self.input_ids.shape
         )
 
     @property
+    def has_batch(self) -> bool:
+        """Returns true if the trajectory has a batch dimension."""
+        return len(self.log_probs.shape) == 4
+
+    @property
     def num_layers(self) -> int:
-        """Returns the number of layers in the stream."""
-        return self.log_probs.shape[0] - 1
+        """Returns the number of layers in the stream not including the model output."""
+        return self.log_probs.shape[-3] - 1
 
     @property
     def num_tokens(self) -> int:
         """Returns the number of tokens in this slice of the sequence."""
-        return self.log_probs.shape[1]
+        return self.log_probs.shape[-2]
 
     @property
     def vocab_size(self) -> int:
         """Returns the size of the vocabulary."""
-        return self.log_probs.shape[2]
+        return self.log_probs.shape[-1]
 
     @property
     def model_log_probs(self) -> NDArray[np.float32]:
@@ -92,10 +119,10 @@ class PredictionTrajectory:
     def from_lens_and_cache(
         cls,
         lens: Lens,
-        input_ids: Sequence[int],
+        input_ids: th.Tensor,
         cache: "tl.ActivationCache",
         model_logits: th.Tensor,
-        targets: Optional[Sequence[int]] = None,
+        targets: Optional[th.Tensor] = None,
         residual_component: ResidualComponent = "resid_pre",
     ) -> "PredictionTrajectory":
         """Construct a prediction trajectory from a set of residual stream vectors.
@@ -103,10 +130,13 @@ class PredictionTrajectory:
         Args:
             lens: A lens to use to produce the predictions
             cache: the activation cache produced by running the model.
-            input_ids: Ids that where input into the model.
-            model_logits: the models final output logits.
-            targets: the targets the model is trying to predict. Used for cross entropy
-                visualization.
+            input_ids: (batch x seq_len) Ids that where input into the model.
+                The batch dimension is reduced by replacing any tokens that differ
+                across the batch with the pad token.
+            model_logits: (batch x seq_len x d_vocab) the models final output logits.
+            targets: (batch x seq_len) the targets the model is trying to predict. Used
+                for cross entropy visualization. The batch dimension is reduced in
+                the same way as input_ids.
             residual_component: Name of the stream vector being visualized.
 
         Returns:
@@ -118,24 +148,21 @@ class PredictionTrajectory:
                 f" match targets {len(targets)}"
             )
 
-        # TODO deal with batch size
         tokenizer = cache.model.tokenizer
         traj_log_probs = []
         for layer in range(cache.model.cfg.n_layers):
             hidden = cache[residual_component, layer]
-            if len(input_ids) != hidden.shape[-2]:
+            if input_ids.shape[-1] != hidden.shape[-2]:
                 raise ValueError(
-                    f"Length of input ids {len(input_ids)} does "
+                    f"Length of input ids {input_ids.shape[-1]} does "
                     f"not match cache sequence length {hidden.shape[-2]}."
                 )
 
             logits = lens.forward(hidden, layer)
 
-            traj_log_probs.append(
-                logits.log_softmax(dim=-1).squeeze().detach().cpu().numpy()
-            )
+            traj_log_probs.append(logits.log_softmax(dim=-1).detach().cpu().numpy())
 
-        model_log_probs = model_logits.log_softmax(-1).squeeze().detach().cpu().numpy()
+        model_log_probs = model_logits.log_softmax(-1).detach().cpu().numpy()
 
         # Add model predictions
         if traj_log_probs[-1].shape[-1] != model_log_probs.shape[-1]:
@@ -143,6 +170,7 @@ class PredictionTrajectory:
                 "Lens vocab size does not match model vocab size."
                 "Truncating model outputs to match lens vocab size."
             )
+
         # Handle the case where the model has more/less tokens than the lens
         min_logit = -np.finfo(model_log_probs.dtype).max
         trunc_model_log_probs = np.full_like(traj_log_probs[-1], min_logit)
@@ -152,9 +180,9 @@ class PredictionTrajectory:
 
         return cls(
             tokenizer=tokenizer,
-            log_probs=np.array(traj_log_probs),
-            targets=np.array(targets) if targets is not None else None,
-            input_ids=np.array(input_ids),
+            log_probs=np.stack(traj_log_probs, axis=-3),
+            targets=targets.numpy() if targets is not None else None,
+            input_ids=input_ids.numpy(),
         )
 
     @classmethod
@@ -261,6 +289,7 @@ class PredictionTrajectory:
         formatter: Optional[TokenFormatter] = None,
         min_prob: np.float_ = np.finfo(np.float32).eps,
         topk: int = 10,
+        n_items_in_batch_to_show: int = 3,
     ) -> TrajectoryLabels:
         """Labels for the prediction trajectory based on the most probable tokens.
 
@@ -268,6 +297,8 @@ class PredictionTrajectory:
             formatter : The formatter to use for formatting the tokens.
             min_prob : The minimum probability for a token to used as a label.
             topk : The number of top tokens to include in the hover over menu.
+            n_items_in_batch_to_show : The number of items in the batch to show in the
+                hover over menu.
 
         Raises:
             ValueError: If the tokenizer is not set.
@@ -281,28 +312,68 @@ class PredictionTrajectory:
         if formatter is None:
             formatter = TokenFormatter()
 
-        input_tokens = self.tokenizer.convert_ids_to_tokens(self.input_ids.tolist())
+        if self.has_batch:
+            # We need to reduce allonge the batch dimension
+            mask = np.all(self.input_ids == self.input_ids[0], axis=0)
+            input_ids = self.input_ids[0, ...]
+            input_tokens = self.tokenizer.convert_ids_to_tokens(input_ids.tolist())
+            input_tokens = [
+                input_token if mask else "*"
+                for input_token, mask in zip(input_tokens, mask)
+            ]
+            print(input_tokens)
 
-        entry_format_fn = np.vectorize(
-            lambda token, percent: f"{formatter.format(token)} {percent:.2f}%"
-        )
+            def format_row(tokens: NDArray, percents: NDArray) -> str:
 
-        topk_tokens, topk_probs = self._get_topk_tokens_and_values(
-            k=topk, sort_by=self.log_probs, values=self.probs
-        )
+                row = ""
+                for i, (token, percent) in enumerate(zip(tokens, percents)):
+                    # TODO pad all tokens to be the same length and figure out how to
+                    # control the number of columns in the hover over menu.
+                    row += f" {formatter.format(token)} {percent:.2f}%"
+                    if i >= n_items_in_batch_to_show:
+                        row += " ..."
+                        break
 
-        top_tokens = topk_tokens[..., 0]
-        top_probs = topk_probs[..., 0]
+                return row.strip()
 
-        label_strings = np.where(
-            top_probs > min_prob, formatter.vectorized_format(top_tokens), ""
-        )
+            entry_format_fn = np.vectorize(format_row, signature="(n),(n)->()")
 
-        return TrajectoryLabels(
-            label_strings=label_strings,
-            sequence_labels=formatter.vectorized_format(input_tokens),
-            hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
-        )
+            topk_tokens, topk_probs = self._get_topk_tokens_and_values(
+                k=topk, sort_by=self.log_probs, values=self.probs
+            )
+
+            topk_tokens = np.moveaxis(topk_tokens, 0, -1)
+            topk_probs = np.moveaxis(topk_probs, 0, -1)
+
+            return TrajectoryLabels(
+                label_strings=np.full(
+                    (self.num_layers + 1, self.num_tokens), "", dtype=str
+                ),
+                sequence_labels=formatter.vectorized_format(input_tokens),
+                hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
+            )
+        else:
+            input_tokens = self.tokenizer.convert_ids_to_tokens(self.input_ids.tolist())
+
+            entry_format_fn = np.vectorize(
+                lambda token, percent: f"{formatter.format(token)} {percent:.2f}%"
+            )
+            topk_tokens, topk_probs = self._get_topk_tokens_and_values(
+                k=topk, sort_by=self.log_probs, values=self.probs
+            )
+
+            top_tokens = topk_tokens[..., 0]
+            top_probs = topk_probs[..., 0]
+
+            label_strings = np.where(
+                top_probs > min_prob, formatter.vectorized_format(top_tokens), ""
+            )
+
+            return TrajectoryLabels(
+                label_strings=label_strings,
+                sequence_labels=formatter.vectorized_format(input_tokens),
+                hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
+            )
 
     def largest_delta_in_prob_labels(
         self,
@@ -371,16 +442,21 @@ class PredictionTrajectory:
         if self.targets is None:
             raise ValueError("Cannot compute cross entropy without targets.")
 
-        assert self.targets.shape == self.log_probs[-1].shape[:-1], (
-            "Batch and sequence lengths of targets and log probs must match."
-            f"Got {self.targets.shape} and {self.log_probs[-1].shape[:-1]}."
+        flat_log_probs = self.log_probs.reshape(
+            self.num_layers + 1, -1, self.vocab_size
         )
+        flat_targets = self.targets.reshape(-1)
+        stats = -flat_log_probs[..., np.arange(flat_log_probs.shape[1]), flat_targets]
+        stats = stats.reshape(self.log_probs.shape[:-1])
+
+        if self.has_batch:
+            stats = stats.mean(axis=0)
 
         return TrajectoryStatistic(
             name="Cross Entropy",
             units="nats",
             labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
-            stats=-self.log_probs[:, np.arange(self.num_tokens), self.targets],
+            stats=stats,
         )
 
     def entropy(self, **kwargs) -> TrajectoryStatistic:
@@ -392,6 +468,7 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the entropy of the predictions.
         """
+        # TODO handel batch
         return TrajectoryStatistic(
             name="Entropy",
             units="nats",
@@ -409,6 +486,7 @@ class PredictionTrajectory:
             A TrajectoryStatistic with the KL divergence of the lens predictions to the
             final output of the model.
         """
+        # TODO handel batch
         model_log_probs = self.model_log_probs.reshape(
             1, self.num_tokens, self.vocab_size
         )
@@ -449,6 +527,7 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the KL divergence between self and other.
         """
+        # TODO handel batch
         kl_div = np.sum(self.probs * (self.log_probs - other.log_probs), axis=-1)
 
         return TrajectoryStatistic(

@@ -37,7 +37,7 @@ def prediction_trajectory_with_tokenizer():
     layers = 3
     num_tokens = 10
     vocab_size = 12
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-70m-deduped")
     return PredictionTrajectory(
         log_probs=np.zeros((layers, num_tokens, vocab_size), dtype=np.float32),
         input_ids=np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
@@ -47,8 +47,15 @@ def prediction_trajectory_with_tokenizer():
 
 
 @pytest.fixture
+def hooked_transformer():
+    return tl.HookedTransformer.from_pretrained(
+        "EleutherAI/pythia-70m-deduped", device="cpu"
+    )
+
+
+@pytest.fixture
 def model_and_tokenizer():
-    model_name = "gpt2"
+    model_name = "EleutherAI/pythia-70m-deduped"
     model = AutoModelForCausalLM.from_pretrained(model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     return model, tokenizer
@@ -66,22 +73,21 @@ def test_prediction_trajectory_from_lens_and_model_smoke(model_and_tokenizer, le
     traj = PredictionTrajectory.from_lens_and_model(
         lens, model, input_ids, tokenizer=tokenizer
     )
-    assert traj.num_layers == model.config.n_layer
+    assert traj.num_layers == model.config.num_hidden_layers
     assert traj.num_tokens == len(input_ids)
     assert traj.vocab_size == model.config.vocab_size
 
 
-def test_prediction_trajectory_from_cache():
-    model = tl.HookedTransformer.from_pretrained("facebook/opt-125m", device="cpu")
+def test_prediction_trajectory_from_cache_no_batch(hooked_transformer):
     lens = TunedLens.from_unembed_and_pretrained(
-        unembed=Unembed(model),
-        lens_resource_id="facebook/opt-125m",
+        unembed=Unembed(hooked_transformer),
+        lens_resource_id="EleutherAI/pythia-70m-deduped",
     )
-    input_ids = [23, 23, 23, 23, 23, 23, 23, 23]
-    targets = input_ids[:]
+    input_ids = th.tensor([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]])
+    targets = input_ids.clone()
     with th.inference_mode():
-        logits, cache = model.run_with_cache(
-            input=th.tensor([input_ids]), return_type="logits"
+        logits, cache = hooked_transformer.run_with_cache(
+            input=input_ids, return_type="logits"
         )
         assert isinstance(logits, th.Tensor)
         PredictionTrajectory.from_lens_and_cache(
