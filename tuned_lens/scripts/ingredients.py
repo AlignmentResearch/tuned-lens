@@ -2,6 +2,7 @@
 import enum
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from functools import partial
 from typing import Optional, Union
 
@@ -263,8 +264,8 @@ class Distributed:
     cpu_offload: bool = field(action="store_true")
     """Use CPU offloading. Must be combined with fsdp"""
 
-    seed: int = 0
-    """Seed used for shuffling the data."""
+    nccl_timeout: int = 1200  # 20 minutes
+    """Timeout for NCCL operations in seconds."""
 
     per_gpu_batch_size: int = 1
     """The batch size per GPU."""
@@ -361,7 +362,9 @@ class Distributed:
         # Support both distributed and non-distributed training
         local_rank = os.environ.get("LOCAL_RANK")
         if local_rank is not None:
-            dist.init_process_group("nccl")
+            dist.init_process_group(
+                "nccl", timeout=timedelta(seconds=self.nccl_timeout)
+            )
             assert (
                 th.cuda.is_available()
             ), "CUDA must be available for distributed training"

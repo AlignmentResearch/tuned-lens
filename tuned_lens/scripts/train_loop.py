@@ -313,6 +313,7 @@ class Train:
         assert model and tokenizer and data and lens and nats_to_bpb
 
         dl = self.dist.data_loader(data)
+        dl.seed(self.seed)
         params = [p for p in lens.parameters() if p.requires_grad]
         opt = self.opt.create_optim(params)
         scheduler = self.opt.create_scheduler(opt, self.num_steps)
