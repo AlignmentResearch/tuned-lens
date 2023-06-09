@@ -41,15 +41,14 @@ class PredictionTrajectory:
     """
 
     log_probs: NDArray[np.float32]
-    """(n_layers, seq_len, vocab_size) or (batch, n_layers, seq_len, vocab_size)
-    The log probabilities of the predictions for each hidden layer + the models
-    logits"""
+    """(..., n_layers, seq_len, vocab_size) The log probabilities of the predictions
+    for each hidden layer + the models logits"""
 
     input_ids: NDArray[np.int64]
-    """(seq_len,) or (batch, seq_len)"""
+    """(..., seq_len)"""
 
     targets: Optional[NDArray[np.int64]] = None
-    """(seq_len,) or (batch, seq_len)"""
+    """(..., seq_len)"""
 
     tokenizer: Optional[Tokenizer] = None
 
@@ -88,7 +87,17 @@ class PredictionTrajectory:
     @property
     def has_batch(self) -> bool:
         """Returns true if the trajectory has a batch dimension."""
-        return len(self.log_probs.shape) == 4
+        return len(self.log_probs.shape) > 3
+
+    @property
+    def batch_axes(self) -> Sequence[int]:
+        """Returns the batch axes for the trajectory."""
+        return tuple(range(len(self.log_probs.shape) - 3))
+
+    @property
+    def batch_shape(self) -> Sequence[int]:
+        """Returns the batch shape of the trajectory."""
+        return self.log_probs.shape[:-3]
 
     @property
     def num_layers(self) -> int:
@@ -107,8 +116,8 @@ class PredictionTrajectory:
 
     @property
     def model_log_probs(self) -> NDArray[np.float32]:
-        """Returns the log probs of the model."""
-        return self.log_probs[-1, ...]
+        """Returns the log probs of the model (..., seq_len, vocab_size)."""
+        return self.log_probs[..., -1, :, :]
 
     @property
     def probs(self) -> NDArray[np.float32]:
@@ -329,9 +338,18 @@ class PredictionTrajectory:
                 for i, (token, percent) in enumerate(zip(tokens, percents)):
                     # TODO pad all tokens to be the same length and figure out how to
                     # control the number of columns in the hover over menu.
-                    row += f" {formatter.format(token)} {percent:.2f}%"
+                    formatted = formatter.pad_token_repr_to_max_len(
+                        formatter.format(token)
+                    )
+                    assert len(formatted) == formatter.max_string_len
+                    percent = f"{percent:.2f}"
+                    # ensure percent is 4 characters long
+                    percent = " " * (5 - len(percent)) + percent
+                    entry = f" {formatted} {percent}%"
+                    # Pad the entry to be the same length as the longest entry
+                    row += entry
                     if i >= n_items_in_batch_to_show:
-                        row += " ..."
+                        row += " …"
                         break
 
                 return row.strip()
@@ -374,6 +392,15 @@ class PredictionTrajectory:
                 sequence_labels=formatter.vectorized_format(input_tokens),
                 hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
             )
+
+    def slice_sequence(self, slice: slice) -> "PredictionTrajectory":
+        """Create a slice of the prediction trajectory along the sequence dimension."""
+        return PredictionTrajectory(
+            log_probs=self.log_probs[..., slice, :],
+            input_ids=self.input_ids[slice],
+            targets=self.targets[slice] if self.targets is not None else None,
+            tokenizer=self.tokenizer,
+        )
 
     def largest_delta_in_prob_labels(
         self,
@@ -450,7 +477,7 @@ class PredictionTrajectory:
         stats = stats.reshape(self.log_probs.shape[:-1])
 
         if self.has_batch:
-            stats = stats.mean(axis=0)
+            stats = stats.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="Cross Entropy",
@@ -468,12 +495,16 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the entropy of the predictions.
         """
-        # TODO handel batch
+        stats = -np.sum(self.probs * self.log_probs, axis=-1)
+
+        if self.has_batch:
+            stats = stats.mean(axis=self.batch_axes)
+
         return TrajectoryStatistic(
             name="Entropy",
             units="nats",
             labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
-            stats=-np.sum(np.exp(self.log_probs) * self.log_probs, axis=-1),
+            stats=stats,
         )
 
     def forward_kl(self, **kwargs) -> TrajectoryStatistic:
@@ -486,17 +517,19 @@ class PredictionTrajectory:
             A TrajectoryStatistic with the KL divergence of the lens predictions to the
             final output of the model.
         """
-        # TODO handel batch
-        model_log_probs = self.model_log_probs.reshape(
-            1, self.num_tokens, self.vocab_size
+        model_log_probs = self.model_log_probs[..., np.newaxis, :, :]
+        stats = np.sum(
+            np.exp(model_log_probs) * (model_log_probs - self.log_probs), axis=-1
         )
+
+        if self.has_batch:
+            stats = stats.mean(axis=self.batch_axes)
+
         return TrajectoryStatistic(
             name="Forward KL",
             units="nats",
             labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
-            stats=np.sum(
-                np.exp(model_log_probs) * (model_log_probs - self.log_probs), axis=-1
-            ),
+            stats=stats,
         )
 
     def max_probability(self, **kwargs) -> TrajectoryStatistic:
@@ -508,11 +541,16 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the max probability of the among the predictions.
         """
+        stats = np.exp(self.log_probs.max(-1))
+
+        if self.has_batch:
+            stats = stats.mean(axis=self.batch_axes)
+
         return TrajectoryStatistic(
             name="Max Probability",
             units="probs",
             labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
-            stats=np.exp(self.log_probs.max(-1)),
+            stats=stats,
         )
 
     def kl_divergence(
@@ -527,7 +565,12 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the KL divergence between self and other.
         """
-        # TODO handel batch
+        if self.has_batch:
+            raise NotImplementedError(
+                "Batch KL divergence not implemented. "
+                "Please open an issue if you need this."
+            )
+
         kl_div = np.sum(self.probs * (self.log_probs - other.log_probs), axis=-1)
 
         return TrajectoryStatistic(
@@ -553,6 +596,12 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the JS divergence between self and other.
         """
+        if self.has_batch:
+            raise NotImplementedError(
+                "Batch JS divergence not implemented. "
+                "Please open an issue if you need this."
+            )
+
         js_div = 0.5 * np.sum(
             self.probs * (self.log_probs - other.log_probs), axis=-1
         ) + 0.5 * np.sum(other.probs * (other.log_probs - self.log_probs), axis=-1)
@@ -581,6 +630,12 @@ class PredictionTrajectory:
             A TrajectoryStatistic with the total variational distance between
             self and other.
         """
+        if self.has_batch:
+            raise NotImplementedError(
+                "Batch total variation not implemented. "
+                "Please open an issue if you need this."
+            )
+
         t_var = np.abs(self.probs - other.probs).max(axis=-1)
 
         return TrajectoryStatistic(

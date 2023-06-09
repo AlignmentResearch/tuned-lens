@@ -154,6 +154,7 @@ class TrajectoryStatistic:
             xaxis_title="Input",
             yaxis_title="Layer",
         )
+
         return fig
 
 
