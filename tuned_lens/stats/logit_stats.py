@@ -60,7 +60,7 @@ class LogitStats:
         if self.n is None:
             self.n = th.tensor(0, dtype=th.int64, device=logits.device)
         elif len(self.n.shape) > 0:
-            raise ValueError(f"Expected n to be a scaler but got {self.n.shape=}")
+            raise ValueError(f"Expected n to be a scalar but got {self.n.shape=}")
 
         if self.marginal_probs is None:
             self.marginal_probs = logits.new_zeros(K)
