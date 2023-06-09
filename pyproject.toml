@@ -21,7 +21,7 @@ dependencies = [
     "flatten-dict>=0.4.1",
     "wandb>=0.15.0",
 ]
-version = "0.1.0"
+version = "0.1.1"
 
 [project.optional-dependencies]
 dev = [
