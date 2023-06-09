@@ -115,7 +115,7 @@ class TrajectoryStatistic:
                 )
                 heatmap_kwargs.update(
                     customdata=hover_over_entries,
-                    hoverlabel=dict(bgcolor="rgb(42, 42, 50)"),
+                    hoverlabel=dict(bgcolor="rgb(42, 42, 50)", font_family="Monospace"),
                     hovertemplate="<br>".join(
                         f" %{{customdata[{i}]}}"
                         for i in range(hover_over_entries.shape[2])
