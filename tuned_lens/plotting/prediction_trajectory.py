@@ -266,6 +266,7 @@ class PredictionTrajectory:
                 "Truncating model outputs to match lens vocab size."
             )
         # Handle the case where the model has more/less tokens than the lens
+        # TODO remove
         min_logit = -np.finfo(model_log_probs.dtype).max
         trunc_model_log_probs = np.full_like(traj_log_probs[-1], min_logit)
         trunc_model_log_probs[..., : model_log_probs.shape[-1]] = model_log_probs
@@ -281,6 +282,8 @@ class PredictionTrajectory:
 
     def _get_sequence_labels(self) -> NDArray[np.str_]:
         """Get the input labels from a batch of input ids."""
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer must be set to get labels.")
         # If the input ids are the same for all items in the batch, then we can
         # just use the first item in the batch otherwise we represent the input as *
         if self.has_batch:
@@ -321,7 +324,7 @@ class PredictionTrajectory:
 
         return topk_tokens, topk_values
 
-    def largest_prob_labels(
+    def _largest_prob_labels(
         self,
         formatter: Optional[TokenFormatter] = None,
         min_prob: np.float_ = np.finfo(np.float32).eps,
@@ -352,8 +355,6 @@ class PredictionTrajectory:
         topk_tokens, topk_probs = self._get_topk_tokens_and_values(
             k=topk, sort_by=self.log_probs, values=self.probs
         )
-
-        sequence_labels = self._get_sequence_labels()
 
         if self.has_batch:
             # We need to reduce allonge the batch dimension
@@ -386,10 +387,10 @@ class PredictionTrajectory:
                 label_strings=np.full(
                     (self.num_layers + 1, self.num_tokens), "", dtype=str
                 ),
-                sequence_labels=formatter.vectorized_format(sequence_labels),
                 hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
             )
         else:
+            # TODO remove this and merge with the above
             entry_format_fn = np.vectorize(
                 lambda token, percent: f"{formatter.format(token)} {percent:.2f}%"
             )
@@ -406,7 +407,6 @@ class PredictionTrajectory:
 
             return TrajectoryLabels(
                 label_strings=label_strings,
-                sequence_labels=formatter.vectorized_format(sequence_labels),
                 hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
             )
 
@@ -438,7 +438,7 @@ class PredictionTrajectory:
             tokenizer=self.tokenizer,
         )
 
-    def largest_delta_in_prob_labels(
+    def _largest_delta_in_prob_labels(
         self,
         other: "PredictionTrajectory",
         formatter: Optional[TokenFormatter] = None,
@@ -470,13 +470,8 @@ class PredictionTrajectory:
                 label_strings=np.full(
                     (self.num_layers + 1, self.num_tokens), "", dtype=str
                 ),
-                sequence_labels=formatter.vectorized_format(
-                    self._get_sequence_labels()
-                ),
                 hover_over_entries=None,
             )
-
-        input_tokens = self.tokenizer.convert_ids_to_tokens(self.input_ids.tolist())
 
         entry_format_fn = np.vectorize(
             lambda token, percent: f"{formatter.format(token)} Δ{percent:.2f}%"
@@ -499,7 +494,6 @@ class PredictionTrajectory:
 
         return TrajectoryLabels(
             label_strings=label_strings,
-            sequence_labels=formatter.vectorized_format(input_tokens),
             hover_over_entries=entry_format_fn(topk_tokens, 100 * topk_deltas),
         )
 
@@ -524,7 +518,10 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Cross Entropy",
             units="nats",
-            labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
+            trajectory_labels=self._largest_prob_labels(**kwargs)
+            if self.tokenizer
+            else None,
+            sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
 
@@ -545,7 +542,10 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Entropy",
             units="nats",
-            labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
+            trajectory_labels=self._largest_prob_labels(**kwargs)
+            if self.tokenizer
+            else None,
+            sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
 
@@ -570,7 +570,10 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Forward KL",
             units="nats",
-            labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
+            trajectory_labels=self._largest_prob_labels(**kwargs)
+            if self.tokenizer
+            else None,
+            sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
 
@@ -602,6 +605,7 @@ class PredictionTrajectory:
             name="Δ Log Prob Difference" if delta else "Log Prob Difference",
             units="nats",
             includes_output=not delta,
+            sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
 
@@ -622,7 +626,10 @@ class PredictionTrajectory:
         return TrajectoryStatistic(
             name="Max Probability",
             units="probs",
-            labels=self.largest_prob_labels(**kwargs) if self.tokenizer else None,
+            trajectory_labels=self._largest_prob_labels(**kwargs)
+            if self.tokenizer
+            else None,
+            sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
 
@@ -647,9 +654,10 @@ class PredictionTrajectory:
             name="KL(Self | Other)",
             units="nats",
             stats=kl_div,
-            labels=self.largest_delta_in_prob_labels(other, **kwargs)
+            trajectory_labels=self._largest_delta_in_prob_labels(other, **kwargs)
             if self.tokenizer
             else None,
+            sequence_labels=self._get_sequence_labels(),
             min=0,
             max=None,
         )
@@ -677,9 +685,10 @@ class PredictionTrajectory:
             name="JS(Self | Other)",
             units="nats",
             stats=js_div,
-            labels=self.largest_delta_in_prob_labels(other, **kwargs)
+            trajectory_labels=self._largest_delta_in_prob_labels(other, **kwargs)
             if self.tokenizer
             else None,
+            sequence_labels=self._get_sequence_labels(),
             min=0,
             max=None,
         )
@@ -706,9 +715,10 @@ class PredictionTrajectory:
             name="TV(Self | Other)",
             units="probs",
             stats=t_var,
-            labels=self.largest_delta_in_prob_labels(other, **kwargs)
+            trajectory_labels=self._largest_delta_in_prob_labels(other, **kwargs)
             if self.tokenizer
             else None,
+            sequence_labels=self._get_sequence_labels(),
             min=0,
             max=1,
         )

@@ -13,8 +13,6 @@ class TrajectoryLabels:
 
     # (n_layers x sequence_length) label for each layer and position in the stream.
     label_strings: NDArray[np.str_]
-    # (sequence_length) labels for the sequence dimension typically the input tokens.
-    sequence_labels: NDArray[np.str_]
     # (n_layers x sequence_length x k) k entries to display when hovering over a cell.
     # For example, the top k prediction from the lens at each layer.
     hover_over_entries: Optional[NDArray[np.str_]] = None
@@ -31,9 +29,11 @@ class TrajectoryStatistic:
     name: str
     # (n_layers x sequence_length) value of the statistic at each layer and position.
     stats: NDArray[np.float32]
+    # (sequence_length) labels for the sequence dimension typically the input tokens.
+    sequence_labels: Optional[NDArray[np.str_]] = None
     # labels for each layer and position in the stream. For example, the top 1
     # prediction from the lens at each layer.
-    labels: Optional[TrajectoryLabels] = None
+    trajectory_labels: Optional[TrajectoryLabels] = None
     # The units of the statistic.
     units: Optional[str] = None
     # The maximum value of the statistic.
@@ -47,13 +47,13 @@ class TrajectoryStatistic:
         """Validate class invariants."""
         assert len(self.stats.shape) == 2, f"{self.stats.shape} != (n_layers, seq_len)"
 
-        assert self.labels is None or (
-            self.labels.label_strings.shape == self.stats.shape
-        ), f"{self.labels.label_strings.shape} != {self.stats.shape}"
+        assert self.trajectory_labels is None or (
+            self.trajectory_labels.label_strings.shape == self.stats.shape
+        ), f"{self.trajectory_labels.label_strings.shape} != {self.stats.shape}"
 
-        assert self.labels is None or (
-            self.labels.sequence_labels.shape[-1] == self.stats.shape[-1]
-        ), f"{self.labels.sequence_labels.shape[-1]} != {self.stats.shape[-1]}"
+        assert self.sequence_labels is None or (
+            self.sequence_labels.shape[-1] == self.stats.shape[-1]
+        ), f"{self.sequence_labels.shape[-1]} != {self.stats.shape[-1]}"
 
     @property
     def num_layers(self) -> int:
@@ -99,24 +99,23 @@ class TrajectoryStatistic:
             zmin=self.min,
         )
 
-        if self.labels is not None:
-            label_strings = self.labels.label_strings
-            label_strings = _stride_keep_last(label_strings, layer_stride)
+        if self.sequence_labels is not None:
             # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
-            x_labels = [
-                x + "\u200c" * i for i, x in enumerate(self.labels.sequence_labels)
-            ]
+            x_labels = [x + "\u200c" * i for i, x in enumerate(self.sequence_labels)]
+            heatmap_kwargs.update(x=x_labels)
 
+        if self.trajectory_labels is not None:
+            label_strings = self.trajectory_labels.label_strings
+            label_strings = _stride_keep_last(label_strings, layer_stride)
             heatmap_kwargs.update(
                 colorscale=colorscale,
                 text=label_strings,
                 texttemplate="<b>%{text}</b>",
-                x=x_labels,
             )
 
-            if self.labels.hover_over_entries is not None:
+            if self.trajectory_labels.hover_over_entries is not None:
                 hover_over_entries = _stride_keep_last(
-                    self.labels.hover_over_entries, layer_stride
+                    self.trajectory_labels.hover_over_entries, layer_stride
                 )
                 heatmap_kwargs.update(
                     customdata=hover_over_entries,
@@ -127,7 +126,6 @@ class TrajectoryStatistic:
                     )
                     + "<extra></extra>",
                 )
-
         heatmap_kwargs.update(kwargs)
         return go.Heatmap(**heatmap_kwargs)
 
