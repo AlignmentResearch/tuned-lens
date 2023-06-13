@@ -46,6 +46,50 @@ def _select_log_probs(log_probs: NDArray[np.float32], targets: NDArray[np.int64]
     ).squeeze(-1)
 
 
+def _ids_to_tokens(
+    ids: NDArray[np.int64],
+    tokenizer: Tokenizer,
+) -> NDArray[np.str_]:
+    """Convert a batch of ids to tokens.
+
+    Args:
+        ids: the input ids.
+        tokenizer: The tokenizer to use for decoding the input ids.
+
+    Returns:
+        A batch of tokens.
+    """
+    tokens = tokenizer.convert_ids_to_tokens(ids.flatten().tolist())
+    tokens = np.array(tokens).reshape(ids.shape)
+    return tokens
+
+
+def _consolidate_labels_from_batch(
+    tokens: NDArray[np.str_],
+    n_batch_axes: int,
+    het_token_repr: str = "*",
+) -> NDArray[np.str_]:
+    """Get the input labels from a batch of input ids.
+
+    Args:
+        tokens: (*batch_axes, *axes_to_keep) the input ids.
+        tokenizer: The tokenizer to use for decoding the input ids.
+        n_batch_axes: The batch axes for in the input ids.
+        het_token_repr: The string to use when the tokens are not the same across the
+            batch i.e. they are heterogeneous.
+
+    Returns:
+        (*axes_to_keep) the input labels where all items in the batch are the same
+        the token is used otherwise the token is replaced with `repeated_token_repr`.
+    """
+    first = tokens.reshape(-1, *tokens.shape[n_batch_axes:])[0, :]
+    mask = np.all(
+        tokens == first.reshape((1,) * n_batch_axes + tokens.shape[n_batch_axes:]),
+        axis=tuple(range(n_batch_axes)),
+    )
+    return np.where(mask, first, het_token_repr)
+
+
 @dataclass
 class PredictionTrajectory:
     """Contains the trajectory predictions for a sequence of tokens.
@@ -260,25 +304,10 @@ class PredictionTrajectory:
         if self.tokenizer is None:
             return None
 
-        # If the input ids are the same for all items in the batch, then we can
-        # just use the first item in the batch otherwise we represent the input as *
-        if self.n_batch_axis:
-            first = self.input_ids.reshape(-1, self.num_tokens)[0, :]
-            mask = np.all(
-                self.input_ids == first.reshape((1,) * self.n_batch_axis + (-1,)),
-                axis=self.batch_axes,
-            )
-            input_ids = self.input_ids.reshape(-1, self.num_tokens)[0, :]
-            sequence_labels = self.tokenizer.convert_ids_to_tokens(input_ids.tolist())
-            sequence_labels = [
-                input_token if mask else "*"
-                for input_token, mask in zip(sequence_labels, mask)
-            ]
-        else:
-            sequence_labels = self.tokenizer.convert_ids_to_tokens(
-                self.input_ids.tolist()
-            )
-        return np.array(sequence_labels)
+        return _consolidate_labels_from_batch(
+            tokens=_ids_to_tokens(self.input_ids, self.tokenizer),
+            n_batch_axes=self.n_batch_axis,
+        )
 
     def _get_topk_tokens_and_values(
         self,
@@ -309,10 +338,7 @@ class PredictionTrajectory:
         topk_inds = np.take_along_axis(topk_inds, sorted_top_k_inds, axis=-1)
         topk_values = np.take_along_axis(topk_values, sorted_top_k_inds, axis=-1)
 
-        # reshape topk_ind from (layers, seq, k) to (layers*seq*k),
-        # convert_ids_to_tokens, then reshape back to (layers, seq, k)
-        topk_tokens = self.tokenizer.convert_ids_to_tokens(topk_inds.flatten().tolist())
-        topk_tokens = np.array(topk_tokens).reshape(topk_inds.shape)
+        topk_tokens = _ids_to_tokens(topk_inds, self.tokenizer)
 
         return topk_tokens, topk_values
 
@@ -346,65 +372,46 @@ class PredictionTrajectory:
             k=topk, sort_by=self.log_probs, values=self.probs
         )
 
-        if self.n_batch_axis:
-            # We need to reduce allonge the batch dimension
-            def format_row(tokens: NDArray, percents: NDArray) -> str:
+        # Create the labels for the stream
+        top_tokens = topk_tokens[..., 0]
+        top_probs = topk_probs[..., 0]
+        label_strings = _consolidate_labels_from_batch(
+            tokens=top_tokens,
+            n_batch_axes=self.n_batch_axis,
+        )
+        label_strings = np.where((top_probs > min_prob).all(), label_strings, "")
 
-                row = ""
-                for i, (token, percent) in enumerate(zip(tokens, percents)):
-                    formatted = formatter.pad_token_repr_to_max_len(
-                        formatter.format(token)
-                    )
-                    assert len(formatted) == formatter.max_string_len
-                    percent = f"{percent:.2f}"
-                    # ensure percent is 4 characters long
-                    percent = " " * (5 - len(percent)) + percent
-                    entry = f" {formatted} {percent}%"
-                    # Pad the entry to be the same length as the longest entry
-                    row += entry
-                    if i >= n_items_in_batch_to_show:
-                        row += " …"
-                        break
+        # Create the hover over menu entries
+        def format_row(tokens: NDArray, percents: NDArray) -> str:
+            row = ""
+            for i, (token, percent) in enumerate(zip(tokens, percents)):
+                formatted = formatter.pad_token_repr_to_max_len(formatter.format(token))
+                assert len(formatted) == formatter.max_string_len
+                percent = f"{percent:.2f}"
+                # ensure percent is 4 characters long
+                percent = " " * (5 - len(percent)) + percent
+                entry = f" {formatted} {percent}%"
+                # Pad the entry to be the same length as the longest entry
+                row += entry
+                if i >= n_items_in_batch_to_show:
+                    row += " …"
+                    break
 
-                return row
+            return row
 
-            entry_format_fn = np.vectorize(format_row, signature="(n),(n)->()")
-            topk_tokens = topk_tokens.reshape(
-                -1, self.num_layers + 1, self.num_tokens, topk
-            )
-            topk_probs = topk_probs.reshape(
-                -1, self.num_layers + 1, self.num_tokens, topk
-            )
+        entry_format_fn = np.vectorize(format_row, signature="(n),(n)->()")
+        topk_tokens = topk_tokens.reshape(
+            -1, self.num_layers + 1, self.num_tokens, topk
+        )
+        topk_probs = topk_probs.reshape(-1, self.num_layers + 1, self.num_tokens, topk)
+        topk_tokens = np.moveaxis(topk_tokens, 0, -1)
+        topk_probs = np.moveaxis(topk_probs, 0, -1)
+        hover_over_entries = entry_format_fn(topk_tokens, 100 * topk_probs)
 
-            topk_tokens = np.moveaxis(topk_tokens, 0, -1)
-            topk_probs = np.moveaxis(topk_probs, 0, -1)
-
-            return TrajectoryLabels(
-                label_strings=np.full(
-                    (self.num_layers + 1, self.num_tokens), "", dtype=str
-                ),
-                hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
-            )
-        else:
-            # TODO remove this and merge with the above
-            entry_format_fn = np.vectorize(
-                lambda token, percent: f"{formatter.format(token)} {percent:.2f}%"
-            )
-            topk_tokens, topk_probs = self._get_topk_tokens_and_values(
-                k=topk, sort_by=self.log_probs, values=self.probs
-            )
-
-            top_tokens = topk_tokens[..., 0]
-            top_probs = topk_probs[..., 0]
-
-            label_strings = np.where(
-                top_probs > min_prob, formatter.vectorized_format(top_tokens), ""
-            )
-
-            return TrajectoryLabels(
-                label_strings=label_strings,
-                hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
-            )
+        return TrajectoryLabels(
+            label_strings=label_strings,
+            hover_over_entries=hover_over_entries,
+        )
 
     def _largest_delta_in_prob_labels(
         self,
