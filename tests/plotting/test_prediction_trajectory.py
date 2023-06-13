@@ -82,6 +82,7 @@ def test_prediction_trajectory_from_cache_no_batch(hooked_transformer):
     lens = TunedLens.from_unembed_and_pretrained(
         unembed=Unembed(hooked_transformer),
         lens_resource_id="EleutherAI/pythia-70m-deduped",
+        map_location="cpu",
     )
     input_ids = th.tensor([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]])
     targets = input_ids.clone()
