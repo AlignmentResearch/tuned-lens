@@ -40,10 +40,12 @@ class TrajectoryStatistic:
     max: Optional[float] = None
     # The minimum value of the statistic.
     min: Optional[float] = None
+    # Whether the statistic includes the final output layer.
+    includes_output: bool = True
 
     def __post_init__(self) -> None:
         """Validate class invariants."""
-        assert len(self.stats.shape) == 2
+        assert len(self.stats.shape) == 2, f"{self.stats.shape} != (n_layers, seq_len)"
 
         assert self.labels is None or (
             self.labels.label_strings.shape == self.stats.shape
@@ -76,7 +78,10 @@ class TrajectoryStatistic:
             the layer dimension, and the color of each cell is the value of
             the statistic.
         """
-        labels = np.array([*map(str, range(self.num_layers - 1)), "output"])
+        if self.includes_output:
+            labels = np.array([*map(str, range(self.num_layers - 1)), "output"])
+        else:
+            labels = np.array([*map(str, range(self.num_layers))])
 
         color_matrix = self.stats
 

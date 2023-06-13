@@ -30,6 +30,23 @@ ResidualComponent = Literal[
 ]
 
 
+def _select_log_probs(log_probs: NDArray[np.float32], targets: NDArray[np.int64]):
+    """Select log probs from a tensor of log probs.
+
+    Args:
+        log_probs: (..., n_layers, seq_len, vocab_size) the log probs to select from.
+        targets: (..., seq_len) the indices to select.
+
+    Returns:
+        (..., n_layers, seq_len) the selected log probs.
+    """
+    return np.take_along_axis(
+        log_probs,
+        targets[..., None, :, None],
+        axis=-1,
+    ).squeeze(-1)
+
+
 @dataclass
 class PredictionTrajectory:
     """Contains the trajectory predictions for a sequence of tokens.
@@ -50,43 +67,40 @@ class PredictionTrajectory:
     targets: Optional[NDArray[np.int64]] = None
     """(..., seq_len)"""
 
+    anti_targets: Optional[NDArray[np.int64]] = None
+    """(..., seq_len)"""
+
     tokenizer: Optional[Tokenizer] = None
 
     def __post_init__(self) -> None:
         """Validate class invariants."""
-        assert len(self.log_probs.shape) in (3, 4), "log_probs.shape: {}".format(
-            self.log_probs.shape
-        )
-        assert len(self.input_ids.shape) in (1, 2), "input_ids.shape: {}".format(
-            self.input_ids.shape
-        )
         assert (
-            len(self.log_probs.shape) == len(self.input_ids.shape) + 2
-        ), "log_probs.shape: {}, input_ids.shape: {}".format(
+            self.log_probs.shape[:-3] == self.input_ids.shape[:-1]
+        ), "Batch shapes do not match log_probs.shape: {}, input_ids.shape: {}".format(
             self.log_probs.shape, self.input_ids.shape
         )
-        if len(self.log_probs.shape) == 4:
-            assert (
-                self.log_probs.shape[0] == self.input_ids.shape[0]
-            ), "log_probs.shape: {}, input_ids.shape: {}".format(
-                self.log_probs.shape, self.input_ids.shape
-            )
 
         assert (
             self.log_probs.shape[-2] == self.input_ids.shape[-1]
-        ), "log_probs.shape: {}, input_ids.shape: {}".format(
+        ), "seq_len doesn't match log_probs.shape: {}, input_ids.shape: {}".format(
             self.log_probs.shape, self.input_ids.shape
         )
 
         assert (
             self.targets is None or self.targets.shape == self.input_ids.shape
-        ), "targets.shape: {}, input_ids.shape: {}".format(
+        ), "Shapes don't match targets.shape: {}, input_ids.shape: {}".format(
             self.targets.shape, self.input_ids.shape
+        )
+
+        assert (
+            self.anti_targets is None or self.anti_targets.shape == self.input_ids.shape
+        ), "Shapes don't match anti_targets.shape: {}, input_ids.shape: {}".format(
+            self.anti_targets.shape, self.input_ids.shape
         )
 
     @property
     def has_batch(self) -> bool:
-        """Returns true if the trajectory has a batch dimension."""
+        """Returns true if the trajectory has batch dimensions."""
         return len(self.log_probs.shape) > 3
 
     @property
@@ -132,31 +146,25 @@ class PredictionTrajectory:
         cache: "tl.ActivationCache",
         model_logits: th.Tensor,
         targets: Optional[th.Tensor] = None,
+        anti_targets: Optional[th.Tensor] = None,
         residual_component: ResidualComponent = "resid_pre",
     ) -> "PredictionTrajectory":
         """Construct a prediction trajectory from a set of residual stream vectors.
 
         Args:
-            lens: A lens to use to produce the predictions
+            lens: A lens to use to produce the predictions.
             cache: the activation cache produced by running the model.
-            input_ids: (batch x seq_len) Ids that where input into the model.
-                The batch dimension is reduced by replacing any tokens that differ
-                across the batch with the pad token.
-            model_logits: (batch x seq_len x d_vocab) the models final output logits.
-            targets: (batch x seq_len) the targets the model is trying to predict. Used
-                for cross entropy visualization. The batch dimension is reduced in
-                the same way as input_ids.
+            input_ids: (..., seq_len) Ids that where input into the model.
+            model_logits: (..., seq_len x d_vocab) the models final output logits.
+            targets: (..., seq_len) the targets the model is should predict. Used
+                for :method:`cross_entropy` and :method:`log_prob_diff` visualization.
+            anti_targets: (..., seq_len) the incorrect label the model should not
+                predict. Used for :method:`log_prob_diff` visualization.
             residual_component: Name of the stream vector being visualized.
 
         Returns:
             PredictionTrajectory constructed from the residual stream vectors.
         """
-        if targets is not None and len(input_ids) != len(targets):
-            raise ValueError(
-                f"Length of input_ids {len(input_ids)} does not"
-                f" match targets {len(targets)}"
-            )
-
         tokenizer = cache.model.tokenizer
         traj_log_probs = []
         for layer in range(cache.model.cfg.n_layers):
@@ -181,6 +189,7 @@ class PredictionTrajectory:
             )
 
         # Handle the case where the model has more/less tokens than the lens
+        # TODO this should be removed
         min_logit = -np.finfo(model_log_probs.dtype).max
         trunc_model_log_probs = np.full_like(traj_log_probs[-1], min_logit)
         trunc_model_log_probs[..., : model_log_probs.shape[-1]] = model_log_probs
@@ -190,8 +199,9 @@ class PredictionTrajectory:
         return cls(
             tokenizer=tokenizer,
             log_probs=np.stack(traj_log_probs, axis=-3),
-            targets=targets.numpy() if targets is not None else None,
-            input_ids=input_ids.numpy(),
+            input_ids=input_ids.cpu().numpy(),
+            targets=None if targets is None else targets.cpu().numpy(),
+            anti_targets=None if anti_targets is None else anti_targets.cpu().numpy(),
         )
 
     @classmethod
@@ -269,6 +279,24 @@ class PredictionTrajectory:
             input_ids=input_ids_np,
         )
 
+    def _get_sequence_labels(self) -> NDArray[np.str_]:
+        """Get the input labels from a batch of input ids."""
+        # If the input ids are the same for all items in the batch, then we can
+        # just use the first item in the batch otherwise we represent the input as *
+        if self.has_batch:
+            mask = np.all(self.input_ids == self.input_ids[0], axis=0)
+            input_ids = self.input_ids[0, ...]
+            sequence_labels = self.tokenizer.convert_ids_to_tokens(input_ids.tolist())
+            sequence_labels = [
+                input_token if mask else "*"
+                for input_token, mask in zip(sequence_labels, mask)
+            ]
+        else:
+            sequence_labels = self.tokenizer.convert_ids_to_tokens(
+                self.input_ids.tolist()
+            )
+        return np.array(sequence_labels)
+
     def _get_topk_tokens_and_values(
         self,
         k: int,
@@ -321,23 +349,18 @@ class PredictionTrajectory:
         if formatter is None:
             formatter = TokenFormatter()
 
+        topk_tokens, topk_probs = self._get_topk_tokens_and_values(
+            k=topk, sort_by=self.log_probs, values=self.probs
+        )
+
+        sequence_labels = self._get_sequence_labels()
+
         if self.has_batch:
             # We need to reduce allonge the batch dimension
-            mask = np.all(self.input_ids == self.input_ids[0], axis=0)
-            input_ids = self.input_ids[0, ...]
-            input_tokens = self.tokenizer.convert_ids_to_tokens(input_ids.tolist())
-            input_tokens = [
-                input_token if mask else "*"
-                for input_token, mask in zip(input_tokens, mask)
-            ]
-            print(input_tokens)
-
             def format_row(tokens: NDArray, percents: NDArray) -> str:
 
                 row = ""
                 for i, (token, percent) in enumerate(zip(tokens, percents)):
-                    # TODO pad all tokens to be the same length and figure out how to
-                    # control the number of columns in the hover over menu.
                     formatted = formatter.pad_token_repr_to_max_len(
                         formatter.format(token)
                     )
@@ -352,13 +375,9 @@ class PredictionTrajectory:
                         row += " …"
                         break
 
-                return row.strip()
+                return row
 
             entry_format_fn = np.vectorize(format_row, signature="(n),(n)->()")
-
-            topk_tokens, topk_probs = self._get_topk_tokens_and_values(
-                k=topk, sort_by=self.log_probs, values=self.probs
-            )
 
             topk_tokens = np.moveaxis(topk_tokens, 0, -1)
             topk_probs = np.moveaxis(topk_probs, 0, -1)
@@ -367,12 +386,10 @@ class PredictionTrajectory:
                 label_strings=np.full(
                     (self.num_layers + 1, self.num_tokens), "", dtype=str
                 ),
-                sequence_labels=formatter.vectorized_format(input_tokens),
+                sequence_labels=formatter.vectorized_format(sequence_labels),
                 hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
             )
         else:
-            input_tokens = self.tokenizer.convert_ids_to_tokens(self.input_ids.tolist())
-
             entry_format_fn = np.vectorize(
                 lambda token, percent: f"{formatter.format(token)} {percent:.2f}%"
             )
@@ -389,16 +406,35 @@ class PredictionTrajectory:
 
             return TrajectoryLabels(
                 label_strings=label_strings,
-                sequence_labels=formatter.vectorized_format(input_tokens),
+                sequence_labels=formatter.vectorized_format(sequence_labels),
                 hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
             )
+
+    def remove_batch_dims(self) -> "PredictionTrajectory":
+        """Attempts to remove the batch dimension from the trajectory."""
+        if not self.has_batch:
+            return self
+
+        if sum(self.batch_shape) != len(self.batch_shape):
+            raise ValueError("Batch size is grater than 1 cannot remove batch dims.")
+
+        return PredictionTrajectory(
+            log_probs=self.log_probs.reshape(self.log_probs.shape[-3:]),
+            input_ids=self.input_ids.flatten(),
+            targets=None if self.targets is None else self.targets.flatten(),
+            anti_targets=None if self.anti_targets is None else self.targets.flatten(),
+            tokenizer=self.tokenizer,
+        )
 
     def slice_sequence(self, slice: slice) -> "PredictionTrajectory":
         """Create a slice of the prediction trajectory along the sequence dimension."""
         return PredictionTrajectory(
             log_probs=self.log_probs[..., slice, :],
-            input_ids=self.input_ids[slice],
-            targets=self.targets[slice] if self.targets is not None else None,
+            input_ids=self.input_ids[..., slice],
+            targets=self.targets[..., slice] if self.targets is not None else None,
+            anti_targets=self.anti_targets[..., slice]
+            if self.anti_targets is not None
+            else None,
             tokenizer=self.tokenizer,
         )
 
@@ -408,7 +444,7 @@ class PredictionTrajectory:
         formatter: Optional[TokenFormatter] = None,
         min_prob_delta: np.float_ = np.finfo(np.float32).eps,
         topk: int = 10,
-    ) -> TrajectoryLabels:
+    ) -> Optional[TrajectoryLabels]:
         """Labels for a trajectory statistic based on the largest change in probability.
 
         Args:
@@ -428,6 +464,17 @@ class PredictionTrajectory:
 
         if formatter is None:
             formatter = TokenFormatter()
+
+        if self.has_batch:
+            return TrajectoryLabels(
+                label_strings=np.full(
+                    (self.num_layers + 1, self.num_tokens), "", dtype=str
+                ),
+                sequence_labels=formatter.vectorized_format(
+                    self._get_sequence_labels()
+                ),
+                hover_over_entries=None,
+            )
 
         input_tokens = self.tokenizer.convert_ids_to_tokens(self.input_ids.tolist())
 
@@ -469,12 +516,7 @@ class PredictionTrajectory:
         if self.targets is None:
             raise ValueError("Cannot compute cross entropy without targets.")
 
-        flat_log_probs = self.log_probs.reshape(
-            self.num_layers + 1, -1, self.vocab_size
-        )
-        flat_targets = self.targets.reshape(-1)
-        stats = -flat_log_probs[..., np.arange(flat_log_probs.shape[1]), flat_targets]
-        stats = stats.reshape(self.log_probs.shape[:-1])
+        stats = -_select_log_probs(self.log_probs, self.targets)
 
         if self.has_batch:
             stats = stats.mean(axis=self.batch_axes)
@@ -532,6 +574,37 @@ class PredictionTrajectory:
             stats=stats,
         )
 
+    def log_prob_diff(self, delta: bool = False) -> TrajectoryStatistic:
+        """The difference in logits between two tokens.
+
+        Returns:
+            The difference between the log probabilities of the two tokens.
+        """
+        # TODO implement this as a way to compare two distributions
+        if self.targets is None or self.anti_targets is None:
+            raise ValueError(
+                "Cannot compute log prob diff without targets" " and anti_targets."
+            )
+
+        targets_log_probs = _select_log_probs(self.log_probs, self.targets)
+
+        anti_targets_log_probs = _select_log_probs(self.log_probs, self.anti_targets)
+
+        stats = targets_log_probs - anti_targets_log_probs
+
+        if delta:
+            stats = stats[..., 1:, :] - stats[..., :-1, :]
+
+        if self.has_batch:
+            stats = stats.mean(axis=self.batch_axes)
+
+        return TrajectoryStatistic(
+            name="Δ Log Prob Difference" if delta else "Log Prob Difference",
+            units="nats",
+            includes_output=not delta,
+            stats=stats,
+        )
+
     def max_probability(self, **kwargs) -> TrajectoryStatistic:
         """Max probability of the among the predictions.
 
@@ -565,13 +638,10 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the KL divergence between self and other.
         """
-        if self.has_batch:
-            raise NotImplementedError(
-                "Batch KL divergence not implemented. "
-                "Please open an issue if you need this."
-            )
-
         kl_div = np.sum(self.probs * (self.log_probs - other.log_probs), axis=-1)
+
+        if self.has_batch:
+            kl_div = kl_div.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="KL(Self | Other)",
@@ -596,15 +666,12 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the JS divergence between self and other.
         """
-        if self.has_batch:
-            raise NotImplementedError(
-                "Batch JS divergence not implemented. "
-                "Please open an issue if you need this."
-            )
-
         js_div = 0.5 * np.sum(
             self.probs * (self.log_probs - other.log_probs), axis=-1
         ) + 0.5 * np.sum(other.probs * (other.log_probs - self.log_probs), axis=-1)
+
+        if self.has_batch:
+            js_div = js_div.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="JS(Self | Other)",
@@ -630,13 +697,10 @@ class PredictionTrajectory:
             A TrajectoryStatistic with the total variational distance between
             self and other.
         """
-        if self.has_batch:
-            raise NotImplementedError(
-                "Batch total variation not implemented. "
-                "Please open an issue if you need this."
-            )
-
         t_var = np.abs(self.probs - other.probs).max(axis=-1)
+
+        if self.has_batch:
+            t_var = t_var.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="TV(Self | Other)",
