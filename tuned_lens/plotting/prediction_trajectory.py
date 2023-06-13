@@ -98,9 +98,9 @@ class PredictionTrajectory:
         )
 
     @property
-    def has_batch(self) -> bool:
-        """Returns true if the trajectory has batch dimensions."""
-        return len(self.log_probs.shape) > 3
+    def n_batch_axis(self) -> int:
+        """Returns the number of batch dimensions."""
+        return len(self.batch_axes)
 
     @property
     def batch_axes(self) -> Sequence[int]:
@@ -200,7 +200,7 @@ class PredictionTrajectory:
         targets: Optional[Sequence[int]] = None,
         slice: slice = slice(None),
         mask_input: bool = False,
-    ) -> "PredictionTrajectory":
+    ) -> "PredictionTrajectory":  # TODO improve this docstring
         """Constructs a slice of the model's prediction trajectory.
 
         Args:
@@ -255,15 +255,20 @@ class PredictionTrajectory:
             input_ids=input_ids_np,
         )
 
-    def _get_sequence_labels(self) -> NDArray[np.str_]:
+    def _get_sequence_labels(self) -> Optional[NDArray[np.str_]]:
         """Get the input labels from a batch of input ids."""
         if self.tokenizer is None:
-            raise ValueError("Tokenizer must be set to get labels.")
+            return None
+
         # If the input ids are the same for all items in the batch, then we can
         # just use the first item in the batch otherwise we represent the input as *
-        if self.has_batch:
-            mask = np.all(self.input_ids == self.input_ids[0], axis=0)
-            input_ids = self.input_ids[0, ...]
+        if self.n_batch_axis:
+            first = self.input_ids.reshape(-1, self.num_tokens)[0, :]
+            mask = np.all(
+                self.input_ids == first.reshape((1,) * self.n_batch_axis + (-1,)),
+                axis=self.batch_axes,
+            )
+            input_ids = self.input_ids.reshape(-1, self.num_tokens)[0, :]
             sequence_labels = self.tokenizer.convert_ids_to_tokens(input_ids.tolist())
             sequence_labels = [
                 input_token if mask else "*"
@@ -280,7 +285,19 @@ class PredictionTrajectory:
         k: int,
         sort_by: NDArray[np.float32],
         values: NDArray[np.float32],
-    ) -> NDArray[np.str_]:
+    ) -> tuple[NDArray[np.str_], NDArray[np.float32]]:
+        """Get the top-k tokens according to sort_by for each layer and position.
+
+        Args:
+            k: The number of top tokens to get.
+            sort_by: (..., n_layers, seq_len) the values to sort by to get the top-k
+            values: (..., n_layers, seq_len) the values to get the top-k tokens for.
+
+        Returns:
+            * (..., n_layers, seq_len, k) the top-k tokens for each layer and position.
+            * (..., n_layers, seq_len, k) the top-k values for each layer and position.
+        """
+        assert self.tokenizer is not None
 
         # Get the top-k tokens & probabilities for each
         topk_inds = np.argpartition(sort_by, -k, axis=-1)[..., -k:]
@@ -302,10 +319,10 @@ class PredictionTrajectory:
     def _largest_prob_labels(
         self,
         formatter: Optional[TokenFormatter] = None,
-        min_prob: np.float_ = np.finfo(np.float32).eps,
+        min_prob: float = 0,
         topk: int = 10,
         n_items_in_batch_to_show: int = 3,
-    ) -> TrajectoryLabels:
+    ) -> Optional[TrajectoryLabels]:
         """Labels for the prediction trajectory based on the most probable tokens.
 
         Args:
@@ -315,14 +332,12 @@ class PredictionTrajectory:
             n_items_in_batch_to_show : The number of items in the batch to show in the
                 hover over menu.
 
-        Raises:
-            ValueError: If the tokenizer is not set.
-
         Returns:
-            a set of stream labels that can be applied to a trajectory statistic.
+            A set of stream labels that can be applied to a trajectory statistic or
+            None if the tokenizer is not set.
         """
         if self.tokenizer is None:
-            raise ValueError("Tokenizer must be set to get labels.")
+            return None
 
         if formatter is None:
             formatter = TokenFormatter()
@@ -331,7 +346,7 @@ class PredictionTrajectory:
             k=topk, sort_by=self.log_probs, values=self.probs
         )
 
-        if self.has_batch:
+        if self.n_batch_axis:
             # We need to reduce allonge the batch dimension
             def format_row(tokens: NDArray, percents: NDArray) -> str:
 
@@ -354,6 +369,12 @@ class PredictionTrajectory:
                 return row
 
             entry_format_fn = np.vectorize(format_row, signature="(n),(n)->()")
+            topk_tokens = topk_tokens.reshape(
+                -1, self.num_layers + 1, self.num_tokens, topk
+            )
+            topk_probs = topk_probs.reshape(
+                -1, self.num_layers + 1, self.num_tokens, topk
+            )
 
             topk_tokens = np.moveaxis(topk_tokens, 0, -1)
             topk_probs = np.moveaxis(topk_probs, 0, -1)
@@ -387,7 +408,7 @@ class PredictionTrajectory:
 
     def remove_batch_dims(self) -> "PredictionTrajectory":
         """Attempts to remove the batch dimension from the trajectory."""
-        if not self.has_batch:
+        if not self.n_batch_axis:
             return self
 
         if sum(self.batch_shape) != len(self.batch_shape):
@@ -397,7 +418,9 @@ class PredictionTrajectory:
             log_probs=self.log_probs.reshape(self.log_probs.shape[-3:]),
             input_ids=self.input_ids.flatten(),
             targets=None if self.targets is None else self.targets.flatten(),
-            anti_targets=None if self.anti_targets is None else self.targets.flatten(),
+            anti_targets=None
+            if self.anti_targets is None
+            else self.anti_targets.flatten(),
             tokenizer=self.tokenizer,
         )
 
@@ -413,11 +436,12 @@ class PredictionTrajectory:
             tokenizer=self.tokenizer,
         )
 
+    # TODO move this method to be next to the other methods for creating labels
     def _largest_delta_in_prob_labels(
         self,
         other: "PredictionTrajectory",
         formatter: Optional[TokenFormatter] = None,
-        min_prob_delta: np.float_ = np.finfo(np.float32).eps,
+        min_prob_delta: float = 0,
         topk: int = 10,
     ) -> Optional[TrajectoryLabels]:
         """Labels for a trajectory statistic based on the largest change in probability.
@@ -435,12 +459,12 @@ class PredictionTrajectory:
             A set of stream labels that can be added to a trajectory statistic.
         """
         if self.tokenizer is None:
-            raise ValueError("Tokenizer must be set to get labels.")
+            return None
 
         if formatter is None:
             formatter = TokenFormatter()
 
-        if self.has_batch:
+        if self.n_batch_axis:
             return TrajectoryLabels(
                 label_strings=np.full(
                     (self.num_layers + 1, self.num_tokens), "", dtype=str
@@ -487,15 +511,13 @@ class PredictionTrajectory:
 
         stats = -_select_log_probs(self.log_probs, self.targets)
 
-        if self.has_batch:
+        if self.n_batch_axis:
             stats = stats.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="Cross Entropy",
             units="nats",
-            trajectory_labels=self._largest_prob_labels(**kwargs)
-            if self.tokenizer
-            else None,
+            trajectory_labels=self._largest_prob_labels(**kwargs),
             sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
@@ -511,15 +533,13 @@ class PredictionTrajectory:
         """
         stats = -np.sum(self.probs * self.log_probs, axis=-1)
 
-        if self.has_batch:
+        if self.n_batch_axis:
             stats = stats.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="Entropy",
             units="nats",
-            trajectory_labels=self._largest_prob_labels(**kwargs)
-            if self.tokenizer
-            else None,
+            trajectory_labels=self._largest_prob_labels(**kwargs),
             sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
@@ -539,15 +559,13 @@ class PredictionTrajectory:
             np.exp(model_log_probs) * (model_log_probs - self.log_probs), axis=-1
         )
 
-        if self.has_batch:
+        if self.n_batch_axis:
             stats = stats.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="Forward KL",
             units="nats",
-            trajectory_labels=self._largest_prob_labels(**kwargs)
-            if self.tokenizer
-            else None,
+            trajectory_labels=self._largest_prob_labels(**kwargs),
             sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
@@ -573,7 +591,7 @@ class PredictionTrajectory:
         if delta:
             stats = stats[..., 1:, :] - stats[..., :-1, :]
 
-        if self.has_batch:
+        if self.n_batch_axis:
             stats = stats.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
@@ -595,15 +613,13 @@ class PredictionTrajectory:
         """
         stats = np.exp(self.log_probs.max(-1))
 
-        if self.has_batch:
+        if self.n_batch_axis:
             stats = stats.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="Max Probability",
             units="probs",
-            trajectory_labels=self._largest_prob_labels(**kwargs)
-            if self.tokenizer
-            else None,
+            trajectory_labels=self._largest_prob_labels(**kwargs),
             sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
@@ -622,16 +638,14 @@ class PredictionTrajectory:
         """
         kl_div = np.sum(self.probs * (self.log_probs - other.log_probs), axis=-1)
 
-        if self.has_batch:
+        if self.n_batch_axis:
             kl_div = kl_div.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="KL(Self | Other)",
             units="nats",
             stats=kl_div,
-            trajectory_labels=self._largest_delta_in_prob_labels(other, **kwargs)
-            if self.tokenizer
-            else None,
+            trajectory_labels=self._largest_delta_in_prob_labels(other, **kwargs),
             sequence_labels=self._get_sequence_labels(),
             min=0,
             max=None,
@@ -653,16 +667,14 @@ class PredictionTrajectory:
             self.probs * (self.log_probs - other.log_probs), axis=-1
         ) + 0.5 * np.sum(other.probs * (other.log_probs - self.log_probs), axis=-1)
 
-        if self.has_batch:
+        if self.n_batch_axis:
             js_div = js_div.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="JS(Self | Other)",
             units="nats",
             stats=js_div,
-            trajectory_labels=self._largest_delta_in_prob_labels(other, **kwargs)
-            if self.tokenizer
-            else None,
+            trajectory_labels=self._largest_delta_in_prob_labels(other, **kwargs),
             sequence_labels=self._get_sequence_labels(),
             min=0,
             max=None,
@@ -683,16 +695,14 @@ class PredictionTrajectory:
         """
         t_var = np.abs(self.probs - other.probs).max(axis=-1)
 
-        if self.has_batch:
+        if self.n_batch_axis:
             t_var = t_var.mean(axis=self.batch_axes)
 
         return TrajectoryStatistic(
             name="TV(Self | Other)",
             units="probs",
             stats=t_var,
-            trajectory_labels=self._largest_delta_in_prob_labels(other, **kwargs)
-            if self.tokenizer
-            else None,
+            trajectory_labels=self._largest_delta_in_prob_labels(other, **kwargs),
             sequence_labels=self._get_sequence_labels(),
             min=0,
             max=1,
