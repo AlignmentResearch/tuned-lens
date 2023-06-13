@@ -406,37 +406,6 @@ class PredictionTrajectory:
                 hover_over_entries=entry_format_fn(topk_tokens, topk_probs * 100),
             )
 
-    def remove_batch_dims(self) -> "PredictionTrajectory":
-        """Attempts to remove the batch dimension from the trajectory."""
-        if not self.n_batch_axis:
-            return self
-
-        if sum(self.batch_shape) != len(self.batch_shape):
-            raise ValueError("Batch size is grater than 1 cannot remove batch dims.")
-
-        return PredictionTrajectory(
-            log_probs=self.log_probs.reshape(self.log_probs.shape[-3:]),
-            input_ids=self.input_ids.flatten(),
-            targets=None if self.targets is None else self.targets.flatten(),
-            anti_targets=None
-            if self.anti_targets is None
-            else self.anti_targets.flatten(),
-            tokenizer=self.tokenizer,
-        )
-
-    def slice_sequence(self, slice: slice) -> "PredictionTrajectory":
-        """Create a slice of the prediction trajectory along the sequence dimension."""
-        return PredictionTrajectory(
-            log_probs=self.log_probs[..., slice, :],
-            input_ids=self.input_ids[..., slice],
-            targets=self.targets[..., slice] if self.targets is not None else None,
-            anti_targets=self.anti_targets[..., slice]
-            if self.anti_targets is not None
-            else None,
-            tokenizer=self.tokenizer,
-        )
-
-    # TODO move this method to be next to the other methods for creating labels
     def _largest_delta_in_prob_labels(
         self,
         other: "PredictionTrajectory",
@@ -451,9 +420,6 @@ class PredictionTrajectory:
             formatter : A TokenFormatter to use for formatting the labels.
             min_prob_delta : The minimum change in probability to include a label.
             topk : The number of top tokens to include in the hover over menu.
-
-        Raises:
-            ValueError: If the tokenizer is not set.
 
         Returns:
             A set of stream labels that can be added to a trajectory statistic.
@@ -494,6 +460,36 @@ class PredictionTrajectory:
         return TrajectoryLabels(
             label_strings=label_strings,
             hover_over_entries=entry_format_fn(topk_tokens, 100 * topk_deltas),
+        )
+
+    def remove_batch_dims(self) -> "PredictionTrajectory":
+        """Attempts to remove the batch dimension from the trajectory."""
+        if not self.n_batch_axis:
+            return self
+
+        if sum(self.batch_shape) != len(self.batch_shape):
+            raise ValueError("Batch size is grater than 1 cannot remove batch dims.")
+
+        return PredictionTrajectory(
+            log_probs=self.log_probs.reshape(self.log_probs.shape[-3:]),
+            input_ids=self.input_ids.flatten(),
+            targets=None if self.targets is None else self.targets.flatten(),
+            anti_targets=None
+            if self.anti_targets is None
+            else self.anti_targets.flatten(),
+            tokenizer=self.tokenizer,
+        )
+
+    def slice_sequence(self, slice: slice) -> "PredictionTrajectory":
+        """Create a slice of the prediction trajectory along the sequence dimension."""
+        return PredictionTrajectory(
+            log_probs=self.log_probs[..., slice, :],
+            input_ids=self.input_ids[..., slice],
+            targets=self.targets[..., slice] if self.targets is not None else None,
+            anti_targets=self.anti_targets[..., slice]
+            if self.anti_targets is not None
+            else None,
+            tokenizer=self.tokenizer,
         )
 
     def cross_entropy(self, **kwargs) -> TrajectoryStatistic:
