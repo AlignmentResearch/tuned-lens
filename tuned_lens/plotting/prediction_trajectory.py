@@ -1,6 +1,5 @@
 """Plot a lens table for some given text and model."""
 
-import logging
 from dataclasses import dataclass
 from typing import Literal, Optional, Sequence, Union
 
@@ -181,20 +180,7 @@ class PredictionTrajectory:
 
         model_log_probs = model_logits.log_softmax(-1).detach().cpu().numpy()
 
-        # Add model predictions
-        if traj_log_probs[-1].shape[-1] != model_log_probs.shape[-1]:
-            logging.warning(
-                "Lens vocab size does not match model vocab size."
-                "Truncating model outputs to match lens vocab size."
-            )
-
-        # Handle the case where the model has more/less tokens than the lens
-        # TODO this should be removed
-        min_logit = -np.finfo(model_log_probs.dtype).max
-        trunc_model_log_probs = np.full_like(traj_log_probs[-1], min_logit)
-        trunc_model_log_probs[..., : model_log_probs.shape[-1]] = model_log_probs
-
-        traj_log_probs.append(trunc_model_log_probs)
+        traj_log_probs.append(model_log_probs)
 
         return cls(
             tokenizer=tokenizer,
@@ -260,18 +246,7 @@ class PredictionTrajectory:
             )
 
         # Add model predictions
-        if traj_log_probs[-1].shape[-1] != model_log_probs.shape[-1]:
-            logging.warning(
-                "Lens vocab size does not match model vocab size."
-                "Truncating model outputs to match lens vocab size."
-            )
-        # Handle the case where the model has more/less tokens than the lens
-        # TODO remove
-        min_logit = -np.finfo(model_log_probs.dtype).max
-        trunc_model_log_probs = np.full_like(traj_log_probs[-1], min_logit)
-        trunc_model_log_probs[..., : model_log_probs.shape[-1]] = model_log_probs
-
-        traj_log_probs.append(trunc_model_log_probs)
+        traj_log_probs.append(model_log_probs)
 
         return cls(
             tokenizer=tokenizer,
