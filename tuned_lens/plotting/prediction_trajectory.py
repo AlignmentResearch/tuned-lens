@@ -1,6 +1,7 @@
 """Plot a lens table for some given text and model."""
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal, Optional, Sequence, Union
 
 try:
@@ -381,32 +382,21 @@ class PredictionTrajectory:
         )
         label_strings = np.where((top_probs > min_prob).all(), label_strings, "")
 
-        # Create the hover over menu entries
-        def format_row(tokens: NDArray, percents: NDArray) -> str:
-            row = ""
-            for i, (token, percent) in enumerate(zip(tokens, percents)):
-                formatted = formatter.pad_token_repr_to_max_len(formatter.format(token))
-                assert len(formatted) == formatter.max_string_len
-                percent = f"{percent:.2f}"
-                # ensure percent is 4 characters long
-                percent = " " * (5 - len(percent)) + percent
-                entry = f" {formatted} {percent}%"
-                # Pad the entry to be the same length as the longest entry
-                row += entry
-                if i >= n_items_in_batch_to_show:
-                    row += " …"
-                    break
-
-            return row
-
-        entry_format_fn = np.vectorize(format_row, signature="(n),(n)->()")
+        row_format_fn = np.vectorize(
+            partial(
+                formatter.format_row,
+                max_row_entries=n_items_in_batch_to_show,
+                max_value_len=6,
+            ),
+            signature="(n),(n)->()",
+        )
         topk_tokens = topk_tokens.reshape(
             -1, self.num_layers + 1, self.num_tokens, topk
         )
         topk_probs = topk_probs.reshape(-1, self.num_layers + 1, self.num_tokens, topk)
         topk_tokens = np.moveaxis(topk_tokens, 0, -1)
         topk_probs = np.moveaxis(topk_probs, 0, -1)
-        hover_over_entries = entry_format_fn(topk_tokens, 100 * topk_probs)
+        hover_over_entries = row_format_fn(topk_tokens, 100 * topk_probs)
 
         return TrajectoryLabels(
             label_strings=label_strings,
