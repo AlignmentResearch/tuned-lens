@@ -3,17 +3,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-from numpy.typing import NDArray
-
-
-def trunc_string_right(string: str, new_len: int) -> str:
-    """Truncate a string to the right."""
-    return string[:new_len] + " " * (new_len - len(string))
-
-
-def trunc_string_left(string: str, new_len: int) -> str:
-    """Truncate a string to the left."""
-    return " " * (new_len - len(string)) + string[-new_len:]
 
 
 @dataclass
@@ -49,25 +38,3 @@ class TokenFormatter:
         return token_repr[: self.max_string_len] + " " * (
             self.max_string_len - len(token_repr)
         )
-
-    def format_row(
-        self,
-        tokens: NDArray[np.str_],
-        values: NDArray[np.str_],
-        max_row_entries: int = 3,
-        max_value_len: int = 6,
-    ) -> str:
-        """Format a row of tokens and values for display in a plot."""
-        row = ""
-        for i, (token, value) in enumerate(zip(tokens, values)):
-            token_formated = trunc_string_right(self.format(token), self.max_string_len)
-            value_formatted = trunc_string_left(value, max_value_len)
-
-            # ensure percent is 4 characters long
-            entry = f" {token_formated} {value_formatted}"
-            # Pad the entry to be the same length as the longest entry
-            row += entry
-            if i >= max_row_entries - 1:
-                row += " " + self.ellipsis
-                break
-        return row
