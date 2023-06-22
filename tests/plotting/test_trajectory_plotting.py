@@ -21,32 +21,40 @@ def test_stride_keep_last():
 
 def test_trajectory_statistic_post_init():
     stats = np.zeros((2, 2), dtype=float)
-    labels = TrajectoryLabels(
+    trajectory_labels = TrajectoryLabels(
         label_strings=np.zeros((2, 2), dtype=np.str_),
-        sequence_labels=np.zeros(2, dtype=np.str_),
     )
 
     with pytest.raises(AssertionError):
-        TrajectoryStatistic("test", np.zeros((2, 3), dtype=float), labels)
+        TrajectoryStatistic(
+            name="test",
+            stats=np.zeros((2, 3), dtype=float),
+            trajectory_labels=trajectory_labels,
+        )
 
     stats = np.zeros((3, 3), dtype=float)
-    labels = TrajectoryLabels(
+    trajectory_labels = TrajectoryLabels(
         label_strings=np.zeros((3, 3), dtype=np.str_),
-        sequence_labels=np.zeros(3, dtype=np.str_),
     )
 
-    ts = TrajectoryStatistic("test", stats, labels)
+    ts = TrajectoryStatistic(
+        "test",
+        stats,
+        trajectory_labels=trajectory_labels,
+    )
     assert ts is not None
+    assert ts._layer_labels is not None
+    assert np.array_equal(ts._layer_labels, np.array(["0", "1", "output"]))
 
-
-def test_trajectory_statistic_num_layers():
-    stats = np.zeros((2, 2), dtype=float)
-    ts = TrajectoryStatistic("test", stats)
-    assert ts.num_layers == 2
-
-    stats = np.zeros((3, 3), dtype=float)
-    ts = TrajectoryStatistic("test", stats)
-    assert ts.num_layers == 3
+    ts = TrajectoryStatistic(
+        "test",
+        stats,
+        trajectory_labels=trajectory_labels,
+        includes_output=False,
+    )
+    assert ts is not None
+    assert ts._layer_labels is not None
+    assert np.array_equal(ts._layer_labels, np.array(["0", "1", "2"]))
 
 
 def test_trajectory_statistic_heatmap():
@@ -61,3 +69,20 @@ def test_trajectory_statistic_figure():
     ts = TrajectoryStatistic("test", stats)
     figure = ts.figure()
     assert isinstance(figure, go.Figure)
+
+
+def test_stride_method():
+    stats = np.zeros((3, 2), dtype=float)
+    ts = TrajectoryStatistic("test", stats)
+    stride = 2
+    stride_ts = ts.stride(stride)
+    assert stride_ts is not None
+    assert stride_ts.name == ts.name
+    assert stride_ts.units == ts.units
+    assert stride_ts.max == ts.max
+    assert stride_ts.min == ts.min
+    assert stride_ts.includes_output == ts.includes_output
+    assert stride_ts.stats is not None
+    assert stride_ts.stats.shape == (2, 2)
+    assert stride_ts._layer_labels is not None
+    assert np.array_equal(stride_ts._layer_labels, np.array(["0", "output"]))

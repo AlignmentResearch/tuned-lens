@@ -116,10 +116,9 @@ def test_largest_prob_labels_smoke(
     assert labels is not None
     assert labels.label_strings.shape == (3, 10)
     assert labels.hover_over_entries is not None
-    assert labels.hover_over_entries.shape == (3, 10, 5)
+    assert labels.hover_over_entries.shape[:-1] == (3, 10, 5)
 
 
-@pytest.mark.skip(reason="Need to fix this test")
 def test_largest_delta_in_prob_labels_smoke(
     prediction_trajectory_with_tok: PredictionTrajectory,
 ):
@@ -130,7 +129,7 @@ def test_largest_delta_in_prob_labels_smoke(
     assert labels is not None
     assert labels.label_strings.shape == (3, 10)
     assert labels.hover_over_entries is not None
-    assert labels.hover_over_entries.shape == (3, 10, 5)
+    assert labels.hover_over_entries.shape[:-1] == (3, 10, 5)
 
 
 def test_cross_entropy_smoke(prediction_trajectory: PredictionTrajectory):

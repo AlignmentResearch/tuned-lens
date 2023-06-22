@@ -50,7 +50,7 @@ class TrajectoryLabels:
         vec_str_len = np.vectorize(len)
         lengths = vec_str_len(self.hover_over_entries)
         max_col_lens = np.max(lengths, axis=(0, 1, 2), keepdims=True)
-        max_col_lens = np.minimum(max_col_lens, col_width_limit)
+        max_col_lens = np.minimum(max_col_lens + 1, col_width_limit)
 
         vec_truncate = np.vectorize(trunc_string_left)
         truncated_entries = vec_truncate(self.hover_over_entries, max_col_lens)

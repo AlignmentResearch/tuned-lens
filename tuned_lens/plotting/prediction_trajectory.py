@@ -1,7 +1,6 @@
 """Plot a lens table for some given text and model."""
 
 from dataclasses import dataclass
-from functools import partial
 from typing import Literal, Optional, Sequence, Union
 
 try:
@@ -343,12 +342,46 @@ class PredictionTrajectory:
 
         return topk_tokens, topk_values
 
+    def _hover_over_entries(
+        self,
+        topk_tokens: NDArray[np.str_],
+        topk_values: NDArray[np.str_],
+        max_entries_to_show: int = 3,
+    ) -> NDArray[np.str_]:
+        """Get the hover over entries for the stream.
+
+        Args:
+            topk_tokens: (..., n_layers, seq_len, k) the top-k tokens for each layer and
+                position.
+            topk_values: (..., n_layers, seq_len, k) the top-k values associated with
+                each token.
+            max_entries_to_show: The maximum number of entries in the batch to show in
+                the hover over menu.
+
+        Returns:
+            (n_layers, seq_len, batch, 2*k) the table of entries to show when hovering
+            over the stream. Here `batch` is the minimum of the batch size and the
+            `max_entries_to_show`.
+        """
+        k = topk_tokens.shape[-1]
+        topk_tokens = topk_tokens.reshape(-1, self.num_layers + 1, self.num_tokens, k)
+        topk_values = topk_values.reshape(-1, self.num_layers + 1, self.num_tokens, k)
+        topk_tokens = np.moveaxis(topk_tokens, 0, -1)
+        topk_values = np.moveaxis(topk_values, 0, -1)
+        hover_over_entries = np.empty(
+            topk_tokens.shape[:-1] + (2 * topk_tokens.shape[-1],),
+            dtype=topk_tokens.dtype,
+        )
+        hover_over_entries[..., 0::2] = topk_tokens
+        hover_over_entries[..., 1::2] = topk_values
+        return hover_over_entries[..., : 2 * max_entries_to_show]
+
     def _largest_prob_labels(
         self,
         formatter: Optional[TokenFormatter] = None,
         min_prob: float = 0,
         topk: int = 10,
-        n_items_in_batch_to_show: int = 3,
+        max_entries_to_show: int = 3,
     ) -> Optional[TrajectoryLabels]:
         """Labels for the prediction trajectory based on the most probable tokens.
 
@@ -356,7 +389,7 @@ class PredictionTrajectory:
             formatter : The formatter to use for formatting the tokens.
             min_prob : The minimum probability for a token to used as a label.
             topk : The number of top tokens to include in the hover over menu.
-            n_items_in_batch_to_show : The number of items in the batch to show in the
+            max_entries_to_show : The number of items in the batch to show in the
                 hover over menu.
 
         Returns:
@@ -382,25 +415,17 @@ class PredictionTrajectory:
         )
         label_strings = np.where((top_probs > min_prob).all(), label_strings, "")
 
-        row_format_fn = np.vectorize(
-            partial(
-                formatter.format_row,
-                max_row_entries=n_items_in_batch_to_show,
-                max_value_len=6,
-            ),
-            signature="(n),(n)->()",
-        )
-        topk_tokens = topk_tokens.reshape(
-            -1, self.num_layers + 1, self.num_tokens, topk
-        )
-        topk_probs = topk_probs.reshape(-1, self.num_layers + 1, self.num_tokens, topk)
-        topk_tokens = np.moveaxis(topk_tokens, 0, -1)
-        topk_probs = np.moveaxis(topk_probs, 0, -1)
-        hover_over_entries = row_format_fn(topk_tokens, 100 * topk_probs)
+        format_tokens = np.vectorize(formatter.format)
+        topk_probs = np.char.mod("%.2f", topk_probs)
+        topk_tokens = format_tokens(topk_tokens)
 
         return TrajectoryLabels(
             label_strings=label_strings,
-            hover_over_entries=hover_over_entries,
+            hover_over_entries=self._hover_over_entries(
+                topk_tokens=topk_tokens,
+                topk_values=topk_probs,
+                max_entries_to_show=max_entries_to_show,
+            ),
         )
 
     def _largest_delta_in_prob_labels(
@@ -408,6 +433,7 @@ class PredictionTrajectory:
         other: "PredictionTrajectory",
         formatter: Optional[TokenFormatter] = None,
         min_prob_delta: float = 0,
+        max_entries_to_show: int = 3,
         topk: int = 10,
     ) -> Optional[TrajectoryLabels]:
         """Labels for a trajectory statistic based on the largest change in probability.
@@ -417,6 +443,8 @@ class PredictionTrajectory:
             formatter : A TokenFormatter to use for formatting the labels.
             min_prob_delta : The minimum change in probability to include a label.
             topk : The number of top tokens to include in the hover over menu.
+            max_entries_to_show: The maximum number of entries in the batch to show in
+                the hover over menu.
 
         Returns:
             A set of stream labels that can be added to a trajectory statistic.
@@ -427,54 +455,37 @@ class PredictionTrajectory:
         if formatter is None:
             formatter = TokenFormatter()
 
-        if self.n_batch_axis:
-            return TrajectoryLabels(
-                label_strings=np.full(
-                    (self.num_layers + 1, self.num_tokens), "", dtype=str
-                ),
-                hover_over_entries=None,
-            )
-
-        entry_format_fn = np.vectorize(
-            lambda token, percent: f"{formatter.format(token)} Δ{percent:.2f}%"
-        )
-
         deltas = other.probs - self.probs
 
         topk_tokens, topk_deltas = self._get_topk_tokens_and_values(
             k=topk, sort_by=np.abs(deltas), values=deltas
         )
 
-        top_tokens = topk_tokens[..., 0]
         top_deltas = topk_deltas[..., 0]
+
+        topk_tokens_formatted = formatter.vectorized_format(topk_tokens)
+        top_tokens_formatted = topk_tokens[..., 0]
+        topk_deltas_formatted = np.char.add(
+            np.char.add("Δ", np.char.mod("%.2f", topk_deltas * 100)), "%"
+        )
 
         label_strings = np.where(
             np.abs(top_deltas) > min_prob_delta,
-            formatter.vectorized_format(top_tokens),
+            top_tokens_formatted,
             "",
         )
 
+        label_strings = _consolidate_labels_from_batch(
+            tokens=top_tokens_formatted,
+            n_batch_axes=self.n_batch_axis,
+        )
         return TrajectoryLabels(
             label_strings=label_strings,
-            hover_over_entries=entry_format_fn(topk_tokens, 100 * topk_deltas),
-        )
-
-    def remove_batch_dims(self) -> "PredictionTrajectory":
-        """Attempts to remove the batch dimension from the trajectory."""
-        if not self.n_batch_axis:
-            return self
-
-        if sum(self.batch_shape) != len(self.batch_shape):
-            raise ValueError("Batch size is grater than 1 cannot remove batch dims.")
-
-        return PredictionTrajectory(
-            log_probs=self.log_probs.reshape(self.log_probs.shape[-3:]),
-            input_ids=self.input_ids.flatten(),
-            targets=None if self.targets is None else self.targets.flatten(),
-            anti_targets=None
-            if self.anti_targets is None
-            else self.anti_targets.flatten(),
-            tokenizer=self.tokenizer,
+            hover_over_entries=self._hover_over_entries(
+                topk_tokens=topk_tokens_formatted,
+                topk_values=topk_deltas_formatted,
+                max_entries_to_show=max_entries_to_show,
+            ),
         )
 
     def slice_sequence(self, slice: slice) -> "PredictionTrajectory":
