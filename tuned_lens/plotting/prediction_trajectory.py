@@ -299,13 +299,20 @@ class PredictionTrajectory:
             input_ids=input_ids_np,
         )
 
-    def _get_sequence_labels(self) -> Optional[NDArray[np.str_]]:
+    def _get_sequence_labels(
+        self, token_formatter: Optional[TokenFormatter] = None
+    ) -> Optional[NDArray[np.str_]]:
         """Get the input labels from a batch of input ids."""
         if self.tokenizer is None:
             return None
 
+        if token_formatter is None:
+            token_formatter = TokenFormatter()
+
         return _consolidate_labels_from_batch(
-            tokens=_ids_to_tokens(self.input_ids, self.tokenizer),
+            tokens=token_formatter.vectorized_format(
+                _ids_to_tokens(self.input_ids, self.tokenizer)
+            ),
             n_batch_axes=self.n_batch_axis,
         )
 

@@ -114,6 +114,24 @@ class TrajectoryStatistic:
             else:
                 self._layer_labels = np.array([*map(str, range(self.stats.shape[0]))])
 
+    def clip(self, min: float, max: float) -> "TrajectoryStatistic":
+        """Return a new TrajectoryStatistic with the given min and max.
+
+        Args:
+            min : The minimum value to clip to.
+            max : The maximum value to clip to.
+
+        Returns:
+            A new TrajectoryStatistic with the given min and max.
+        """
+        assert min < max, f"min must be less than max, got {min} >= {max}"
+        return replace(
+            self,
+            stats=np.clip(self.stats, min, max),
+            max=max,
+            min=min,
+        )
+
     def stride(self, stride: int) -> "TrajectoryStatistic":
         """Return a new TrajectoryStatistic with the given stride.
 
