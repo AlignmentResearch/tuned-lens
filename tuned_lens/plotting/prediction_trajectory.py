@@ -417,14 +417,14 @@ class PredictionTrajectory:
         top_tokens = topk_tokens[..., 0]
         top_probs = topk_probs[..., 0]
         label_strings = _consolidate_labels_from_batch(
-            tokens=top_tokens,
+            tokens=formatter.vectorized_format(top_tokens),
             n_batch_axes=self.n_batch_axis,
         )
         label_strings = np.where((top_probs > min_prob).all(), label_strings, "")
 
-        format_tokens = np.vectorize(formatter.format)
-        topk_probs = np.char.mod("%.2f", topk_probs)
-        topk_tokens = format_tokens(topk_tokens)
+        topk_probs = np.char.add(np.char.mod("%.2f", top_probs * 100), "%")
+
+        topk_tokens = formatter.vectorized_format(topk_tokens)
 
         return TrajectoryLabels(
             label_strings=label_strings,
@@ -471,7 +471,7 @@ class PredictionTrajectory:
         top_deltas = topk_deltas[..., 0]
 
         topk_tokens_formatted = formatter.vectorized_format(topk_tokens)
-        top_tokens_formatted = topk_tokens[..., 0]
+        top_tokens_formatted = topk_tokens_formatted[..., 0]
         topk_deltas_formatted = np.char.add(
             np.char.add("Δ", np.char.mod("%.2f", topk_deltas * 100)), "%"
         )
