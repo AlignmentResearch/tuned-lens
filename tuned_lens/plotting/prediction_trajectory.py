@@ -191,6 +191,7 @@ class PredictionTrajectory:
         targets: Optional[th.Tensor] = None,
         anti_targets: Optional[th.Tensor] = None,
         residual_component: ResidualComponent = "resid_pre",
+        mask_input: bool = False,
     ) -> "PredictionTrajectory":
         """Construct a prediction trajectory from a set of residual stream vectors.
 
@@ -200,10 +201,11 @@ class PredictionTrajectory:
             input_ids: (..., seq_len) Ids that where input into the model.
             model_logits: (..., seq_len x d_vocab) the models final output logits.
             targets: (..., seq_len) the targets the model is should predict. Used
-                for :method:`cross_entropy` and :method:`log_prob_diff` visualization.
+                for :meth:`cross_entropy` and :meth:`log_prob_diff` visualization.
             anti_targets: (..., seq_len) the incorrect label the model should not
-                predict. Used for :method:`log_prob_diff` visualization.
+                predict. Used for :meth:`log_prob_diff` visualization.
             residual_component: Name of the stream vector being visualized.
+            mask_input: Whether to mask the input ids when computing the log probs.
 
         Returns:
             PredictionTrajectory constructed from the residual stream vectors.
@@ -219,6 +221,9 @@ class PredictionTrajectory:
                 )
 
             logits = lens.forward(hidden, layer)
+
+            if mask_input:
+                logits[..., input_ids] = -th.finfo(hidden.dtype).max
 
             traj_log_probs.append(logits.log_softmax(dim=-1).detach().cpu().numpy())
 
@@ -242,22 +247,27 @@ class PredictionTrajectory:
         input_ids: Sequence[int],
         tokenizer: Optional[Tokenizer] = None,
         targets: Optional[Sequence[int]] = None,
-        slice: slice = slice(None),
+        anti_targets: Optional[Sequence[int]] = None,
         mask_input: bool = False,
-    ) -> "PredictionTrajectory":  # TODO improve this docstring
-        """Constructs a slice of the model's prediction trajectory.
+    ) -> "PredictionTrajectory":
+        """Construct a prediction trajectory from a set of residual stream vectors.
 
         Args:
-            lens : The lens to use for constructing the latent predictions.
-            model : The model to get the predictions from.
-            tokenizer : The tokenizer to use for decoding the predictions.
-            input_ids : The input ids to pass to the model.
-            targets : The targets for the input sequence.
-            slice: The slice of the position dimension to record.
-            mask_input : whether to forbid the lens from predicting the input tokens.
+            lens: A lens to use to produce the predictions. Note this should be
+                compatible with the model.
+            model: A Hugging Face causal language model to use to produce
+                the predictions.
+            tokenizer: The tokenizer to use for decoding the input ids.
+            input_ids: (seq_len) Ids that where input into the model.
+            targets: (seq_len) the targets the model is should predict. Used
+                for :meth:`cross_entropy` and :meth:`log_prob_diff` visualization.
+            anti_targets: (seq_len) the incorrect label the model should not
+                predict. Used for :meth:`log_prob_diff` visualization.
+            residual_component: Name of the stream vector being visualized.
+            mask_input: Whether to mask the input ids when computing the log probs.
 
         Returns:
-            A PredictionTrajectory object containing the requested slice.
+            PredictionTrajectory constructed from the residual stream vectors.
         """
         with th.no_grad():
             input_ids_th = th.tensor(input_ids, dtype=th.int64, device=model.device)
@@ -265,17 +275,13 @@ class PredictionTrajectory:
 
         # Slice arrays the specified range
         model_log_probs = (
-            outputs.logits[..., slice, :]
-            .log_softmax(-1)
-            .squeeze()
-            .detach()
-            .cpu()
-            .numpy()
+            outputs.logits[..., :].log_softmax(-1).squeeze().detach().cpu().numpy()
         )
-        stream = [h[..., slice, :] for h in outputs.hidden_states]
+        stream = list(outputs.hidden_states)
 
-        input_ids_np = np.array(input_ids[slice])
-        targets_np = np.array(targets[slice]) if targets is not None else None
+        input_ids_np = np.array(input_ids)
+        targets_np = np.array(targets) if targets is not None else None
+        anti_targets_np = np.array(anti_targets) if anti_targets is not None else None
 
         # Create the stream of log probabilities from the lens
         traj_log_probs = []
@@ -297,6 +303,7 @@ class PredictionTrajectory:
             log_probs=np.array(traj_log_probs),
             targets=targets_np,
             input_ids=input_ids_np,
+            anti_targets=anti_targets_np,
         )
 
     def _get_sequence_labels(
