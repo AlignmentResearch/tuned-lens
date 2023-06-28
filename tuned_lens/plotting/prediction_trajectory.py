@@ -422,15 +422,13 @@ class PredictionTrajectory:
         )
         label_strings = np.where((top_probs > min_prob).all(), label_strings, "")
 
-        topk_probs = np.char.add(np.char.mod("%.2f", top_probs * 100), "%")
-
-        topk_tokens = formatter.vectorized_format(topk_tokens)
-
+        topk_probs_formatted = np.char.add(np.char.mod("%.2f", topk_probs * 100), "%")
+        topk_tokens_formatted = formatter.vectorized_format(topk_tokens)
         return TrajectoryLabels(
             label_strings=label_strings,
             hover_over_entries=self._hover_over_entries(
-                topk_tokens=topk_tokens,
-                topk_values=topk_probs,
+                topk_tokens=topk_tokens_formatted,
+                topk_values=topk_probs_formatted,
                 max_entries_to_show=max_entries_to_show,
             ),
         )
