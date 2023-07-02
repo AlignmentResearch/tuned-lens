@@ -29,18 +29,18 @@ ResidualComponent = Literal[
 ]
 
 
-def _select_log_probs(log_probs: NDArray[np.float32], targets: NDArray[np.int64]):
-    """Select log probs from a tensor of log probs.
+def _select_values_along_seq_axis(values: NDArray, targets: NDArray[np.int64]):
+    """Select targe values along the the vocab dimension.
 
     Args:
-        log_probs: (..., n_layers, seq_len, vocab_size) the log probs to select from.
+        values: (..., n_layers, seq_len, vocab_size) the values to select from.
         targets: (..., seq_len) the indices to select.
 
     Returns:
-        (..., n_layers, seq_len) the selected log probs.
+        (..., n_layers, seq_len) the selected values.
     """
     return np.take_along_axis(
-        log_probs,
+        values,
         targets[..., None, :, None],
         axis=-1,
     ).squeeze(-1)
@@ -405,6 +405,7 @@ class PredictionTrajectory:
             topk : The number of top tokens to include in the hover over menu.
             max_entries_to_show : The number of items in the batch to show in the
                 hover over menu.
+            show_values : Whether to show the probability values in the hover over
 
         Returns:
             A set of stream labels that can be applied to a trajectory statistic or
@@ -423,6 +424,7 @@ class PredictionTrajectory:
         # Create the labels for the stream
         top_tokens = topk_tokens[..., 0]
         top_probs = topk_probs[..., 0]
+
         label_strings = _consolidate_labels_from_batch(
             tokens=formatter.vectorized_format(top_tokens),
             n_batch_axes=self.n_batch_axis,
@@ -431,6 +433,7 @@ class PredictionTrajectory:
 
         topk_probs_formatted = np.char.add(np.char.mod("%.2f", topk_probs * 100), "%")
         topk_tokens_formatted = formatter.vectorized_format(topk_tokens)
+
         return TrajectoryLabels(
             label_strings=label_strings,
             hover_over_entries=self._hover_over_entries(
@@ -525,7 +528,7 @@ class PredictionTrajectory:
         if self.targets is None:
             raise ValueError("Cannot compute cross entropy without targets.")
 
-        stats = -_select_log_probs(self.log_probs, self.targets)
+        stats = -_select_values_along_seq_axis(self.log_probs, self.targets)
 
         if self.n_batch_axis:
             stats = stats.mean(axis=self.batch_axes)
@@ -534,6 +537,38 @@ class PredictionTrajectory:
             name="Cross Entropy",
             units="nats",
             trajectory_labels=self._largest_prob_labels(**kwargs),
+            sequence_labels=self._get_sequence_labels(),
+            stats=stats,
+        )
+
+    def rank(self, show_ranks=False, **kwargs) -> TrajectoryStatistic:
+        """The rank of the targets among the predictions.
+
+        Args:
+            show_ranks: Whether to show the the rank of the target or the top token.
+            **kwargs: are passed to largest_prob_labels.
+
+        Returns:
+            A TrajectoryStatistic with the rank of the targets among the predictions.
+        """
+        if self.targets is None:
+            raise ValueError("Cannot compute rank without targets.")
+
+        rankings = np.argsort(self.log_probs[..., ::-1], axis=-1)
+        stats = _select_values_along_seq_axis(rankings, self.targets)
+
+        if self.n_batch_axis:
+            stats = stats.min(axis=self.batch_axes)
+
+        trajectory_labels = self._largest_prob_labels(**kwargs)
+
+        if show_ranks and trajectory_labels is not None:
+            trajectory_labels.label_strings = np.char.mod("%d", stats)
+
+        return TrajectoryStatistic(
+            name="Rank",
+            units="",
+            trajectory_labels=trajectory_labels,
             sequence_labels=self._get_sequence_labels(),
             stats=stats,
         )
@@ -598,9 +633,11 @@ class PredictionTrajectory:
                 "Cannot compute log prob diff without targets" " and anti_targets."
             )
 
-        targets_log_probs = _select_log_probs(self.log_probs, self.targets)
+        targets_log_probs = _select_values_along_seq_axis(self.log_probs, self.targets)
 
-        anti_targets_log_probs = _select_log_probs(self.log_probs, self.anti_targets)
+        anti_targets_log_probs = _select_values_along_seq_axis(
+            self.log_probs, self.anti_targets
+        )
 
         stats = targets_log_probs - anti_targets_log_probs
 
