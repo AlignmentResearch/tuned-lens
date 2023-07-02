@@ -46,10 +46,10 @@ class Unembed(th.nn.Module):
         """
         super().__init__()
         final_norm = model_surgery.get_final_norm(model)
-        unembeding_matrix = model_surgery.get_unembeding_matrix(model)
+        unembedding_matrix = model_surgery.get_unembedding_matrix(model)
 
         self.final_norm = copy.deepcopy(final_norm)
-        self.unembedding = copy.deepcopy(unembeding_matrix)
+        self.unembedding = copy.deepcopy(unembedding_matrix)
 
         # In general we don't want to finetune the unembed operation.
         self.requires_grad_(False)

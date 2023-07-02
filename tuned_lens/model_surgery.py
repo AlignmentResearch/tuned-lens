@@ -66,7 +66,7 @@ Model = Union[tr.PreTrainedModel, "tl.HookedTransformer"]
 Norm = Union[th.nn.LayerNorm, models.llama.modeling_llama.LlamaRMSNorm, nn.Module]
 
 
-def get_unembeding_matrix(model: Model) -> nn.Linear:
+def get_unembedding_matrix(model: Model) -> nn.Linear:
     """The final linear tranformation from the model hidden state to the output."""
     if isinstance(model, tr.PreTrainedModel):
         unembed = model.get_output_embeddings()

@@ -32,7 +32,7 @@ class Lens(abc.ABC, th.nn.Module):
 
     @abc.abstractmethod
     def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
-        """Convert a hidden state to the final hidden just before the unembeding.
+        """Convert a hidden state to the final hidden just before the unembedding.
 
         Args:
             h: The hidden state to convert.
@@ -220,7 +220,7 @@ class TunedLens(Lens):
                 `th.load <https://pytorch.org/docs/stable/generated/torch.load.html>`_.
 
         Returns:
-            A TunedLens instance whose unembeding is derived from the given model
+            A TunedLens instance whose unembedding is derived from the given model
             and whose layer translators are loaded from the given resource id.
         """
         if lens_resource_id is None:
@@ -263,7 +263,7 @@ class TunedLens(Lens):
         # validate the unembed is the same as the one used to train the lens
         if config.unembed_hash and unembed.unembedding_hash() != config.unembed_hash:
             warning(
-                "The unembeding matrix hash does not match the lens' hash."
+                "The unembedding matrix hash does not match the lens' hash."
                 "This lens may have been trained with a different unembedding."
             )
 
