@@ -554,23 +554,24 @@ class PredictionTrajectory:
         if self.targets is None:
             raise ValueError("Cannot compute rank without targets.")
 
-        rankings = np.argsort(self.log_probs[..., ::-1], axis=-1)
-        stats = _select_values_along_seq_axis(rankings, self.targets)
+        idx_of_kth_likeliest_token = np.argsort(-self.log_probs, axis=-1)
+        ranks = np.argsort(idx_of_kth_likeliest_token, axis=-1)
+        targets_rank = _select_values_along_seq_axis(ranks, self.targets)
 
         if self.n_batch_axis:
-            stats = stats.min(axis=self.batch_axes)
+            targets_rank = targets_rank.min(axis=self.batch_axes)
 
         trajectory_labels = self._largest_prob_labels(**kwargs)
 
         if show_ranks and trajectory_labels is not None:
-            trajectory_labels.label_strings = np.char.mod("%d", stats)
+            trajectory_labels.label_strings = np.char.mod("%d", targets_rank)
 
         return TrajectoryStatistic(
             name="Rank",
             units="",
             trajectory_labels=trajectory_labels,
             sequence_labels=self._get_sequence_labels(),
-            stats=stats,
+            stats=targets_rank,
         )
 
     def entropy(self, **kwargs) -> TrajectoryStatistic:

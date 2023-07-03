@@ -159,18 +159,21 @@ def test_rank_correctness():
     log_probs = np.array(
         [[[[0.1, 0.2, 0.3], [0.6, 0.5, 0.4]], [[0.85, 0.8, 0.9], [1.0, 1.1, 1.2]]]]
     )
-    assert log_probs.shape == (1, 2, 2, 3)  # (batch, seq, layer, vocab)
+    assert log_probs.shape == (1, 2, 2, 3)  # (batch, layer, seq, vocab)
+
     traj = PredictionTrajectory(
         log_probs=log_probs,
         input_ids=np.ones((1, 2), dtype=np.int64),
-        targets=np.zeros((1, 2), dtype=np.int64),
+        targets=np.array([[0, 1]], dtype=np.int64),
     )
+
     rank_stat = traj.rank(show_ranks=True)
+
     assert rank_stat.stats.shape == (2, 2)
     assert rank_stat.stats[0, 0] == 2
-    assert rank_stat.stats[0, 1] == 0
+    assert rank_stat.stats[0, 1] == 1
     assert rank_stat.stats[1, 0] == 1
-    assert rank_stat.stats[1, 1] == 2
+    assert rank_stat.stats[1, 1] == 1
 
 
 def test_entropy_smoke(prediction_trajectory: PredictionTrajectory):
