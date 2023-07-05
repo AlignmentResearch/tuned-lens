@@ -30,3 +30,11 @@ class TokenFormatter:
         token = token.replace(self.newline_token, self.newline_replacement)
         token = token.replace(self.whitespace_token, self.whitespace_replacement)
         return token
+
+    def pad_token_repr_to_max_len(self, token_repr: str) -> str:
+        """Pad a token representation to the max string length."""
+        if self.max_string_len is None:
+            return token_repr
+        return token_repr[: self.max_string_len] + " " * (
+            self.max_string_len - len(token_repr)
+        )

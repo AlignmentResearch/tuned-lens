@@ -23,4 +23,5 @@ API Reference
     tutorials/loading_pretrained_lenses.rst
     tutorials/training_and_evaluating_lenses.rst
     tutorials/prediction_trajectories.ipynb
+    tutorials/combining_with_transformer_lens.ipynb
     tutorials/maintainers_guide.rst
