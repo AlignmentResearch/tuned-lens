@@ -554,12 +554,13 @@ class PredictionTrajectory:
         if self.targets is None:
             raise ValueError("Cannot compute rank without targets.")
 
+        # Yes I know this is not the most efficient way to do this
         idx_of_kth_likeliest_token = np.argsort(-self.log_probs, axis=-1)
-        ranks = np.argsort(idx_of_kth_likeliest_token, axis=-1)
+        ranks = np.argsort(idx_of_kth_likeliest_token, axis=-1) + 1
         targets_rank = _select_values_along_seq_axis(ranks, self.targets)
 
         if self.n_batch_axis:
-            targets_rank = targets_rank.min(axis=self.batch_axes)
+            targets_rank = targets_rank.mean(axis=self.batch_axes)
 
         trajectory_labels = self._largest_prob_labels(**kwargs)
 
@@ -572,6 +573,8 @@ class PredictionTrajectory:
             trajectory_labels=trajectory_labels,
             sequence_labels=self._get_sequence_labels(),
             stats=targets_rank,
+            min=1,
+            max=None if self.tokenizer is None else self.tokenizer.vocab_size,
         )
 
     def entropy(self, **kwargs) -> TrajectoryStatistic:
