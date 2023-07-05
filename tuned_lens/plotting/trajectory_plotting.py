@@ -16,11 +16,11 @@ def trunc_string_left(string: str, new_len: int) -> str:
 class TrajectoryLabels:
     """Contains sets of labels for each layer and position in the residual stream."""
 
-    # (n_layers x sequence_length) label for each layer and position in the stream.
     label_strings: NDArray[np.str_]
-    # (n_layers x sequence_length x rows x cols) table of strings to display when
-    # hovering over a cell. For example, the top k prediction from the lens.
+    """(n_layers x sequence_length) label for each layer and position in the stream."""
     hover_over_entries: Optional[NDArray[np.str_]] = None
+    """(n_layers x sequence_length x rows x cols) table of strings to display when
+        hovering over a cell. For example, the top k prediction from the lens."""
 
     def stride(self, stride: int) -> "TrajectoryLabels":
         """Return a new TrajectoryLabels with the given stride.

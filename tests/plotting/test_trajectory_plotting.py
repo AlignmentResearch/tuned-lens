@@ -57,6 +57,38 @@ def test_trajectory_statistic_post_init():
     assert np.array_equal(ts._layer_labels, np.array(["0", "1", "2"]))
 
 
+def test_template_and_customdata():
+    n_layers = 2
+    seq_len = 1
+    trajectory_labels = TrajectoryLabels(
+        label_strings=np.zeros((n_layers, seq_len), dtype=np.str_),
+        hover_over_entries=np.array(
+            [
+                [
+                    [["ab", "c"], ["de", "f"]],
+                ],
+                [
+                    [["idk", "l"], ["mno", "p"]],
+                ],
+            ],
+            dtype=np.str_,
+        ),
+    )
+
+    template, customdata = trajectory_labels.template_and_customdata(col_width_limit=10)
+
+    assert template == (
+        "%{customdata[0]}%{customdata[1]}"
+        "<br>%{customdata[2]}%{customdata[3]}<br>"
+        "<extra></extra>"
+    )
+
+    assert (
+        customdata
+        == np.array([[["  ab", " c", "  de", " f"]], [[" idk", " l", " mno", " p"]]])
+    ).all()
+
+
 def test_trajectory_statistic_heatmap():
     stats = np.zeros((2, 2), dtype=float)
     ts = TrajectoryStatistic("test", stats)
