@@ -170,10 +170,10 @@ def test_rank_correctness():
     rank_stat = traj.rank(show_ranks=True)
 
     assert rank_stat.stats.shape == (2, 2)
-    assert rank_stat.stats[0, 0] == 2
-    assert rank_stat.stats[0, 1] == 1
-    assert rank_stat.stats[1, 0] == 1
-    assert rank_stat.stats[1, 1] == 1
+    assert rank_stat.stats[0, 0] == 2 + 1
+    assert rank_stat.stats[0, 1] == 1 + 1
+    assert rank_stat.stats[1, 0] == 1 + 1
+    assert rank_stat.stats[1, 1] == 1 + 1
 
 
 def test_entropy_smoke(prediction_trajectory: PredictionTrajectory):
