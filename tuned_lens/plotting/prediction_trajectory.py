@@ -424,7 +424,6 @@ class PredictionTrajectory:
         # Create the labels for the stream
         top_tokens = topk_tokens[..., 0]
         top_probs = topk_probs[..., 0]
-
         label_strings = _consolidate_labels_from_batch(
             tokens=formatter.vectorized_format(top_tokens),
             n_batch_axes=self.n_batch_axis,
@@ -434,6 +433,8 @@ class PredictionTrajectory:
         topk_probs_formatted = np.char.add(np.char.mod("%.2f", topk_probs * 100), "%")
         topk_tokens_formatted = formatter.vectorized_format(topk_tokens)
 
+        topk_probs_formatted = np.char.add(np.char.mod("%.2f", topk_probs * 100), "%")
+        topk_tokens_formatted = formatter.vectorized_format(topk_tokens)
         return TrajectoryLabels(
             label_strings=label_strings,
             hover_over_entries=self._hover_over_entries(
