@@ -45,7 +45,7 @@ RUN mkdir tuned_lens \
 
 # Using the test image
 # docker build -t tuned-lens-test --target test .
-# docker run tuned-lens-test -v $PWD:/workspace pytest
+# docker run -v $PWD:/workspace tuned-lens-test pytest
 
 # Using the development image
 # docker build -t tuned-lens-dev --target dev

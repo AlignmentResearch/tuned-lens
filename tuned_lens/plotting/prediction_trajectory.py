@@ -555,10 +555,10 @@ class PredictionTrajectory:
         if self.targets is None:
             raise ValueError("Cannot compute rank without targets.")
 
-        # Yes I know this is not the most efficient way to do this
-        idx_of_kth_likeliest_token = np.argsort(-self.log_probs, axis=-1)
-        ranks = np.argsort(idx_of_kth_likeliest_token, axis=-1) + 1
-        targets_rank = _select_values_along_seq_axis(ranks, self.targets)
+        # With >, we disambiguate ties by taking the lowest rank for all the elements that are tied. E.g. if the top
+        # predictions' logits are 0.3, 0.2, 0.2, 0.1; their ranks would be 1, 2, 2, 4.
+        logprob_greater_than_target = self.log_probs > _select_values_along_seq_axis(self.log_probs, self.targets)[..., None]
+        targets_rank = np.sum(logprob_greater_than_target, axis=-1) + 1
 
         if self.n_batch_axis:
             targets_rank = targets_rank.mean(axis=self.batch_axes)
