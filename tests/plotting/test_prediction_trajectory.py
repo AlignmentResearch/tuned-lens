@@ -6,7 +6,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from tuned_lens.nn.lenses import LogitLens, TunedLens, Unembed
 from tuned_lens.plotting import PredictionTrajectory
-from tuned_lens.plotting.prediction_trajectory import _select_log_probs
+from tuned_lens.plotting.prediction_trajectory import _select_values_along_seq_axis
 
 
 @pytest.fixture(params=[(), (2, 2), (1,)])
@@ -53,14 +53,14 @@ def lens(model_and_tokenizer):
     return LogitLens.from_model(model)
 
 
-def test_select_log_probs():
+def test_select_values():
     log_probs = np.array(
         [[[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], [[0.7, 0.8, 0.9], [1.0, 1.1, 1.2]]]]
     )
 
     targets = np.array([[1, 2]])
 
-    result = _select_log_probs(log_probs, targets)
+    result = _select_values_along_seq_axis(log_probs, targets)
 
     expected_result = np.array([[[0.2, 0.6], [0.8, 1.2]]])
 
@@ -141,6 +141,39 @@ def test_cross_entropy_smoke(prediction_trajectory: PredictionTrajectory):
     assert ce_stat.trajectory_labels is None
     assert ce_stat.sequence_labels is None
     assert ce_stat.stats.shape == (3, 10)
+
+
+def test_rank_smoke(prediction_trajectory: PredictionTrajectory):
+    traj = prediction_trajectory
+    rank_stat = traj.rank(show_ranks=True)
+
+    assert rank_stat.name == "Rank"
+    assert rank_stat.units == ""
+    assert rank_stat.trajectory_labels is None
+    assert rank_stat.sequence_labels is None
+    assert rank_stat.stats.shape == (3, 10)
+
+
+def test_rank_correctness():
+    # Test that the rank is correct.
+    log_probs = np.array(
+        [[[[0.1, 0.2, 0.3], [0.6, 0.5, 0.4]], [[0.85, 0.8, 0.9], [1.0, 1.1, 1.2]]]]
+    )
+    assert log_probs.shape == (1, 2, 2, 3)  # (batch, layer, seq, vocab)
+
+    traj = PredictionTrajectory(
+        log_probs=log_probs,
+        input_ids=np.ones((1, 2), dtype=np.int64),
+        targets=np.array([[0, 1]], dtype=np.int64),
+    )
+
+    rank_stat = traj.rank(show_ranks=True)
+
+    assert rank_stat.stats.shape == (2, 2)
+    assert rank_stat.stats[0, 0] == 2 + 1
+    assert rank_stat.stats[0, 1] == 1 + 1
+    assert rank_stat.stats[1, 0] == 1 + 1
+    assert rank_stat.stats[1, 1] == 1 + 1
 
 
 def test_entropy_smoke(prediction_trajectory: PredictionTrajectory):

@@ -157,12 +157,14 @@ class TrajectoryStatistic:
     def heatmap(
         self,
         colorscale: str = "rdbu_r",
+        log_scale: bool = False,
         **kwargs,
     ) -> go.Heatmap:
         """Returns a Plotly Heatmap object for this statistic.
 
         Args:
             colorscale : The colorscale to use for the heatmap.
+            log_scale : Whether to use a log scale for the colorbar.
             **kwargs : Additional keyword arguments to pass to the Heatmap constructor.
 
         Returns:
@@ -170,16 +172,29 @@ class TrajectoryStatistic:
             the layer dimension, and the color of each cell is the value of
             the statistic.
         """
+        max = self.max if self.max is not None else np.max(self.stats)
+        min = self.min if self.min is not None else np.min(self.stats)
         heatmap_kwargs: Dict[str, Any] = dict(
             y=self._layer_labels,
-            z=self.stats,
+            z=self.stats if not log_scale else np.log10(self.stats),
             colorbar=dict(
                 title=f"{self.name} ({self.units})",
                 titleside="right",
             ),
-            zmax=self.max,
-            zmin=self.min,
+            colorscale=colorscale,
+            zmax=max if not log_scale else np.log10(max),
+            zmin=min if not log_scale else np.log10(min),
         )
+
+        if log_scale:
+            smallest_tick = np.ceil(np.log10(min))
+            biggest_tick = np.floor(np.log10(max))
+            tickvals = np.arange(smallest_tick, biggest_tick + 1)
+            heatmap_kwargs["colorbar"] = dict(
+                tickmode="array",
+                tickvals=tickvals,
+                ticktext=["10^{}".format(i) for i in tickvals],
+            )
 
         if self.sequence_labels is not None:
             # Hack to ensure that Plotly doesn't de-duplicate the x-axis labels
@@ -188,7 +203,6 @@ class TrajectoryStatistic:
 
         if self.trajectory_labels is not None:
             heatmap_kwargs.update(
-                colorscale=colorscale,
                 text=self.trajectory_labels.label_strings,
                 texttemplate="<b>%{text}</b>",
             )
