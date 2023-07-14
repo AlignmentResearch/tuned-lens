@@ -543,7 +543,10 @@ class PredictionTrajectory:
         )
 
     def rank(self, show_ranks=False, **kwargs) -> TrajectoryStatistic:
-        """The rank of the targets among the predictions. That is, if the target is the most likely prediction, its rank is 1; the second most likely has rank 2, etc.
+        """The rank of the targets among the predictions.
+
+        That is, if the target is the most likely prediction, its rank is 1;
+        the second most likely has rank 2, etc.
 
         Args:
             show_ranks: Whether to show the the rank of the target or the top token.
