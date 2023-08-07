@@ -110,6 +110,9 @@ class Model:
 
     tokenizer_type: Optional[str] = None
     """Name of tokenizer class to use. If None, will use AutoTokenizer."""
+    
+    use_auth_token: Optional[str] = field(default=None, alias="--use_auth_token")
+    """Auth token to use when loading gated models from the Huggingface Hub."""
 
     def load_tokenizer(self, must_use_cache: bool = False) -> PreTrainedTokenizerBase:
         """Load the tokenizer from huggingface hub."""
@@ -147,6 +150,8 @@ class Model:
             }[self.precision]
         except KeyError as e:
             raise ValueError(f"Unknown precision: {self.precision}") from e
+        
+        use_auth_token_kwargs = {"use_auth_token": self.use_auth_token} if self.use_auth_token else {}
 
         with handle_name_conflicts():
             model = AutoModelForCausalLM.from_pretrained(  # type: ignore
@@ -157,6 +162,7 @@ class Model:
                 revision=self.revision,
                 torch_dtype=dtype,
                 local_files_only=must_use_cache,
+                **use_auth_token_kwargs,
             )
 
         assert isinstance(model, PreTrainedModel)
