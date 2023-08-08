@@ -116,6 +116,9 @@ class Model:
 
     def load_tokenizer(self, must_use_cache: bool = False) -> PreTrainedTokenizerBase:
         """Load the tokenizer from huggingface hub."""
+        
+        use_auth_token_kwargs = {"use_auth_token": self.use_auth_token} if self.use_auth_token else {}
+        
         with handle_name_conflicts():
             tokenizer = AutoTokenizer.from_pretrained(
                 self.tokenizer or self.name,
@@ -123,6 +126,7 @@ class Model:
                 use_fast=not self.slow_tokenizer,
                 tokenizer_type=self.tokenizer_type,
                 local_files_only=must_use_cache,
+                **use_auth_token_kwargs,
             )
 
         assert isinstance(tokenizer, PreTrainedTokenizerBase)
