@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
 from typing import Optional, Union
+from dotenv import load_dotenv 
 
 import torch as th
 import torch.distributed as dist
@@ -39,6 +40,7 @@ from tuned_lens.utils import (
     send_to_device,
 )
 
+load_dotenv()
 
 @dataclass
 class Data:
@@ -111,7 +113,7 @@ class Model:
     tokenizer_type: Optional[str] = None
     """Name of tokenizer class to use. If None, will use AutoTokenizer."""
     
-    use_auth_token: Optional[str] = field(default=None, alias="--use_auth_token")
+    use_auth_token: Optional[str] = os.environ.get('HF_TOKEN') if os.environ.get('HF_TOKEN') else None
     """Auth token to use when loading gated models from the Huggingface Hub."""
 
     def load_tokenizer(self, must_use_cache: bool = False) -> PreTrainedTokenizerBase:
