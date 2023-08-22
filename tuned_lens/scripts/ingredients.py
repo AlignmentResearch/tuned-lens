@@ -1,5 +1,6 @@
 """Shared configuration for the scripts."""
 import enum
+import logging
 import os
 from dataclasses import dataclass
 from datetime import timedelta
@@ -62,7 +63,7 @@ class Data:
 
     def load(self, tokenizer: PreTrainedTokenizerBase) -> tuple[Dataset, float]:
         """Load the dataset, tokenize it and compute nats_to_bpb."""
-        print(f"Loading dataset '{' '.join(self.name)}'")
+        logging.info(f"Loading dataset '{' '.join(self.name)}'")
 
         if len(self.name) == 1 and self.name[0].endswith(".jsonl"):
             dataset = Dataset.from_json(self.name[0])
@@ -81,7 +82,7 @@ class Data:
             max_length=self.max_length,
         )
 
-        print(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
+        logging.info(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
 
         assert isinstance(processed, Dataset)
 
@@ -135,7 +136,7 @@ class Model:
                 argument of `AutoModelForCausalLM.from_pretrained`.
             must_use_cache: If True, will raise an error if the model is not cached.
         """
-        print(f"Loading pretrained weights for '{self.name}'...")
+        logging.info(f"Loading pretrained weights for '{self.name}'...")
         try:
             dtype = {
                 "auto": "auto",
@@ -204,7 +205,7 @@ class Optimizer:
             # Adam generally performs poorly without an LR warmup
             if self.optimizer == "adam":
                 self.warmup_steps = min(1000, num_steps // 5)
-                print(f"Using {self.warmup_steps} LR warmup steps for Adam")
+                logging.info(f"Using {self.warmup_steps} LR warmup steps for Adam")
             else:
                 self.warmup_steps = 0
 
@@ -311,7 +312,9 @@ class Distributed:
         if self.fsdp:
             _, layers = get_transformer_layers(model)
             layer_cls = type(layers[0])
-            print(f"Using '{layer_cls.__name__}' for transformer_auto_wrap_policy.")
+            logging.info(
+                f"Using '{layer_cls.__name__}' for transformer_auto_wrap_policy."
+            )
             return FullyShardedDataParallel(
                 model,
                 auto_wrap_policy=partial(

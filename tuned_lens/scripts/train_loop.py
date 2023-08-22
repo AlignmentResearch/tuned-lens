@@ -1,6 +1,7 @@
 """Training loop for training a TunedLens model against a transformer on a dataset."""
 import dataclasses
 import enum
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -43,7 +44,7 @@ class State:
 
     def load(self, snapshot_file: Path, device: th.device) -> None:
         """Load a snapshot file."""
-        print(f"Loading snapshot from {snapshot_file}...")
+        logging.info(f"Loading snapshot from {snapshot_file}...")
         snapshot = th.load(snapshot_file, map_location=device)
         self.step = snapshot["step"]
         self.wandb_id = snapshot["wandb_id"]
@@ -54,7 +55,7 @@ class State:
 
     def save(self, snapshot_file: Path) -> None:
         """Save a snapshot file."""
-        print(f"Saving snapshot to {snapshot_file}...")
+        logging.info(f"Saving snapshot to {snapshot_file}...")
         if isinstance(self.opt, ZeroRedundancyOptimizer):
             self.opt.consolidate_state_dict()
 
@@ -143,7 +144,9 @@ class Train:
 
         # Include the optimizer state in the memory usage
         num_bytes = lens_size * (self.opt.per_parameter_optim_state_size() + 1)
-        print(f"Tuned lens memory usage: {num_bytes / 2 ** 20:.2f} MB in {lens_dtype}")
+        logging.info(
+            f"Tuned lens memory usage: {num_bytes / 2 ** 20:.2f} MB in {lens_dtype}"
+        )
 
         if self.bias_only:
             for probe in lens:
@@ -271,18 +274,18 @@ class Train:
             # size, use ceil division and let the user know about it.
             grad_acc_steps += 1
             adjusted_count = grad_acc_steps * global_batch_size * tokens_per_sample
-            print(
+            logging.warning(
                 f"Note: Increasing grad acc steps from {grad_acc_steps - 1} to "
                 f"{grad_acc_steps} to maintain load balance across "
                 f"{self.dist.world_size} GPUs."
             )
-            print(
+            logging.warning(
                 f"Using {adjusted_count:_} tokens per training step "
                 f"({self.tokens_per_step:_} requested)."
             )
         else:
-            print(f"Gradient accumulation steps: {grad_acc_steps}")
-            print(f"Using {self.tokens_per_step:_} tokens per training step.")
+            logging.info(f"Gradient accumulation steps: {grad_acc_steps}")
+            logging.info(f"Using {self.tokens_per_step:_} tokens per training step.")
         return grad_acc_steps
 
     def setup(self) -> tuple[State, Union[PreTrainedModel, FSDP], int]:
@@ -343,7 +346,7 @@ class Train:
         tokens_per_sample = len(data[0]["input_ids"])
         grad_acc_steps = self.calculate_gradient_accumulation_steps(tokens_per_sample)
         self.dist.barrier()  # Wait for all processes to finish setup
-        print("All processes have completed setup.")
+        logging.info("All processes have completed setup.")
         return state, model, grad_acc_steps
 
     def execute(self):
@@ -357,7 +360,7 @@ class Train:
 
         # Wait for all processes to finish setup
         self.dist.barrier()
-        print("All processes have completed setup. Starting training.")
+        logging.info("All processes have completed setup. Starting training.")
 
         # Main training loop
         t = trange(
@@ -415,7 +418,6 @@ class Train:
                     else:
                         raise NotImplementedError
 
-                    # Log the loss *before* LASSO regularization
                     logging_loss = loss.detach()
                     logging_loss = maybe_all_reduce(logging_loss).item()
                     if self.dist.primary:
@@ -444,7 +446,7 @@ class Train:
                     self.snapshot(state)
 
         if self.dist.primary:
-            print(f"Saving lens to {self.output}")
+            logging.info(f"Saving lens to {self.output}")
 
             # Unwrap the lens from DDP if needed
             lens = getattr(state.lens, "module", state.lens)
