@@ -40,6 +40,8 @@ from tuned_lens.utils import (
     send_to_device,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class Data:
@@ -63,7 +65,8 @@ class Data:
 
     def load(self, tokenizer: PreTrainedTokenizerBase) -> tuple[Dataset, float]:
         """Load the dataset, tokenize it and compute nats_to_bpb."""
-        logging.info(f"Loading dataset '{' '.join(self.name)}'")
+        logger.info(f"Loading dataset '{' '.join(self.name)}'")
+        logger.debug(f"Using split '{self.split}', revision '{self.revision}'")
 
         if len(self.name) == 1 and self.name[0].endswith(".jsonl"):
             dataset = Dataset.from_json(self.name[0])
@@ -74,7 +77,9 @@ class Data:
                 raise ValueError(
                     "Only Dataset and DatasetDict instances are supported."
                 )
-
+        logger.debug(f"Dataset has {len(dataset)} samples.")
+        logger.debug(f"Dataset columns: {dataset.column_names}")
+        logger.debug("Beginning tokenization...")
         processed, nats_to_bpb = chunk_and_tokenize(
             dataset,
             tokenizer,
@@ -82,7 +87,7 @@ class Data:
             max_length=self.max_length,
         )
 
-        logging.info(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
+        logger.info(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")
 
         assert isinstance(processed, Dataset)
 
@@ -136,7 +141,13 @@ class Model:
                 argument of `AutoModelForCausalLM.from_pretrained`.
             must_use_cache: If True, will raise an error if the model is not cached.
         """
-        logging.info(f"Loading pretrained weights for '{self.name}'...")
+        logger.info(f"Loading pretrained weights for '{self.name}'...")
+        logger.debug(
+            "Using revision {revision} dtype {dtype}, and device {device}".format(
+                revision=self.revision, dtype=self.precision, device=device
+            )
+        )
+
         try:
             dtype = {
                 "auto": "auto",
@@ -205,7 +216,7 @@ class Optimizer:
             # Adam generally performs poorly without an LR warmup
             if self.optimizer == "adam":
                 self.warmup_steps = min(1000, num_steps // 5)
-                logging.info(f"Using {self.warmup_steps} LR warmup steps for Adam")
+                logger.info(f"Using {self.warmup_steps} LR warmup steps for Adam")
             else:
                 self.warmup_steps = 0
 
@@ -312,7 +323,7 @@ class Distributed:
         if self.fsdp:
             _, layers = get_transformer_layers(model)
             layer_cls = type(layers[0])
-            logging.info(
+            logger.info(
                 f"Using '{layer_cls.__name__}' for transformer_auto_wrap_policy."
             )
             return FullyShardedDataParallel(
@@ -337,8 +348,10 @@ class Distributed:
 
     def distribute_lens(self, lens: Lens) -> Union[DDP, Lens]:
         """Distribute the lens using DistributedDataParallel and send lens to device."""
+        logger.debug(f"Sending Lens to device {self.device}")
         if self.world_size > 1:
             lens.to(self.device)
+            logger.debug("Distributing the lens across the GPUS using DDP ...")
             return DDP(lens, device_ids=[self.local_rank], find_unused_parameters=True)
         else:
             return lens.to(self.device)

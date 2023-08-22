@@ -13,6 +13,8 @@ from ..nn import Lens
 from ..utils import maybe_all_reduce
 from .utils import derange
 
+logger = logging.getLogger(__name__)
+
 
 @contextmanager
 def ablate_subspace(
@@ -188,7 +190,7 @@ def extract_causal_bases(
                     pbar.set_postfix(energy=last_energy.item())
 
                 if not loss.isfinite():
-                    logging.warning("Loss is not finite")
+                    logger.warning("Loss is not finite")
                     loss = th.tensor(0.0, device=device)
                     opt.zero_grad(set_to_none=False)
 

@@ -22,6 +22,8 @@ import tuned_lens.scripts.ingredients as ing
 from tuned_lens import TunedLens
 from tuned_lens.utils import maybe_all_reduce, shift_labels, shift_preds
 
+logger = logging.getLogger(__name__)
+
 
 class LossChoice(enum.Enum):
     """Options of what loss to select when training the model."""
@@ -44,7 +46,7 @@ class State:
 
     def load(self, snapshot_file: Path, device: th.device) -> None:
         """Load a snapshot file."""
-        logging.info(f"Loading snapshot from {snapshot_file}...")
+        logger.info(f"Loading snapshot from {snapshot_file}...")
         snapshot = th.load(snapshot_file, map_location=device)
         self.step = snapshot["step"]
         self.wandb_id = snapshot["wandb_id"]
@@ -55,7 +57,7 @@ class State:
 
     def save(self, snapshot_file: Path) -> None:
         """Save a snapshot file."""
-        logging.info(f"Saving snapshot to {snapshot_file}...")
+        logger.info(f"Saving snapshot to {snapshot_file}...")
         if isinstance(self.opt, ZeroRedundancyOptimizer):
             self.opt.consolidate_state_dict()
 
@@ -130,8 +132,10 @@ class Train:
     def get_lens(self, model: PreTrainedModel) -> TunedLens:
         """Load or create a TunedLens model."""
         if self.lens_name_or_path is None:
+            logger.info("Randomly initializing lens...")
             lens = TunedLens.from_model(model)
         else:
+            logger.info("Loading pretrained lens...")
             lens = TunedLens.from_model_and_pretrained(model, self.lens_name_or_path)
 
         dtypes = {p.dtype for p in lens.parameters()}
@@ -144,11 +148,12 @@ class Train:
 
         # Include the optimizer state in the memory usage
         num_bytes = lens_size * (self.opt.per_parameter_optim_state_size() + 1)
-        logging.info(
+        logger.info(
             f"Tuned lens memory usage: {num_bytes / 2 ** 20:.2f} MB in {lens_dtype}"
         )
 
         if self.bias_only:
+            logger.info("Freezing the matrix weights to train only the bias terms.")
             for probe in lens:
                 probe.weight.requires_grad_(False)
 
@@ -167,6 +172,7 @@ class Train:
         if not self.dist.primary or not self.wandb:
             return
 
+        logger.debug("Initializing Weights & Biases ...")
         import wandb
 
         wandb.init(
@@ -237,6 +243,7 @@ class Train:
         assert self.checkpoint_dir is not None
 
         if not self.checkpoint_dir.exists():
+            logger.warning("No checkpoint directory found. Snapshotting is disabled.")
             return None
 
         # Find the folder containing the most recent snapshot
@@ -274,18 +281,18 @@ class Train:
             # size, use ceil division and let the user know about it.
             grad_acc_steps += 1
             adjusted_count = grad_acc_steps * global_batch_size * tokens_per_sample
-            logging.warning(
+            logger.warning(
                 f"Note: Increasing grad acc steps from {grad_acc_steps - 1} to "
                 f"{grad_acc_steps} to maintain load balance across "
                 f"{self.dist.world_size} GPUs."
             )
-            logging.warning(
+            logger.warning(
                 f"Using {adjusted_count:_} tokens per training step "
                 f"({self.tokens_per_step:_} requested)."
             )
         else:
-            logging.info(f"Gradient accumulation steps: {grad_acc_steps}")
-            logging.info(f"Using {self.tokens_per_step:_} tokens per training step.")
+            logger.info(f"Gradient accumulation steps: {grad_acc_steps}")
+            logger.info(f"Using {self.tokens_per_step:_} tokens per training step.")
         return grad_acc_steps
 
     def setup(self) -> tuple[State, Union[PreTrainedModel, FSDP], int]:
@@ -300,7 +307,7 @@ class Train:
         load_device = self.dist.device if not self.dist.fsdp else None
 
         if self.dist.primary:
-            # Let the primary processes populate the cache
+            logger.debug("Primary rank populating cache...")
             model, tokenizer = self.model.load(load_device)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
@@ -309,19 +316,21 @@ class Train:
 
         if not self.dist.primary:
             # Let the non-primary processes load from the cache
+            logger.debug("Non-primary rank loading from cache...")
             model, tokenizer = self.model.load(load_device, must_use_cache=True)
             data, nats_to_bpb = self.data.load(tokenizer)
             lens = self.get_lens(model)
 
         assert model and tokenizer and data and lens and nats_to_bpb
 
+        logger.debug(f"Creating data loader and setting seed to {self.seed} ...")
         dl = self.dist.data_loader(data)
         dl.seed(self.seed)
+        logger.debug("Creating optimizer and scheduler ...")
         params = [p for p in lens.parameters() if p.requires_grad]
         opt = self.opt.create_optim(params)
         scheduler = self.opt.create_scheduler(opt, self.num_steps)
 
-        # Distribute the lens across the GPUS using distributed data parallel
         ddp_lens = self.dist.distribute_lens(lens)
 
         state = State(
@@ -346,7 +355,7 @@ class Train:
         tokens_per_sample = len(data[0]["input_ids"])
         grad_acc_steps = self.calculate_gradient_accumulation_steps(tokens_per_sample)
         self.dist.barrier()  # Wait for all processes to finish setup
-        logging.info("All processes have completed setup.")
+        logger.info("All processes have completed setup.")
         return state, model, grad_acc_steps
 
     def execute(self):
@@ -360,7 +369,7 @@ class Train:
 
         # Wait for all processes to finish setup
         self.dist.barrier()
-        logging.info("All processes have completed setup. Starting training.")
+        logger.info("All processes have completed setup. Starting training.")
 
         # Main training loop
         t = trange(
@@ -446,7 +455,7 @@ class Train:
                     self.snapshot(state)
 
         if self.dist.primary:
-            logging.info(f"Saving lens to {self.output}")
+            logger.info(f"Saving lens to {self.output}")
 
             # Unwrap the lens from DDP if needed
             lens = getattr(state.lens, "module", state.lens)

@@ -30,6 +30,9 @@ from tuned_lens.utils import (
 LensType = Literal["logit", "tuned"]
 
 
+logger = logging.getLogger(__name__)
+
+
 def _nested_dict():
     return defaultdict(_nested_dict)
 
@@ -255,7 +258,7 @@ class Eval:
         batches = []
 
         self.dist.barrier()
-        logging.info(
+        logger.info(
             f"All processes initialized. Running evaluation on {total} batches."
         )
 

@@ -2,9 +2,9 @@
 import abc
 import inspect
 import json
+import logging
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from logging import warning
 from pathlib import Path
 from typing import Dict, Generator, Optional, Union
 
@@ -13,6 +13,8 @@ from transformers import PreTrainedModel
 
 from tuned_lens import load_artifacts
 from tuned_lens.nn.unembed import Unembed
+
+logger = logging.getLogger(__name__)
 
 
 class Lens(abc.ABC, th.nn.Module):
@@ -121,7 +123,7 @@ class TunedLensConfig:
         # Drop unrecognized config keys
         unrecognized = set(config_dict) - set(inspect.getfullargspec(cls).args)
         for key in unrecognized:
-            warning(f"Ignoring config key '{key}'")
+            logger.warning(f"Ignoring config key '{key}'")
             del config_dict[key]
 
         return cls(**config_dict)
@@ -262,7 +264,7 @@ class TunedLens(Lens):
 
         # validate the unembed is the same as the one used to train the lens
         if config.unembed_hash and unembed.unembedding_hash() != config.unembed_hash:
-            warning(
+            logger.warning(
                 "The unembedding matrix hash does not match the lens' hash."
                 "This lens may have been trained with a different unembedding."
             )
