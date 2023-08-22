@@ -60,6 +60,12 @@ class Data:
     max_length: int = 2048
     """The maximum length of the input sequences."""
 
+    dataset_shuffle: bool = False
+    """Whether to shuffle the dataset."""
+
+    dataset_shuffle_seed: int = 42
+    """Seed to use for shuffling the dataset"""
+
     def load(self, tokenizer: PreTrainedTokenizerBase) -> tuple[Dataset, float]:
         """Load the dataset, tokenize it and compute nats_to_bpb."""
         print(f"Loading dataset '{' '.join(self.name)}'")
@@ -73,6 +79,9 @@ class Data:
                 raise ValueError(
                     "Only Dataset and DatasetDict instances are supported."
                 )
+
+        if self.dataset_shuffle:
+            dataset = dataset.shuffle(self.dataset_shuffle_seed)
 
         processed, nats_to_bpb = chunk_and_tokenize(
             dataset,
@@ -351,7 +360,6 @@ class Distributed:
         else:
             rs = None
 
-        dp = dp.shuffle()
         dp = dp.sharding_filter()
         dp = dp.batch(self.per_gpu_batch_size)
         dp = dp.collate()
