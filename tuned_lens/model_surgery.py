@@ -1,7 +1,7 @@
 """Tools for finding and modifying components in a transformer model."""
 
 from contextlib import contextmanager
-from typing import Any, Generator, TypeVar, Union
+from typing import Any, Callable, Generator, TypeVar, Union
 
 try:
     import transformer_lens as tl
@@ -224,3 +224,74 @@ def replace_layers(
         yield model
     finally:
         set_key_path_(model, list_path, layer_list)
+
+
+class _AddVector(th.nn.Module):
+    """Add a vector to the output of a base module."""
+
+    def __init__(
+        self,
+        base: th.nn.Module,
+        vector: th.Tensor,
+        get_hidden: Callable[[Any], th.Tensor] = lambda x: x[0],
+        set_hidden: Callable[[Any, th.Tensor], Any] = lambda x, y: (y, *x[1:]),
+    ):
+        """Create an AddVector module."""
+        super().__init__()
+        self.base = base
+        self.vector = nn.Parameter(vector.clone())
+        self.get_hidden = get_hidden
+        self.set_hidden = set_hidden
+
+    def forward(self, *args, **kwargs) -> th.Tensor:
+        outputs = self.base(*args, **kwargs)
+        hidden = self.get_hidden(outputs)
+        hidden = hidden + self.vector
+        outputs = self.set_hidden(outputs, hidden)
+        return outputs
+
+
+@contextmanager
+def add_steering_vector(
+    model: Model, indices: list[int], steering_vector: th.Tensor
+) -> Generator[Model, None, None]:
+    """Add a steering vector to a model."""
+    base_model = model.base_model
+    if isinstance(
+        base_model,
+        (
+            models.opt.modeling_opt.OPTModel,
+            models.gpt_neox.modeling_gpt_neox.GPTNeoXModel,
+            models.bloom.modeling_bloom.BloomModel,
+            models.gpt2.modeling_gpt2.GPT2Model,
+            models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+            models.gptj.modeling_gptj.GPTJModel,
+            models.llama.modeling_llama.LlamaModel,
+        ),
+    ):
+
+        def get_hidden(x):
+            return x[0]
+
+        def set_hidden(x, y):
+            return (y, *x[1:])
+
+    else:
+        raise NotImplementedError(f"Unknown model type {type(base_model)}")
+
+    _, layers = get_transformer_layers(model)
+
+    replacements = [
+        _AddVector(
+            base=layer,
+            vector=steering_vector,
+            get_hidden=get_hidden,
+            set_hidden=set_hidden,
+        )
+        for layer in layers
+    ]
+
+    with replace_layers(
+        model, indices=indices, replacements=replacements  # type: ignore
+    ) as mod_model:
+        yield mod_model
