@@ -1,5 +1,6 @@
 """Evaluation loop for the tuned lens model."""
 import json
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import islice
@@ -27,6 +28,9 @@ from tuned_lens.utils import (
 )
 
 LensType = Literal["logit", "tuned"]
+
+
+logger = logging.getLogger(__name__)
 
 
 def _nested_dict():
@@ -254,7 +258,9 @@ class Eval:
         batches = []
 
         self.dist.barrier()
-        print(f"All processes initialized. Running evaluation on {total} batches.")
+        logger.info(
+            f"All processes initialized. Running evaluation on {total} batches."
+        )
 
         pbar = tqdm(dl, desc="Evaluating", position=self.dist.rank, total=total)
         for batch in pbar:

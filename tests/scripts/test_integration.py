@@ -8,7 +8,7 @@ def test_eval_subcommand(
 ):
     # Note we do not specify a lens here, so we are using the logit lens
     args = (
-        f"eval --data.name {text_dataset_path}"
+        f"--log_level DEBUG eval --data.name {text_dataset_path}"
         f" --model.name {gpt2_tiny_random_model_local_path}"
         " --record_logit_stats"
         " --tokens 4000 --max_length 128"
@@ -22,7 +22,7 @@ def test_train_subcommand(
     text_dataset_path: Path, gpt2_tiny_random_model_local_path: Path, tmp_path: Path
 ):
     args = (
-        f"train --data.name {text_dataset_path}"
+        f"--log_level DEBUG train --data.name {text_dataset_path}"
         f" --model.name {gpt2_tiny_random_model_local_path}"
         " --max_length 128"
         " --tokens_per_step 256"
