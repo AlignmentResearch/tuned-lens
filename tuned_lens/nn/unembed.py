@@ -106,8 +106,9 @@ class Unembed(th.nn.Module):
         leading_dims = logits.shape[:-1]
 
         if h0 is None:
-            # Initialize with the Moore-Penrose pseudoinverse
-            h0 = th.zeros((*leading_dims, d_model), device=logits.device)
+            h0 = th.zeros(
+                (*leading_dims, d_model), device=logits.device, dtype=logits.dtype
+            )
 
         # Sanity check the shape of the initial hidden state. Can silently lead to
         # incorrect results due to broadcasting if we don't check this.

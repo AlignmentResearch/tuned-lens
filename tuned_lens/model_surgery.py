@@ -211,8 +211,8 @@ def permute_layers_(model: th.nn.Module, indices: list[int]):
 
 @contextmanager
 def replace_layers(
-    model: T, indices: list[int], replacements: list[th.nn.Module]
-) -> Generator[T, None, None]:
+    model: Model, indices: list[int], replacements: list[th.nn.Module]
+) -> Generator[None, None, None]:
     """Replace the layers at `indices` with `replacements` while in the context."""
     list_path, layer_list = get_transformer_layers(model)
     modified_list = th.nn.ModuleList(layer_list)
@@ -221,22 +221,19 @@ def replace_layers(
 
     set_key_path_(model, list_path, modified_list)
     try:
-        yield model
+        yield
     finally:
         set_key_path_(model, list_path, layer_list)
 
 
 class _AddVector(th.nn.Module):
-    """Add a vector to the output of a base module."""
-
     def __init__(
         self,
         base: th.nn.Module,
         vector: th.Tensor,
-        get_hidden: Callable[[Any], th.Tensor] = lambda x: x[0],
-        set_hidden: Callable[[Any, th.Tensor], Any] = lambda x, y: (y, *x[1:]),
+        get_hidden: Callable[[Any], th.Tensor],
+        set_hidden: Callable[[Any, th.Tensor], Any],
     ):
-        """Create an AddVector module."""
         super().__init__()
         self.base = base
         self.vector = nn.Parameter(vector.clone())
@@ -253,9 +250,22 @@ class _AddVector(th.nn.Module):
 
 @contextmanager
 def add_steering_vector(
-    model: Model, indices: list[int], steering_vector: th.Tensor
-) -> Generator[Model, None, None]:
-    """Add a steering vector to a model."""
+    model: Model,
+    indices: list[int],
+    steering_vectors: Union[list[th.Tensor], th.Tensor],
+) -> Generator[None, None, None]:
+    """In the context modify the model by adding a steering vectors to the given layers.
+
+    Args:
+        model: The model to apply the steering vector to.
+        indices: The indices of the layers to modify.
+        steering_vectors: The steering vector to add to each layer.
+    """
+    if isinstance(steering_vectors, th.Tensor):
+        steering_vectors = [steering_vectors] * len(indices)
+
+    assert len(indices) == len(steering_vectors)
+
     base_model = model.base_model
     if isinstance(
         base_model,
@@ -288,10 +298,10 @@ def add_steering_vector(
             get_hidden=get_hidden,
             set_hidden=set_hidden,
         )
-        for layer in layers
+        for layer, steering_vector in zip(layers, steering_vectors)
     ]
 
     with replace_layers(
         model, indices=indices, replacements=replacements  # type: ignore
-    ) as mod_model:
-        yield mod_model
+    ):
+        yield
