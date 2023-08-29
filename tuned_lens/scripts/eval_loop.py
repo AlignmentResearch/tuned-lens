@@ -51,10 +51,10 @@ class Eval:
     """Folder to save the eval results to."""
 
     lens_name: Optional[str] = field(alias=["-l"], default=None)
-    """Path to the tuned lens model."""
+    """Path to the tuned lens model to evaluate. Defaults to None."""
 
-    lens_types: list[LensType] = field(default_factory=lambda: ["logit"])
-    """Types of lenses to evaluate can be a combination of (logit|tuned)."""
+    logit: bool = True
+    """Whether to evaluate the logit lens"""
 
     seed: int = 42
     """Random seed used for data shuffling."""
@@ -78,19 +78,10 @@ class Eval:
     def load_lens(self, model: PreTrainedModel) -> dict[str, Lens]:
         """Load the tuned lens model."""
         lenses = {}
-        for lens_type in self.lens_types:
-            if lens_type == "logit":
-                lenses["logit"] = LogitLens.from_model(model)
-            elif lens_type == "tuned":
-                if self.lens_name is None:
-                    raise ValueError(
-                        "Must specify a lens name when evaluating a tuned lens."
-                    )
-                lenses["tuned"] = TunedLens.from_model_and_pretrained(
-                    model, self.lens_name
-                )
-            else:
-                raise ValueError(f"Unknown lens type: {lens_type}")
+        if self.logit:
+            lenses["logit"] = LogitLens.from_model(model)
+        if self.lens_name is not None:
+            lenses["tuned"] = TunedLens.from_model_and_pretrained(model, self.lens_name)
         return lenses
 
     def calculate_batch_limit(self, tokens_per_sample: int):

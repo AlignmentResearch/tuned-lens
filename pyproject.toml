@@ -17,7 +17,7 @@ dependencies = [
     "torch>=1.13.0",
     "transformers>=4.28.1",
     "huggingface_hub>=0.12.1",
-    "simple-parsing>=0.1.1",
+    "simple-parsing>=0.1.4",
     "flatten-dict>=0.4.1",
     "wandb>=0.15.0",
 ]

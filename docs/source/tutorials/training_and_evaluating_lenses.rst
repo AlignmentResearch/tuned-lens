@@ -43,10 +43,11 @@ Once you have a lens file, either by training it yourself or by downloading it, 
 
 .. code-block:: console
 
-   python -m tuned_lens eval \
+   python -m tuned_lens eval --data.name test.jsonl \
         --model.name gpt2 \
-        --data.name test.jsonl \
-        --per_gpu_batch_size=1
+        --tokens 4000 --max_length 128 \
+        --lens_name gpt2 \
+        --output evaluation/gpt2
 
 ++++++++++++++++++++++++++++++++++++++++++++
 Distributed Data Parallel Multi-GPU Training

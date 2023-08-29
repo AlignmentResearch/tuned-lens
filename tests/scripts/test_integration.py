@@ -12,6 +12,7 @@ def test_eval_subcommand(
         f" --model.name {gpt2_tiny_random_model_local_path}"
         " --record_logit_stats"
         " --tokens 4000 --max_length 128"
+        " --logit"
         f" --output {tmp_path}"
     )
     args = args.split()
