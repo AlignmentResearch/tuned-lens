@@ -32,7 +32,7 @@ This command will train a tuned lens on `https://github.com/EleutherAI/pythia` w
         --model.name EleutherAI/pythia-160m-deduped \
         --data.name val.jsonl \
         --per_gpu_batch_size=1 \
-        --output trained-lenses/pythia-160m-deduped
+        --output my_lenses/EleutherAI/pythia-160m-deduped
 
 Once training is completed, this should save the trained lens to the `trained-lenses/pythia-160m-deduped` directory.
 
@@ -40,15 +40,16 @@ Once training is completed, this should save the trained lens to the `trained-le
 Evaluating a Lens
 +++++++++++++++++
 
-Once you have a lens file, either by training it yourself or by downloading it, you can run various evaluations on it using the provided evaluation command.
+Once you have a lens trained, either by training it yourself, or by loading it from the hub, you can run various evaluations on it using the provided evaluation command.
 
 .. code-block:: console
 
-   python -m tuned_lens eval --data.name test.jsonl \
-        --model.name gpt2 \
-        --tokens 4000 --max_length 128 \
-        --lens_name gpt2 \
-        --output evaluation/gpt2
+   python -m tuned_lens eval \
+        --data.name test.jsonl \
+        --model.name EleutherAI/pythia-160m-deduped \
+        --tokens 16400000 \
+        --lens_name my_lenses/EleutherAI/pythia-160m-deduped \
+        --output evaluation/EleutherAI/pythia-160m-deduped
 
 ++++++++++++++++++++++++++++++++++++++++++++
 Distributed Data Parallel Multi-GPU Training
@@ -64,10 +65,10 @@ that this still requires the transformer model itself to fit on a single GPU. Ho
     --nnodes=1 \
     --nproc-per-node=<num_gpus> \
     -m tuned_lens train \
-    --model.name gpt2 \
+    --model.name EleutherAI/pythia-160m-deduped \
     --data.name val.jsonl \
     --per_gpu_batch_size=1 \
-    --output trained-lenses/gpt2
+    --output my_lenses/EleutherAI/pythia-160m-deduped
 
 ++++++++++++++++++++++++++++++++++++++++++++++
 Fully Sharded Data Parallel Multi-GPU Training
@@ -82,10 +83,10 @@ If the transformer model does not fit on a single GPU, you can also use `fully s
     --nnodes=1 \
     --nproc-per-node=<num_gpus> \
     -m tuned_lens train \
-    --model.name gpt2 \
+    --model.name EleutherAI/pythia-160m-deduped \
     --data.name val.jsonl \
     --per_gpu_batch_size=1 \
-    --output trained-lenses/gpt2 \
+    --output my_lenses/EleutherAI/pythia-160m-deduped \
     --fsdp
 
 You can also use cpu offloading to train lenses on very large models while using less VRAM it can be enabled with the ``--cpu_offload`` flag. However, this substantially slows down training and is still experimental.
