@@ -21,9 +21,19 @@ def available_lens_artifacts(
     repo_type = repo_type + "s" if not repo_type.endswith("s") else repo_type
 
     root = Path(repo_type, repo_id, subfolder)
-    with_config = map(Path, fs.glob((root / "**" / config_file).as_posix()))
-    with_pt = map(Path, fs.glob((root / "**" / ckpt_file).as_posix()))
+    with_config = map(
+        Path,
+        fs.glob(
+            (root / "**" / config_file).as_posix(), revision=revision  # type: ignore
+        ),
+    )
 
+    with_pt = map(
+        Path,
+        fs.glob(
+            (root / "**" / ckpt_file).as_posix(), revision=revision  # type: ignore
+        ),
+    )
     paths = {p.parent for p in with_pt}.intersection({p.parent for p in with_config})
     return {p.relative_to(root).as_posix() for p in paths}
 
