@@ -31,7 +31,14 @@ def test_add_steering_vector(random_small_model: PreTrainedModel):
     steering_vector = th.randn(
         (model.config.hidden_size), dtype=th.float, generator=generator
     )
-    y1 = random_small_model(input_ids).logits
+    y1 = model(input_ids).logits
+
+    with model_surgery.add_steering_vector(
+        model, [1, 2], th.zeros_like(steering_vector)
+    ):
+        y3 = model(input_ids=input_ids).logits
+
+    assert th.allclose(y1, y3)
 
     # Now add the steering vector.
     with model_surgery.add_steering_vector(model, [1, 2], steering_vector):

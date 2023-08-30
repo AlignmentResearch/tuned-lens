@@ -293,12 +293,12 @@ def add_steering_vector(
 
     replacements = [
         _AddVector(
-            base=layer,
+            base=layers[idx],
             vector=steering_vector,
             get_hidden=get_hidden,
             set_hidden=set_hidden,
         )
-        for layer, steering_vector in zip(layers, steering_vectors)
+        for idx, steering_vector in zip(indices, steering_vectors)
     ]
 
     with replace_layers(
