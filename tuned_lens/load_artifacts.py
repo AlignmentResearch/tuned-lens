@@ -3,14 +3,36 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfFileSystem, hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError
+
+
+def available_lens_artifacts(
+    repo_id: str,
+    repo_type: str,
+    revision: str = "main",
+    config_file: str = "config.json",
+    ckpt_file: str = "params.pt",
+    subfolder: str = "lens",
+) -> set[str]:
+    """Get the available lens artifacts from the hub."""
+    fs = HfFileSystem()
+
+    repo_type = repo_type + "s" if not repo_type.endswith("s") else repo_type
+
+    root = Path(repo_type, repo_id, subfolder)
+    with_config = map(Path, fs.glob((root / "**" / config_file).as_posix()))
+    with_pt = map(Path, fs.glob((root / "**" / ckpt_file).as_posix()))
+
+    paths = {p.parent for p in with_pt}.intersection({p.parent for p in with_config})
+    return {p.relative_to(root).as_posix() for p in paths}
 
 
 def load_lens_artifacts(
     resource_id: str,
     repo_id: Optional[str] = None,
     repo_type: Optional[str] = None,
-    revision: Optional[str] = None,
+    revision: str = "main",
     config_file: str = "config.json",
     ckpt_file: str = "params.pt",
     subfolder: str = "lens",
@@ -56,24 +78,39 @@ def load_lens_artifacts(
     if (local_path / config_file).exists() and (local_path / ckpt_file).exists():
         return local_path / config_file, local_path / ckpt_file
 
-    subfolder = "/".join((subfolder, resource_id))
-    params_path = hf_hub_download(
-        filename=ckpt_file,
-        repo_id=repo_id,
-        repo_type=repo_type,
-        revision=revision,
-        subfolder=subfolder,
-        cache_dir=cache_dir,
-    )
+    resource_folder = "/".join((subfolder, resource_id))
+    try:
+        params_path = hf_hub_download(
+            filename=ckpt_file,
+            repo_id=repo_id,
+            repo_type=repo_type,
+            revision=revision,
+            subfolder=resource_folder,
+            cache_dir=cache_dir,
+        )
 
-    config_path = hf_hub_download(
-        filename=config_file,
-        repo_id=repo_id,
-        repo_type=repo_type,
-        revision=revision,
-        subfolder=subfolder,
-        cache_dir=cache_dir,
-    )
+        config_path = hf_hub_download(
+            filename=config_file,
+            repo_id=repo_id,
+            repo_type=repo_type,
+            revision=revision,
+            subfolder=resource_folder,
+            cache_dir=cache_dir,
+        )
+    except EntryNotFoundError:
+        available_lenses = available_lens_artifacts(
+            repo_id=repo_id,
+            repo_type=repo_type,
+            revision=revision,
+            config_file=config_file,
+            ckpt_file=ckpt_file,
+            subfolder=subfolder,
+        )
+        message = (
+            f"Could not find lens at the specified resource id. Available lens"
+            f"resources are: {', '.join(available_lenses)}"
+        )
+        raise ValueError(message)
 
     if config_path is not None and params_path is not None:
         return Path(config_path), Path(params_path)
