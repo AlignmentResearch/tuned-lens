@@ -13,8 +13,7 @@ From the hugging face API
 
 First check if there is a pre-trained lens available in our spaces' `pre-trained lenses folder`_.
 
-Once you have found a lens that you want to use, you can load it using the simply load it
-and its corresponding tokenizer using the hugging face API. A tuned lens is always associated with
+Once you have found a lens that you want to use, you can simply load it. A tuned lens is always associated with
 a model that was used to train it so first load the model and then the lens.
 
 >>> import torch
