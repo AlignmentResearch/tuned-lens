@@ -231,6 +231,12 @@ class Eval:
 
         if self.tokens is not None:
             tokens_per_sample = len(data[0]["input_ids"])
+            if self.tokens > len(data) * tokens_per_sample:
+                raise ValueError(
+                    f"Requested to evaluate on {self.tokens} tokens, "
+                    f"but dataset only contains {len(data)*tokens_per_sample} tokens."
+                )
+
             batch_limit = self.calculate_batch_limit(tokens_per_sample)
             assert batch_limit > 0, "Batch limit must be positive."
             dl = islice(dl, batch_limit)

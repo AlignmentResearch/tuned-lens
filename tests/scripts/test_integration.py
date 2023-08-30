@@ -21,6 +21,22 @@ def test_eval_subcommand(
     main(args)
 
 
+def test_eval_subcommand_fails_when_not_enough_data_given(
+    text_dataset_path: Path, gpt2_tiny_random_model_local_path: Path, tmp_path: Path
+):
+    args = (
+        f"--log_level DEBUG eval --data.name {text_dataset_path}"
+        f" --model.name {gpt2_tiny_random_model_local_path}"
+        " --record_logit_stats"
+        " --tokens 100000 --max_length 128"
+        " --logit"
+        f" --output {tmp_path}"
+    )
+    args = args.split()
+    with pytest.raises(ValueError, match="Requested to evaluate on"):
+        main(args)
+
+
 def test_train_subcommand(
     text_dataset_path: Path, gpt2_tiny_random_model_local_path: Path, tmp_path: Path
 ):
