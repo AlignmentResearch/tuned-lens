@@ -144,6 +144,8 @@ def test_tuned_lens_generate_smoke(random_small_model: trf.PreTrainedModel):
     )
     assert tokens.shape[-1] <= 11
     assert tokens.shape[-1] > 1
+    assert input_ids == tokens[:, :1]
+    assert input_ids == th.tensor([bos_token_id]), "Don't mutate input_ids!"
 
     tokens = tuned_lens.generate(
         model=random_small_model,

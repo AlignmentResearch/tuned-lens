@@ -343,7 +343,7 @@ class TunedLens(Lens):
         """
         eos_token = model.generation_config.eos_token_id
 
-        tokens = input_ids.clone()
+        tokens = input_ids
         if tokens.ndim == 1:
             tokens = tokens.unsqueeze(0)
         batch, prompt_len = tokens.shape
@@ -364,8 +364,8 @@ class TunedLens(Lens):
             new_logits = self.forward(new_hidden, layer)
             if do_sample:
                 new_logits = new_logits / temp
-                new_logits = th.nn.functional.log_softmax(new_logits, dim=-1)
-                new_tokens = th.multinomial(new_logits.exp(), num_samples=1)
+                probs = new_logits.softmax(dim=-1)
+                new_tokens = th.multinomial(probs, num_samples=1)
             else:
                 new_tokens = new_logits.argmax(dim=-1, keepdim=True)
 
