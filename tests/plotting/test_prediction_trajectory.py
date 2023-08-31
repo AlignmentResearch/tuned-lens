@@ -75,7 +75,7 @@ def test_prediction_trajectory_from_lens_and_model_smoke(model_and_tokenizer, le
     traj = PredictionTrajectory.from_lens_and_model(
         lens, model, input_ids, tokenizer=tokenizer
     )
-    assert traj.num_layers == model.config.num_hidden_layers
+    assert traj.num_layers == model.config.num_hidden_layers + 1
     assert traj.num_tokens == len(input_ids)
     assert traj.vocab_size == model.config.vocab_size
 

@@ -158,8 +158,8 @@ class PredictionTrajectory:
 
     @property
     def num_layers(self) -> int:
-        """Returns the number of layers in the stream not including the model output."""
-        return self.log_probs.shape[-3] - 1
+        """Returns the number of layers in the stream including the model output."""
+        return self.log_probs.shape[-3]
 
     @property
     def num_tokens(self) -> int:
@@ -378,8 +378,8 @@ class PredictionTrajectory:
             `max_entries_to_show`.
         """
         k = topk_tokens.shape[-1]
-        topk_tokens = topk_tokens.reshape(-1, self.num_layers + 1, self.num_tokens, k)
-        topk_values = topk_values.reshape(-1, self.num_layers + 1, self.num_tokens, k)
+        topk_tokens = topk_tokens.reshape(-1, self.num_layers, self.num_tokens, k)
+        topk_values = topk_values.reshape(-1, self.num_layers, self.num_tokens, k)
         topk_tokens = np.moveaxis(topk_tokens, 0, -1)
         topk_values = np.moveaxis(topk_values, 0, -1)
         hover_over_entries = np.empty(
@@ -504,17 +504,71 @@ class PredictionTrajectory:
             ),
         )
 
-    def slice_sequence(self, slice: slice) -> "PredictionTrajectory":
-        """Create a slice of the prediction trajectory along the sequence dimension."""
-        return PredictionTrajectory(
-            log_probs=self.log_probs[..., slice, :],
-            input_ids=self.input_ids[..., slice],
-            targets=self.targets[..., slice] if self.targets is not None else None,
-            anti_targets=self.anti_targets[..., slice]
-            if self.anti_targets is not None
-            else None,
-            tokenizer=self.tokenizer,
-        )
+    def __getitem__(self, index) -> "PredictionTrajectory":
+        """Support for slicing prediction trajectories.
+
+        >>> layers = 12
+        >>> num_tokens = 10
+        >>> vocab_size = 100
+        >>> batch_shape = (3,)
+        >>> traj = PredictionTrajectory(
+        ...     log_probs=np.log(
+        ...         np.ones(
+        ...             batch_shape + (layers, num_tokens, vocab_size),
+        ...             dtype=np.float32
+        ...         ) / vocab_size
+        ...     ),
+        ...     input_ids=np.ones(batch_shape + (num_tokens,), dtype=np.int64),
+        ...     targets=np.ones(batch_shape + (num_tokens,), dtype=np.int64),
+        ... )
+        >>> slice_sequence = traj[:, :, 2:5]
+        >>> slice_sequence.num_layers
+        12
+        >>> slice_sequence.num_tokens
+        3
+        >>> slice_layer = traj[:, 2:5, :]
+        >>> slice_layer.num_tokens
+        10
+        >>> slice_layer.num_layers
+        3
+
+        Args:
+            index: The index to slice the prediction trajectory.
+
+        Returns:
+            A new prediction trajectory with the specified slice.
+        """
+        if isinstance(index, (slice, int)):  # Default to indexing the layer dim
+            index = (index, slice(None))
+
+        if isinstance(index, tuple):
+            if len(index) > self.n_batch_axis + 2:
+                raise IndexError(
+                    "Too many indices for prediction trajectory: {} > {}".format(
+                        len(index), self.n_batch_axis + 2
+                    )
+                )
+
+            (*batch_index, layer_index, seq_index) = index
+
+            if not (isinstance(layer_index, slice) and isinstance(seq_index, slice)):
+                raise IndexError(
+                    "Only slicing is supported for layer and sequence axes."
+                )
+
+            return PredictionTrajectory(
+                log_probs=self.log_probs[
+                    (*batch_index, layer_index, seq_index, slice(None))
+                ],
+                input_ids=self.input_ids[(*batch_index, seq_index)],
+                targets=None
+                if self.targets is None
+                else self.targets[(*batch_index, seq_index)],
+                anti_targets=None
+                if self.anti_targets is None
+                else self.anti_targets[(*batch_index, seq_index)],
+                tokenizer=self.tokenizer,
+            )
 
     def cross_entropy(self, **kwargs) -> TrajectoryStatistic:
         """The cross entropy of the predictions to the targets.
