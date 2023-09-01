@@ -255,3 +255,10 @@ def test_total_variation_smoke(
     assert js_stat.stats.shape == (3, 10)
 
     assert np.isclose(js_stat.stats, 0.0).all()
+
+
+def test_prediction_trajectory_getitem(
+    prediction_trajectory: PredictionTrajectory,
+):
+    traj = prediction_trajectory
+    assert traj[0].shape == (10, 12)

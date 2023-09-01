@@ -38,7 +38,7 @@ jobs:
       - name: Ensure no warnings
         run: |
           python -m sphinx -W docs/source docs/build
-      - name: Run doc-tests
+      - name: Run doc-tests in documentation
         run: |
           cd docs && make doctest
       - name: Test the tutorial notebooks
@@ -84,13 +84,13 @@ jobs:
           context: .
           target: test
           tags: unit_test_img:latest
-      - name: Run unit tests
+      - name: Run unit tests and module doctests
         run: |
           docker run \
             -v $PWD:/workspace \
             --pull=never \
             --rm unit_test_img:latest \
-            pytest --cov=./ --cov-report=xml
+            pytest --cov=./ --cov-report=xml --doctest-modules
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
         with:

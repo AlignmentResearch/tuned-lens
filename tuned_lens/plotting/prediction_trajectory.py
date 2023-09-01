@@ -27,6 +27,8 @@ Tokenizer = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
 ResidualComponent = Literal[
     "resid_pre", "resid_mid", "resid_post", "attn_out", "mlp_out"
 ]
+IndexElement = Union[None, Ellipsis, int, slice]
+Index = Union[tuple[IndexElement, ...], IndexElement]
 
 
 def _select_values_along_seq_axis(values: NDArray, targets: NDArray[np.int64]):
@@ -142,12 +144,17 @@ class PredictionTrajectory:
         )
 
     @property
+    def shape(self) -> tuple[int, ...]:
+        """Returns the shape of the trajectory."""
+        return self.log_probs.shape[:-1]
+
+    @property
     def n_batch_axis(self) -> int:
         """Returns the number of batch dimensions."""
         return len(self.batch_axes)
 
     @property
-    def batch_axes(self) -> Sequence[int]:
+    def batch_axes(self) -> tuple[int]:
         """Returns the batch axes for the trajectory."""
         return tuple(range(len(self.log_probs.shape) - 3))
 
@@ -177,8 +184,8 @@ class PredictionTrajectory:
         return self.log_probs[..., -1, :, :]
 
     @property
-    def probs(self) -> NDArray[np.float32]:
-        """Returns the probabilities of the predictions."""
+    def model_probs(self) -> NDArray[np.float32]:
+        """Returns the probabilities of the predictions (..., seq_len, vocab_size)."""
         return np.exp(self.log_probs)
 
     @classmethod
@@ -418,7 +425,7 @@ class PredictionTrajectory:
             formatter = TokenFormatter()
 
         topk_tokens, topk_probs = self._get_topk_tokens_and_values(
-            k=topk, sort_by=self.log_probs, values=self.probs
+            k=topk, sort_by=self.log_probs, values=self.model_probs
         )
 
         # Create the labels for the stream
@@ -471,7 +478,7 @@ class PredictionTrajectory:
         if formatter is None:
             formatter = TokenFormatter()
 
-        deltas = other.probs - self.probs
+        deltas = other.model_probs - self.model_probs
 
         topk_tokens, topk_deltas = self._get_topk_tokens_and_values(
             k=topk, sort_by=np.abs(deltas), values=deltas
@@ -504,8 +511,12 @@ class PredictionTrajectory:
             ),
         )
 
-    def __getitem__(self, index) -> "PredictionTrajectory":
+    def __getitem__(self, index: Index) -> "PredictionTrajectory":
         """Support for slicing prediction trajectories.
+
+        Prediciton trajectories can effectively be treated as tensor with shape
+        (*batch_axes, n_layers, seq_len) the only exception being that only slicing
+        is supported for the layer and sequence axes.
 
         >>> layers = 12
         >>> num_tokens = 10
@@ -521,16 +532,25 @@ class PredictionTrajectory:
         ...     input_ids=np.ones(batch_shape + (num_tokens,), dtype=np.int64),
         ...     targets=np.ones(batch_shape + (num_tokens,), dtype=np.int64),
         ... )
+        >>> traj.n_batch_axis
+        1
+        >>> slice_batch = traj[0]
+        >>> slice_batch.n_batch_axis
+        0
+        >>> slice_batch.num_layers
+        12
+        >>> slice_batch.num_tokens
+        10
         >>> slice_sequence = traj[:, :, 2:5]
         >>> slice_sequence.num_layers
         12
         >>> slice_sequence.num_tokens
         3
-        >>> slice_layer = traj[:, 2:5, :]
+        >>> slice_layer = traj[..., ::2, :]
         >>> slice_layer.num_tokens
         10
         >>> slice_layer.num_layers
-        3
+        6
 
         Args:
             index: The index to slice the prediction trajectory.
@@ -538,36 +558,68 @@ class PredictionTrajectory:
         Returns:
             A new prediction trajectory with the specified slice.
         """
-        if isinstance(index, (slice, int)):  # Default to indexing the layer dim
-            index = (index, slice(None))
+        # Convert index to tuple
+        if not isinstance(index, tuple):
+            index = (index,)
 
-        if isinstance(index, tuple):
-            if len(index) > self.n_batch_axis + 2:
-                raise IndexError(
-                    "Too many indices for prediction trajectory: {} > {}".format(
-                        len(index), self.n_batch_axis + 2
-                    )
-                )
+        # Convert ellipsis to slices
+        for k in range(len(index)):
+            remainder = max(len(index) - self.n_batch_axis, 0)
+            if isinstance(index[k], Ellipsis):
+                index = index[:k] + (slice(None),) * remainder + index[k + 1 :]
 
-            (*batch_index, layer_index, seq_index) = index
+        if any(isinstance(i, Ellipsis) for i in index):
+            raise IndexError("an index can only have a single ellipsis ('...')")
 
-            if not (isinstance(layer_index, slice) and isinstance(seq_index, slice)):
+        def indmap(array: Optional[NDArray], index: tuple) -> Optional[NDArray]:
+            """Index an array if it is not none."""
+            return None if array is None else array[index]
+
+        def is_slice(index):
+            return isinstance(index, slice)
+
+        if len(index) <= self.n_batch_axis:
+            # Only indexing the batch axis
+            batch_idx = index
+            return PredictionTrajectory(
+                log_probs=self.log_probs[(*batch_idx, ...)],
+                input_ids=self.input_ids[(*batch_idx, ...)],
+                targets=indmap(self.targets, (*batch_idx, ...)),
+                anti_targets=indmap(self.anti_targets, (*batch_idx, ...)),
+                tokenizer=self.tokenizer,
+            )
+        elif len(index) >= self.n_batch_axis + 1:
+            # Just indexing the layer axis
+            *batch_idx, layer_idx = index
+            if not is_slice(layer_idx):
+                raise IndexError("Only slicing is supported for layer axis.")
+            return PredictionTrajectory(
+                log_probs=self.log_probs[(*batch_idx, layer_idx, ...)],
+                input_ids=self.input_ids[(*batch_idx, ...)],
+                targets=indmap(self.targets, (*batch_idx, ...)),
+                anti_targets=indmap(self.anti_targets, (*batch_idx, ...)),
+                tokenizer=self.tokenizer,
+            )
+        elif len(index) >= self.n_batch_axis + 2:
+            # Inexing both layer and sequence axes
+            *batch_idx, layer_idx, seq_idx = index
+            if not (is_slice(layer_idx) and is_slice(seq_idx)):
                 raise IndexError(
                     "Only slicing is supported for layer and sequence axes."
                 )
 
             return PredictionTrajectory(
-                log_probs=self.log_probs[
-                    (*batch_index, layer_index, seq_index, slice(None))
-                ],
-                input_ids=self.input_ids[(*batch_index, seq_index)],
-                targets=None
-                if self.targets is None
-                else self.targets[(*batch_index, seq_index)],
-                anti_targets=None
-                if self.anti_targets is None
-                else self.anti_targets[(*batch_index, seq_index)],
+                log_probs=self.log_probs[(*batch_idx, layer_idx, seq_idx, ...)],
+                input_ids=self.input_ids[(*batch_idx, seq_idx, ...)],
+                targets=indmap(self.targets, (*batch_idx, seq_idx, ...)),
+                anti_targets=indmap(self.anti_targets, (*batch_idx, seq_idx, ...)),
                 tokenizer=self.tokenizer,
+            )
+        else:
+            raise IndexError(
+                "Too many indices for prediction trajectory: {} > {}".format(
+                    len(index), self.n_batch_axis + 2
+                )
             )
 
     def cross_entropy(self, **kwargs) -> TrajectoryStatistic:
@@ -644,7 +696,7 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the entropy of the predictions.
         """
-        stats = -np.sum(self.probs * self.log_probs, axis=-1)
+        stats = -np.sum(self.model_probs * self.log_probs, axis=-1)
 
         if self.n_batch_axis:
             stats = stats.mean(axis=self.batch_axes)
@@ -751,7 +803,7 @@ class PredictionTrajectory:
         Returns:
             A TrajectoryStatistic with the KL divergence between self and other.
         """
-        kl_div = np.sum(self.probs * (self.log_probs - other.log_probs), axis=-1)
+        kl_div = np.sum(self.model_probs * (self.log_probs - other.log_probs), axis=-1)
 
         if self.n_batch_axis:
             kl_div = kl_div.mean(axis=self.batch_axes)
@@ -779,8 +831,10 @@ class PredictionTrajectory:
             A TrajectoryStatistic with the JS divergence between self and other.
         """
         js_div = 0.5 * np.sum(
-            self.probs * (self.log_probs - other.log_probs), axis=-1
-        ) + 0.5 * np.sum(other.probs * (other.log_probs - self.log_probs), axis=-1)
+            self.model_probs * (self.log_probs - other.log_probs), axis=-1
+        ) + 0.5 * np.sum(
+            other.model_probs * (other.log_probs - self.log_probs), axis=-1
+        )
 
         if self.n_batch_axis:
             js_div = js_div.mean(axis=self.batch_axes)
@@ -808,7 +862,7 @@ class PredictionTrajectory:
             A TrajectoryStatistic with the total variational distance between
             self and other.
         """
-        t_var = np.abs(self.probs - other.probs).max(axis=-1)
+        t_var = np.abs(self.model_probs - other.model_probs).max(axis=-1)
 
         if self.n_batch_axis:
             t_var = t_var.mean(axis=self.batch_axes)
