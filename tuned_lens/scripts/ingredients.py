@@ -60,7 +60,7 @@ class Data:
     revision: Optional[str] = None
     """The revision of the dataset to use"""
 
-    max_length: int = 2048
+    max_seq_len: int = 2048
     """The maximum length of the input sequences."""
 
     def load(self, tokenizer: PreTrainedTokenizerBase) -> tuple[Dataset, float]:
@@ -84,7 +84,7 @@ class Data:
             dataset,
             tokenizer,
             text_key=self.text_column,
-            max_length=self.max_length,
+            max_seq_len=self.max_seq_len,
         )
 
         logger.info(f"Using nats per token to bits per byte ratio: {nats_to_bpb}")

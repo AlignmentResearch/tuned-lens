@@ -45,7 +45,7 @@ Once you have a lens file, either by training it yourself or by downloading it, 
 
    python -m tuned_lens eval --data.name test.jsonl \
         --model.name gpt2 \
-        --tokens 4000 --max_length 128 \
+        --tokens 4000 --max_seq_len 128 \
         --lens_name gpt2 \
         --output evaluation/gpt2
 
