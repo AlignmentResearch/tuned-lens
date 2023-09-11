@@ -17,7 +17,7 @@ def test_chunk_and_tokenize(
         max_seq_len=max_seq_len,
     )
 
-    length = min(small_model_tokenizer.model_max_seq_len, max_seq_len)
+    length = min(small_model_tokenizer.model_max_length, max_seq_len)
     for i in range(len(chunked)):
         assert len(chunked[i]["input_ids"]) == length
 
@@ -33,7 +33,7 @@ def test_chunk_and_tokenize_slow(text_dataset: Dataset):
         max_seq_len=max_seq_len,
     )
 
-    length = min(tokenizer.model_max_seq_len, max_seq_len)
+    length = min(tokenizer.model_max_length, max_seq_len)
     for i in range(len(chunked)):
         assert len(chunked[i]["input_ids"]) == length
 

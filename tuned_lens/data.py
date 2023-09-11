@@ -45,13 +45,13 @@ def chunk_and_tokenize(
     """
 
     def _tokenize_fn(x: dict[str, list]):
-        chunk_size = min(tokenizer.model_max_seq_len, max_seq_len)
+        chunk_size = min(tokenizer.model_max_length, max_seq_len)
         sep = tokenizer.eos_token or "<|endoftext|>"
         joined_text = sep.join([""] + x[text_key])
         output = tokenizer(
             # Concatenate all the samples together, separated by the EOS token.
             joined_text,  # start with an eos token
-            max_seq_len=chunk_size,
+            max_length=chunk_size,
             return_attention_mask=False,
             return_overflowing_tokens=True,
             truncation=True,
