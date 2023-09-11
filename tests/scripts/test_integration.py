@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,9 @@ def test_eval_subcommand(
         f" --output {tmp_path}"
     )
     args = args.split()
-    main(args)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        main(args)
 
 
 def test_eval_subcommand_fails_when_not_enough_data_given(
@@ -57,7 +60,9 @@ def test_train_subcommand(
         f" --output {tmp_path}"
     )
     args = args.split()
-    main(args)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        main(args)
     assert Path(tmp_path, "checkpoints/snapshot_2.pth").exists()
     assert Path(tmp_path, "config.json").exists()
     assert Path(tmp_path, "params.pt").exists()

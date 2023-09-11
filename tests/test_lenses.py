@@ -129,3 +129,30 @@ def test_from_model_and_pretrained_propogates_kwargs(
             TunedLens.from_unembed_and_pretrained(
                 lens_resource_id="does not use", unembed=unembed, resource_id="bar"
             )
+
+
+def test_tuned_lens_generate_smoke(random_small_model: trf.PreTrainedModel):
+    tuned_lens = TunedLens.from_model(random_small_model)
+    bos_token_id = random_small_model.config.bos_token_id
+    input_ids = th.tensor([bos_token_id])
+    tokens = tuned_lens.generate(
+        model=random_small_model,
+        layer=2,
+        do_sample=True,
+        input_ids=input_ids,
+        max_new_tokens=10,
+    )
+    assert tokens.shape[-1] <= 11
+    assert tokens.shape[-1] > 1
+    assert input_ids == tokens[:, :1]
+    assert input_ids == th.tensor([bos_token_id]), "Don't mutate input_ids!"
+
+    tokens = tuned_lens.generate(
+        model=random_small_model,
+        layer=2,
+        input_ids=input_ids,
+        do_sample=False,
+        max_new_tokens=10,
+    )
+    assert tokens.shape[-1] <= 11
+    assert tokens.shape[-1] > 1
