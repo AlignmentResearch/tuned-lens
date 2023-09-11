@@ -119,3 +119,7 @@ convention = "google"
 "docs/**.py" = ["D"]
 "tests/**.py" = ["D"]
 "tuned_lens/causal/**.py" = ["D"]
+
+[tool.pytest.ini_options]
+log_cli = true
+log_cli_level = "DEBUG"
