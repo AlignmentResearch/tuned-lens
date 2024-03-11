@@ -1,6 +1,6 @@
 import pytest
 import torch as th
-from transformers import PreTrainedModel, models
+from transformers import PreTrainedModel
 
 from tuned_lens import model_surgery
 
@@ -13,7 +13,7 @@ def test_get_final_layer_norm_raises(opt_random_model: PreTrainedModel):
 
 def test_get_final_layer_norm(random_small_model: PreTrainedModel):
     ln = model_surgery.get_final_norm(random_small_model)
-    assert isinstance(ln, (th.nn.LayerNorm, models.llama.modeling_llama.LlamaRMSNorm))
+    assert isinstance(ln, model_surgery.Norm)
 
 
 def test_get_layers_from_model(random_small_model: PreTrainedModel):

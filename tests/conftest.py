@@ -27,7 +27,8 @@ def text_dataset(text_dataset_path: Path) -> Dataset:
         "EleutherAI/gpt-neo-125M",
         "facebook/opt-125m",
         "mockmodel/llama-tiny",
-        "mockmodel/gemma-tiny" "gpt2",
+        "mockmodel/gemma-tiny",
+        "gpt2",
     ],
 )
 def random_small_model(request: str) -> tr.PreTrainedModel:
