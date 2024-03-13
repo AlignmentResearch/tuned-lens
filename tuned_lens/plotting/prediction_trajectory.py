@@ -225,9 +225,11 @@ class PredictionTrajectory:
             if mask_input:
                 logits[..., input_ids] = -th.finfo(hidden.dtype).max
 
-            traj_log_probs.append(logits.log_softmax(dim=-1).detach().cpu().numpy())
+            traj_log_probs.append(
+                logits.log_softmax(dim=-1).detach().cpu().float().numpy()
+            )
 
-        model_log_probs = model_logits.log_softmax(-1).detach().cpu().numpy()
+        model_log_probs = model_logits.log_softmax(-1).detach().cpu().float().numpy()
 
         traj_log_probs.append(model_log_probs)
 
@@ -275,7 +277,13 @@ class PredictionTrajectory:
 
         # Slice arrays the specified range
         model_log_probs = (
-            outputs.logits[..., :].log_softmax(-1).squeeze().detach().cpu().numpy()
+            outputs.logits[..., :]
+            .log_softmax(-1)
+            .squeeze()
+            .detach()
+            .cpu()
+            .float()
+            .numpy()
         )
         stream = list(outputs.hidden_states)
 
@@ -292,7 +300,7 @@ class PredictionTrajectory:
                 logits[..., input_ids_np] = -th.finfo(h.dtype).max
 
             traj_log_probs.append(
-                logits.log_softmax(dim=-1).squeeze().detach().cpu().numpy()
+                logits.log_softmax(dim=-1).squeeze().detach().cpu().float().numpy()
             )
 
         # Add model predictions
