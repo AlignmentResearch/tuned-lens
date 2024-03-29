@@ -15,9 +15,9 @@ def test_load_lens_artifact_raises_smoke():
 def test_list_available_lens_artifacts_smoke():
     artifacts = available_lens_artifacts("AlignmentResearch/tuned-lens", "space")
     assert len(artifacts) > 0
-    artifacts = available_lens_artifacts(
-        "AlignmentResearch/tuned-lens",
-        "space",
-        "revision_does_not_exist",
-    )
-    assert len(artifacts) == 0
+    with pytest.raises(FileNotFoundError):
+        artifacts = available_lens_artifacts(
+            "AlignmentResearch/tuned-lens",
+            "space",
+            "revision_does_not_exist",
+        )

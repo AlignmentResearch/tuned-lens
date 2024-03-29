@@ -63,6 +63,12 @@ class Data:
     max_seq_len: int = 2048
     """The maximum length of the input sequences."""
 
+    dataset_shuffle: bool = False
+    """Whether to shuffle the dataset prior to tokenization."""
+
+    dataset_shuffle_seed: int = 42
+    """Seed to use for shuffling the dataset"""
+
     def load(self, tokenizer: PreTrainedTokenizerBase) -> tuple[Dataset, float]:
         """Load the dataset, tokenize it and compute nats_to_bpb."""
         logger.info(f"Loading dataset '{' '.join(self.name)}'")
@@ -77,8 +83,14 @@ class Data:
                 raise ValueError(
                     "Only Dataset and DatasetDict instances are supported."
                 )
+
         logger.debug(f"Dataset has {len(dataset)} samples.")
         logger.debug(f"Dataset columns: {dataset.column_names}")
+
+        if self.dataset_shuffle:
+            logger.debug(f"Shuffling dataset with seed: {self.dataset_shuffle_seed}")
+            dataset = dataset.shuffle(self.dataset_shuffle_seed)
+
         logger.debug("Beginning tokenization...")
         processed, nats_to_bpb = chunk_and_tokenize(
             dataset,
@@ -282,6 +294,9 @@ class Distributed:
     per_gpu_batch_size: int = 1
     """The batch size per GPU."""
 
+    dataloader_shuffle: bool = True
+    """Whether to shuffle the batches of tokenized data as they are loaded."""
+
     @property
     def rank(self) -> int:
         """The rank of this process.
@@ -356,7 +371,7 @@ class Distributed:
         else:
             return lens.to(self.device)
 
-    def data_loader(
+    def dataloader(
         self,
         dataset: Dataset,
     ) -> dataloader2.DataLoader2:
@@ -367,7 +382,9 @@ class Distributed:
         else:
             rs = None
 
-        dp = dp.shuffle()
+        if self.dataloader_shuffle:
+            dp = dp.shuffle()
+
         dp = dp.sharding_filter()
         dp = dp.batch(self.per_gpu_batch_size)
         dp = dp.collate()
