@@ -16,13 +16,13 @@ def chunk_and_tokenize(
     format: str = "torch",
     num_proc: int = min(cpu_count() // 2, 8),
     text_key: str = "text",
-    max_length: int = 2048,
+    max_seq_len: int = 2048,
     return_final_batch: bool = False,
     load_from_cache_file: bool = True,
 ) -> tuple[T, float]:
     """Perform GPT-style chunking and tokenization on a dataset.
 
-    The resulting dataset will consist entirely of chunks exactly `max_length` tokens
+    The resulting dataset will consist entirely of chunks exactly `max_seq_len` tokens
     long. Long sequences will be split into multiple chunks, and short sequences will
     be merged with their neighbors, using `eos_token` as a separator. The fist token
     will also always be an `eos_token`.
@@ -33,7 +33,7 @@ def chunk_and_tokenize(
         format: The format to return the dataset in, passed to `Dataset.with_format`.
         num_proc: The number of processes to use for tokenization.
         text_key: The key in the dataset to use as the text to tokenize.
-        max_length: The maximum length of a batch of input ids.
+        max_seq_len: The maximum length of a batch of input ids.
         return_final_batch: Whether to return the final batch, which may be smaller
             than the others.
         load_from_cache_file: Whether to load from the cache file.
@@ -45,7 +45,7 @@ def chunk_and_tokenize(
     """
 
     def _tokenize_fn(x: dict[str, list]):
-        chunk_size = min(tokenizer.model_max_length, max_length)
+        chunk_size = min(tokenizer.model_max_length, max_seq_len)
         sep = tokenizer.eos_token or "<|endoftext|>"
         joined_text = sep.join([""] + x[text_key])
         output = tokenizer(

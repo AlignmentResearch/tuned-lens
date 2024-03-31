@@ -264,7 +264,9 @@ class Train:
 
         state.load(snapshot_location, self.dist.device)
 
-    def calculate_gradient_accumulation_steps(self, tokens_per_sample: int) -> int:
+    def calculate_gradient_accumulation_steps(
+        self, tokens_per_sample: int, total_samples: int
+    ) -> int:
         """Calculate the number of batches of data to process before taking a step."""
         # chunk_and_tokenize ensures the samples are all the same length
         samples_per_step, rem = divmod(self.tokens_per_step, tokens_per_sample)
@@ -272,6 +274,13 @@ class Train:
             raise ValueError(
                 f"Number of tokens per step ({self.tokens_per_step:_}) must be "
                 f"divisible by the number of tokens per sample ({tokens_per_sample})."
+            )
+
+        if total_samples / samples_per_step < self.num_steps:
+            raise ValueError(
+                f"Can only take {total_samples / samples_per_step:.2f} steps on "
+                f"dataset with --tokens_per_step={self.tokens_per_step}."
+                f"Requested {self.num_steps} steps."
             )
 
         global_batch_size = self.dist.per_gpu_batch_size * self.dist.world_size
@@ -353,7 +362,10 @@ class Train:
         )
 
         tokens_per_sample = len(data[0]["input_ids"])
-        grad_acc_steps = self.calculate_gradient_accumulation_steps(tokens_per_sample)
+        grad_acc_steps = self.calculate_gradient_accumulation_steps(
+            tokens_per_sample, len(data)
+        )
+
         self.dist.barrier()  # Wait for all processes to finish setup
         logger.info("All processes have completed setup.")
         return state, model, grad_acc_steps
