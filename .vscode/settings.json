@@ -7,6 +7,7 @@
         "tests"
     ],
     "python.testing.unittestEnabled": false,
+    "debugpy.debugJustMyCode": false,
     "python.testing.pytestEnabled": true,
     "esbonio.sphinx.confDir": ""
 }
