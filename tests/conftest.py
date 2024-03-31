@@ -50,6 +50,8 @@ def random_small_model(request: str) -> tr.PreTrainedModel:
             hidden_size=128,
             num_hidden_layers=4,
             num_attention_heads=4,
+            num_key_value_heads=4,
+            head_dim=32,
         )
     else:
         config = tr.AutoConfig.from_pretrained(small_model_name)
