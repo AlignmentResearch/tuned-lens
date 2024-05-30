@@ -13,7 +13,7 @@ def test_get_final_layer_norm_raises(opt_random_model: PreTrainedModel):
 
 def test_get_final_layer_norm(random_small_model: PreTrainedModel):
     ln = model_surgery.get_final_norm(random_small_model)
-    assert isinstance(ln, model_surgery.Norm)
+    assert any(isinstance(ln, Norm) for Norm in model_surgery.Norm.__args__)
 
 
 def test_get_layers_from_model(random_small_model: PreTrainedModel):
