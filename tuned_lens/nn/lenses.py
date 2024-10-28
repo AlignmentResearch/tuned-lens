@@ -276,7 +276,8 @@ class TunedLens(Lens):
             **{k: v for k, v in kwargs.items() if k not in load_artifact_varnames}
         }
         # Load parameters
-        state = th.load(ckpt_path, **th_load_kwargs)
+        device = unembed.unembedding.weight.device
+        state = th.load(ckpt_path, **th_load_kwargs, map_location=device)
 
         lens.layer_translators.load_state_dict(state)
 
