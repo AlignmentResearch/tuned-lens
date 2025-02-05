@@ -178,7 +178,7 @@ class TrajectoryStatistic:
             y=self._layer_labels,
             z=self.stats if not log_scale else np.log10(self.stats),
             colorbar=dict(
-                title=f"{self.name} ({self.units})",
+                title=f"{self.name} ({self.units})"
             ),
             colorscale=colorscale,
             zmax=max if not log_scale else np.log10(max),
