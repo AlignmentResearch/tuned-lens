@@ -63,7 +63,12 @@ def assign_key_path(model: T, key_path: str, value: Any) -> Generator[T, None, N
 
 
 Model = Union[tr.PreTrainedModel, "tl.HookedTransformer"]
-Norm = Union[th.nn.LayerNorm, models.llama.modeling_llama.LlamaRMSNorm, nn.Module]
+Norm = Union[
+    th.nn.LayerNorm,
+    models.llama.modeling_llama.LlamaRMSNorm,
+    models.gemma.modeling_gemma.GemmaRMSNorm,
+    nn.Module,
+]
 
 
 def get_unembedding_matrix(model: Model) -> nn.Linear:
@@ -116,6 +121,8 @@ def get_final_norm(model: Model) -> Norm:
         final_layer_norm = base_model.norm
     elif isinstance(base_model, models.mistral.modeling_mistral.MistralModel):
         final_layer_norm = base_model.norm
+    elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
+        final_layer_norm = base_model.norm
     else:
         raise NotImplementedError(f"Unknown model type {type(base_model)}")
 
@@ -162,6 +169,8 @@ def get_transformer_layers(model: Model) -> tuple[str, th.nn.ModuleList]:
     elif isinstance(base_model, models.llama.modeling_llama.LlamaModel):
         path_to_layers += ["layers"]
     elif isinstance(base_model, models.mistral.modeling_mistral.MistralModel):
+        path_to_layers += ["layers"]
+    elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
         path_to_layers += ["layers"]
     else:
         raise NotImplementedError(f"Unknown model type {type(base_model)}")
