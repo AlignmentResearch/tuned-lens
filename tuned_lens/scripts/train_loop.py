@@ -14,7 +14,6 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
-from torchdata.dataloader2 import DataLoader2
 from tqdm.auto import trange
 from transformers import PreTrainedModel
 
@@ -36,7 +35,7 @@ class LossChoice(enum.Enum):
 class State:
     """All of the stateful information in the training loop."""
 
-    dataloader: DataLoader2
+    dataloader: th.utils.data.DataLoader
     lens: TunedLens
     opt: Optimizer
     scheduler: LambdaLR
@@ -99,6 +98,9 @@ class Train:
     lens_name_or_path: Optional[str] = field(alias=["-l"], default=None)
     """Name of a pretrained lens to load for fine-tuning."""
 
+    final_norm_path: Optional[str] = None
+    """Path to a final layer norm in the model."""
+
     bias_only: Optional[bool] = field(action="store_true")
     """Train only the bias term."""
 
@@ -133,7 +135,13 @@ class Train:
         """Load or create a TunedLens model."""
         if self.lens_name_or_path is None:
             logger.info("Randomly initializing lens...")
-            lens = TunedLens.from_model(model)
+
+            if self.final_norm_path is not None:
+                final_norm = model.get_submodule(self.final_norm_path)
+            else:
+                final_norm = None
+
+            lens = TunedLens.from_model(model, final_norm=final_norm)
         else:
             logger.info("Loading pretrained lens...")
             lens = TunedLens.from_model_and_pretrained(model, self.lens_name_or_path)
@@ -333,8 +341,7 @@ class Train:
         assert model and tokenizer and data and lens and nats_to_bpb
 
         logger.debug(f"Creating data loader and setting seed to {self.seed} ...")
-        dl = self.dist.dataloader(data)
-        dl.seed(self.seed)
+        dl = self.dist.dataloader(data, self.seed)
         logger.debug("Creating optimizer and scheduler ...")
         params = [p for p in lens.parameters() if p.requires_grad]
         opt = self.opt.create_optim(params)
