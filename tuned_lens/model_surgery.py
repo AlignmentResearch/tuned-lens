@@ -119,6 +119,8 @@ def get_final_norm(model: Model) -> Norm:
         final_layer_norm = base_model.ln_f
     elif isinstance(base_model, models.llama.modeling_llama.LlamaModel):
         final_layer_norm = base_model.norm
+    elif isinstance(base_model, models.mistral.modeling_mistral.MistralModel):
+        final_layer_norm = base_model.norm
     elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
         final_layer_norm = base_model.norm
     else:
@@ -165,6 +167,8 @@ def get_transformer_layers(model: Model) -> tuple[str, th.nn.ModuleList]:
     ):
         path_to_layers += ["h"]
     elif isinstance(base_model, models.llama.modeling_llama.LlamaModel):
+        path_to_layers += ["layers"]
+    elif isinstance(base_model, models.mistral.modeling_mistral.MistralModel):
         path_to_layers += ["layers"]
     elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
         path_to_layers += ["layers"]
