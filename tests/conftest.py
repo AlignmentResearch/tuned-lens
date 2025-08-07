@@ -27,6 +27,7 @@ def text_dataset(text_dataset_path: Path) -> Dataset:
         "EleutherAI/gpt-neo-125M",
         "facebook/opt-125m",
         "mockmodel/llama-tiny",
+        "mockmodel/gemma-tiny",
         "gpt2",
     ],
 )
@@ -42,6 +43,15 @@ def random_small_model(request: str) -> tr.PreTrainedModel:
             hidden_size=128,
             num_hidden_layers=4,
             num_attention_heads=4,
+        )
+    elif small_model_name == "mockmodel/gemma-tiny":
+        config = tr.GemmaConfig(
+            vocab_size=32_000,
+            hidden_size=128,
+            num_hidden_layers=4,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            head_dim=32,
         )
     else:
         config = tr.AutoConfig.from_pretrained(small_model_name)
