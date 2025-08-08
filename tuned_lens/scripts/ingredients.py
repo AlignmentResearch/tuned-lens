@@ -19,7 +19,7 @@ from torch.distributed.fsdp import (
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torchdata import dataloader2, datapipes
+from torch.utils.data.distributed import DistributedSampler
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -47,11 +47,13 @@ logger = logging.getLogger(__name__)
 class Data:
     """Configuration for the dataset."""
 
-    name: list[str] = field(default_factory=lambda: ["the_pile", "all"], nargs="*")
+    name: list[str] = field(
+        default_factory=lambda: ["EleutherAI/SmolLM2-135M-10B"], nargs="*"
+    )
     """Name of dataset to use. Can either be a local .jsonl file or a name
     suitable to be passed to the HuggingFace load_dataset function."""
 
-    split: str = "validation"
+    split: str = "train"
     """Split of the dataset to use."""
 
     text_column: str = "text"
@@ -371,24 +373,22 @@ class Distributed:
         else:
             return lens.to(self.device)
 
-    def dataloader(
-        self,
-        dataset: Dataset,
-    ) -> dataloader2.DataLoader2:
+    def dataloader(self, dataset: Dataset, seed: int) -> th.utils.data.DataLoader:
         """Shard the dataset based on local rank."""
-        dp = datapipes.iter.IterableWrapper(dataset)
-        if self.world_size > 1:
-            rs = dataloader2.DistributedReadingService()
-        else:
-            rs = None
-
-        if self.dataloader_shuffle:
-            dp = dp.shuffle()
-
-        dp = dp.sharding_filter()
-        dp = dp.batch(self.per_gpu_batch_size)
-        dp = dp.collate()
-        return dataloader2.DataLoader2(dp, reading_service=rs)
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=self.world_size,
+            rank=self.rank,
+            seed=seed,
+            shuffle=self.dataloader_shuffle,
+        )
+        dl = th.utils.data.DataLoader(
+            dataset,
+            batch_size=self.per_gpu_batch_size,
+            sampler=sampler,
+            pin_memory=True,
+        )
+        return dl
 
     def init(self):
         """Initialize distributed process group if started with elastic launch."""
@@ -396,7 +396,9 @@ class Distributed:
         local_rank = os.environ.get("LOCAL_RANK")
         if local_rank is not None:
             dist.init_process_group(
-                "nccl", timeout=timedelta(seconds=self.nccl_timeout)
+                "nccl",
+                device_id=th.device("cuda", int(local_rank)),
+                timeout=timedelta(seconds=self.nccl_timeout),
             )
             assert (
                 th.cuda.is_available()
