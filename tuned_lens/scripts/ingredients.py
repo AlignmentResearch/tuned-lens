@@ -39,6 +39,8 @@ from tuned_lens.utils import (
     handle_name_conflicts,
     send_to_device,
 )
+from dotenv import load_dotenv
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
