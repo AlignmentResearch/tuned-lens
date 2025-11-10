@@ -12,6 +12,7 @@ import torch as th
 from transformers import PreTrainedModel
 
 from tuned_lens import load_artifacts
+from tuned_lens.model_surgery import Norm
 from tuned_lens.nn.unembed import Unembed
 
 logger = logging.getLogger(__name__)
@@ -68,13 +69,16 @@ class LogitLens(Lens):
     def from_model(
         cls,
         model: PreTrainedModel,
+        *,
+        final_norm: Optional[Norm] = None,
     ) -> "LogitLens":
         """Create a LogitLens from a pretrained model.
 
         Args:
             model: A pretrained model from the transformers library you wish to inspect.
+            final_norm: An optional final layer normalization to apply.
         """
-        unembed = Unembed(model)
+        unembed = Unembed(model, final_norm=final_norm)
         return cls(unembed)
 
     def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
@@ -182,6 +186,8 @@ class TunedLens(Lens):
         model: PreTrainedModel,
         model_revision: Optional[str] = None,
         bias: bool = True,
+        *,
+        final_norm: Optional[Norm] = None,
     ) -> "TunedLens":
         """Create a lens from a pretrained model.
 
@@ -189,11 +195,12 @@ class TunedLens(Lens):
             model: The model to create the lens from.
             model_revision: The git revision of the model to used.
             bias: Whether to use a bias in the linear translators.
+            final_norm: An optional final layer normalization to apply.
 
         Returns:
             A TunedLens instance.
         """
-        unembed = Unembed(model)
+        unembed = Unembed(model, final_norm=final_norm)
         config = TunedLensConfig(
             base_model_name_or_path=model.config.name_or_path,
             base_model_revision=model_revision,

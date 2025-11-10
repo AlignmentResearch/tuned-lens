@@ -14,7 +14,6 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
-from torchdata.dataloader2 import DataLoader2
 from tqdm.auto import trange
 from transformers import PreTrainedModel
 
@@ -36,10 +35,10 @@ class LossChoice(enum.Enum):
 class State:
     """All of the stateful information in the training loop."""
 
-    dataloader: DataLoader2
+    dataloader: th.utils.data.DataLoader
     lens: TunedLens
-    opt: Optimizer
-    scheduler: LambdaLR
+    opts: list[Optimizer]
+    schedulers: list[LambdaLR]
     wandb_id: Optional[str]
     nats_to_bpb: float
     step: int = 0
@@ -51,22 +50,23 @@ class State:
         self.step = snapshot["step"]
         self.wandb_id = snapshot["wandb_id"]
         self.lens.load_state_dict(snapshot["lens"])
-        self.opt.load_state_dict(snapshot["optim"])
-        self.scheduler.load_state_dict(snapshot["scheduler"])
-        self.dataloader.load_state_dict(snapshot["dataloader"])
+        for opt, state in zip(self.opts, snapshot["optim"]):
+            opt.load_state_dict(state)
+        for scheduler, state in zip(self.schedulers, snapshot["scheduler"]):
+            scheduler.load_state_dict(state)
 
     def save(self, snapshot_file: Path) -> None:
         """Save a snapshot file."""
         logger.info(f"Saving snapshot to {snapshot_file}...")
-        if isinstance(self.opt, ZeroRedundancyOptimizer):
-            self.opt.consolidate_state_dict()
+        for opt in self.opts:
+            if isinstance(opt, ZeroRedundancyOptimizer):
+                opt.consolidate_state_dict()
 
         th.save(
             {
                 "lens": self.lens.state_dict(),
-                "optim": self.opt.state_dict(),
-                "scheduler": self.scheduler.state_dict(),
-                "dataloader": self.dataloader.state_dict(),
+                "optim": [opt.state_dict() for opt in self.opts],
+                "scheduler": [scheduler.state_dict() for scheduler in self.schedulers],
                 "step": self.step,
                 "wandb_id": self.wandb_id,
             },
@@ -98,6 +98,9 @@ class Train:
 
     lens_name_or_path: Optional[str] = field(alias=["-l"], default=None)
     """Name of a pretrained lens to load for fine-tuning."""
+
+    final_norm_path: Optional[str] = None
+    """Path to a final layer norm in the model."""
 
     bias_only: Optional[bool] = field(action="store_true")
     """Train only the bias term."""
@@ -133,24 +136,23 @@ class Train:
         """Load or create a TunedLens model."""
         if self.lens_name_or_path is None:
             logger.info("Randomly initializing lens...")
-            lens = TunedLens.from_model(model)
+
+            if self.final_norm_path is not None:
+                final_norm = model.get_submodule(self.final_norm_path)
+            else:
+                final_norm = None
+
+            lens = TunedLens.from_model(model, final_norm=final_norm)
         else:
             logger.info("Loading pretrained lens...")
             lens = TunedLens.from_model_and_pretrained(model, self.lens_name_or_path)
 
-        dtypes = {p.dtype for p in lens.parameters()}
-        assert (
-            len(dtypes) == 1
-        ), f"Expected all parameters to have the same dtype, got {dtypes}"
-
-        lens_dtype = next(iter(dtypes))
+        lens.float()
         lens_size = sum(p.numel() * p.element_size() for p in lens.parameters())
 
         # Include the optimizer state in the memory usage
         num_bytes = lens_size * (self.opt.per_parameter_optim_state_size() + 1)
-        logger.info(
-            f"Tuned lens memory usage: {num_bytes / 2 ** 20:.2f} MB in {lens_dtype}"
-        )
+        logger.info(f"Tuned lens memory usage: {num_bytes / 2 ** 20:.2f} MB")
 
         if self.bias_only:
             logger.info("Freezing the matrix weights to train only the bias terms.")
@@ -186,7 +188,6 @@ class Train:
 
     def _log(
         self,
-        opt: th.optim.Optimizer,
         step: int,
         losses: dict[str, list[float]],
         tuned_lens: TunedLens,
@@ -206,24 +207,6 @@ class Train:
         # Log statistics about optimizer & probes
         for i, probe in enumerate(tuned_lens):
             name = "input" if i == 0 else f"{i - 1}.ffn"
-            states = [opt.state[p] for p in probe.parameters()]
-
-            # Approximate the true grad norm using the optimizer's moving
-            # avg
-            corr = 1 - self.opt.momentum**step
-            if self.opt.optimizer == "sgd" and not self.opt.zero:
-                log_dict["grad_norm/" + name] = th.cat(
-                    [
-                        # Undo PyTorch's scaling of the gradient by
-                        # 1 / (1 - β)
-                        (1 - self.opt.momentum) * s["momentum_buffer"].flatten() / corr
-                        for s in states
-                    ]
-                ).norm()
-            elif self.opt.optimizer == "adam" and not self.opt.zero:
-                log_dict["grad_norm/" + name] = th.cat(
-                    [s["exp_avg"].flatten() / corr for s in states]
-                ).norm()
 
             if isinstance(probe, th.nn.Linear):
                 log_dict["bias_norm/" + name] = probe.bias.data.norm()
@@ -333,12 +316,13 @@ class Train:
         assert model and tokenizer and data and lens and nats_to_bpb
 
         logger.debug(f"Creating data loader and setting seed to {self.seed} ...")
-        dl = self.dist.dataloader(data)
-        dl.seed(self.seed)
+        dl = self.dist.dataloader(data, self.seed)
         logger.debug("Creating optimizer and scheduler ...")
         params = [p for p in lens.parameters() if p.requires_grad]
-        opt = self.opt.create_optim(params)
-        scheduler = self.opt.create_scheduler(opt, self.num_steps)
+
+        lens.to(self.dist.device)
+        opts = self.opt.create_optim(params, fsdp=self.dist.fsdp)
+        schedulers = [self.opt.create_scheduler(opt, self.num_steps) for opt in opts]
 
         ddp_lens = self.dist.distribute_lens(lens)
 
@@ -346,8 +330,8 @@ class Train:
             step=0,
             wandb_id=self._get_wandb_id(),
             lens=ddp_lens,  # type: ignore
-            opt=opt,
-            scheduler=scheduler,
+            opts=opts,
+            schedulers=schedulers,
             dataloader=dl,
             nats_to_bpb=nats_to_bpb,
         )
@@ -451,13 +435,15 @@ class Train:
             step, rem = divmod(batch_idx, grad_acc_steps)
             if rem == grad_acc_steps - 1:
                 th.nn.utils.clip_grad_norm_(state.lens.parameters(), 1.0)
-                state.opt.step()
-                state.opt.zero_grad(set_to_none=False)
-                state.scheduler.step()
+                for opt in state.opts:
+                    opt.step()
+                    opt.zero_grad(set_to_none=False)
+                for scheduler in state.schedulers:
+                    scheduler.step()
 
                 # Unwrap the lens from DDP if needed
                 lens = getattr(state.lens, "module", state.lens)
-                self._log(state.opt, step, losses, lens, state.nats_to_bpb)
+                self._log(step, losses, lens, state.nats_to_bpb)
                 losses.clear()
                 state.step = step + 1
                 if (

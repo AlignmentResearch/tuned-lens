@@ -223,8 +223,7 @@ class Eval:
         # Note since we are not training we can just move the lens to the device.
         # No need to use DDP
         lenses = {name: lens.to(self.dist.device) for name, lens in lenses.items()}
-        dl = self.dist.dataloader(data)
-        dl.seed(self.seed)
+        dl = self.dist.dataloader(data, self.seed)
 
         for lens in lenses.values():
             lens.eval()

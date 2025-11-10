@@ -38,14 +38,17 @@ class Unembed(th.nn.Module):
     def __init__(
         self,
         model: model_surgery.Model,
+        *,
+        final_norm: Optional[model_surgery.Norm] = None,
     ):
         """Initialize unmebed.
 
         Args:
             model: A HuggingFace model from which to extract the unembedding matrix.
+            final_norm: An optional final layer normalization to apply before the
         """
         super().__init__()
-        final_norm = model_surgery.get_final_norm(model)
+        final_norm = final_norm or model_surgery.get_final_norm(model)
         unembedding_matrix = model_surgery.get_unembedding_matrix(model)
 
         self.final_norm = copy.deepcopy(final_norm)

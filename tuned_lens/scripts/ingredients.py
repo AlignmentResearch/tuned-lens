@@ -19,7 +19,7 @@ from torch.distributed.fsdp import (
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torchdata import dataloader2, datapipes
+from torch.utils.data.distributed import DistributedSampler
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -33,6 +33,7 @@ from tuned_lens.data import (
     chunk_and_tokenize,
 )
 from tuned_lens.model_surgery import get_transformer_layers
+from tuned_lens.muon import Muon
 from tuned_lens.nn.lenses import Lens
 from tuned_lens.utils import (
     TreeType,
@@ -47,11 +48,13 @@ logger = logging.getLogger(__name__)
 class Data:
     """Configuration for the dataset."""
 
-    name: list[str] = field(default_factory=lambda: ["the_pile", "all"], nargs="*")
+    name: list[str] = field(
+        default_factory=lambda: ["EleutherAI/SmolLM2-135M-10B"], nargs="*"
+    )
     """Name of dataset to use. Can either be a local .jsonl file or a name
     suitable to be passed to the HuggingFace load_dataset function."""
 
-    split: str = "validation"
+    split: str = "train"
     """Split of the dataset to use."""
 
     text_column: str = "text"
@@ -195,17 +198,18 @@ class OptimizerOption(enum.Enum):
 
     ADAM = "adam"
     SGD = "sgd"
+    MUON = "muon"
 
 
 @dataclass
 class Optimizer:
     """Configuration for the optimizer."""
 
-    weight_decay: float = 1e-3
+    weight_decay: float = 0.01
     """Weight decay coefficient."""
 
     lr_scale: float = 1.0
-    """The default LR (1e-3 for Adam, 1.0 for SGD) is scaled by this factor."""
+    """The default LR (0.01 for Adam, 1.0 for SGD) is scaled by this factor."""
 
     momentum: float = 0.9
     """Momentum coefficient for SGD, or beta1 for Adam."""
@@ -235,10 +239,11 @@ class Optimizer:
         scheduler = get_linear_schedule_with_warmup(
             opt, self.warmup_steps, num_steps - self.warmup_steps
         )
-
         return scheduler
 
-    def create_optim(self, params: list[th.nn.Parameter]) -> th.optim.Optimizer:
+    def create_optim(
+        self, params: list[th.nn.Parameter], fsdp: bool = False
+    ) -> list[th.optim.Optimizer]:
         """Create the optimizer."""
         # Don't train things that don't need gradients
         β = self.momentum
@@ -262,7 +267,27 @@ class Optimizer:
                 lr=self.lr_scale * 1e-3,
                 weight_decay=self.weight_decay,
             )
-            opt_class = th.optim.Adam
+            opt_class = th.optim.AdamW
+        elif self.optimizer == OptimizerOption.MUON:
+            # The default Muon LR is 1e-3, but we find we can go 10x higher
+            lr = self.lr_scale * 0.01
+
+            # Muon only handles 2D params, AdamW handles the rest
+            params_1d = [p for p in params if p.ndim != 2 and p.requires_grad]
+            params_2d = [p for p in params if p.ndim == 2 and p.requires_grad]
+            opts = [
+                Muon(
+                    params_2d,
+                    ddp=not fsdp,
+                    lr=lr,
+                    momentum=β,
+                    weight_decay=self.weight_decay,
+                ),
+                th.optim.AdamW(
+                    params_1d, lr=lr, weight_decay=self.weight_decay, betas=(β, 0.999)
+                ),
+            ]
+            return opts
         else:
             raise ValueError(f"Unknown optimizer '{self.optimizer}'")
 
@@ -271,7 +296,7 @@ class Optimizer:
         else:
             opt = opt_class(params, **config)  # type: ignore[call-arg]
 
-        return opt
+        return [opt]
 
     def per_parameter_optim_state_size(self) -> int:
         """The number of elements in the optimizer state per parameter."""
@@ -365,30 +390,27 @@ class Distributed:
         """Distribute the lens using DistributedDataParallel and send lens to device."""
         logger.debug(f"Sending Lens to device {self.device}")
         if self.world_size > 1:
-            lens.to(self.device)
             logger.debug("Distributing the lens across the GPUS using DDP ...")
             return DDP(lens, device_ids=[self.local_rank], find_unused_parameters=True)
-        else:
-            return lens.to(self.device)
 
-    def dataloader(
-        self,
-        dataset: Dataset,
-    ) -> dataloader2.DataLoader2:
+        return lens
+
+    def dataloader(self, dataset: Dataset, seed: int) -> th.utils.data.DataLoader:
         """Shard the dataset based on local rank."""
-        dp = datapipes.iter.IterableWrapper(dataset)
-        if self.world_size > 1:
-            rs = dataloader2.DistributedReadingService()
-        else:
-            rs = None
-
-        if self.dataloader_shuffle:
-            dp = dp.shuffle()
-
-        dp = dp.sharding_filter()
-        dp = dp.batch(self.per_gpu_batch_size)
-        dp = dp.collate()
-        return dataloader2.DataLoader2(dp, reading_service=rs)
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=self.world_size,
+            rank=self.rank,
+            seed=seed,
+            shuffle=self.dataloader_shuffle,
+        )
+        dl = th.utils.data.DataLoader(
+            dataset,
+            batch_size=self.per_gpu_batch_size,
+            sampler=sampler,
+            pin_memory=True,
+        )
+        return dl
 
     def init(self):
         """Initialize distributed process group if started with elastic launch."""
@@ -396,7 +418,9 @@ class Distributed:
         local_rank = os.environ.get("LOCAL_RANK")
         if local_rank is not None:
             dist.init_process_group(
-                "nccl", timeout=timedelta(seconds=self.nccl_timeout)
+                "nccl",
+                device_id=th.device("cuda", int(local_rank)),
+                timeout=timedelta(seconds=self.nccl_timeout),
             )
             assert (
                 th.cuda.is_available()
