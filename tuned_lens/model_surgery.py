@@ -1,7 +1,7 @@
 """Tools for finding and modifying components in a transformer model."""
 
 from contextlib import contextmanager
-from typing import Any, Generator, TypeVar, Union
+from typing import Any, Generator, Optional, TypeVar, Union
 
 try:
     import transformer_lens as tl
@@ -70,6 +70,93 @@ Norm = Union[
     nn.Module,
 ]
 
+# Ordered list of (attribute_name, model_classes) for final norm detection.
+# Attribute-based lookup is tried first; isinstance is the fallback.
+_NORM_PATHS = [
+    ("norm", (
+        models.llama.modeling_llama.LlamaModel,
+        models.mistral.modeling_mistral.MistralModel,
+        models.gemma.modeling_gemma.GemmaModel,
+    )),
+    ("ln_f", (
+        models.bloom.modeling_bloom.BloomModel,
+        models.gpt2.modeling_gpt2.GPT2Model,
+        models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+        models.gptj.modeling_gptj.GPTJModel,
+    )),
+    ("final_layer_norm", (
+        models.gpt_neox.modeling_gpt_neox.GPTNeoXModel,
+    )),
+]
+
+# Ordered list of (attribute_name, model_classes) for layer detection.
+_LAYER_PATHS = [
+    ("layers", (
+        models.llama.modeling_llama.LlamaModel,
+        models.mistral.modeling_mistral.MistralModel,
+        models.gemma.modeling_gemma.GemmaModel,
+        models.gpt_neox.modeling_gpt_neox.GPTNeoXModel,
+    )),
+    ("h", (
+        models.bloom.modeling_bloom.BloomModel,
+        models.gpt2.modeling_gpt2.GPT2Model,
+        models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+        models.gptj.modeling_gptj.GPTJModel,
+    )),
+]
+
+
+def _get_base_model(model: Model) -> th.nn.Module:
+    """Get the base model, raising a helpful error if not found.
+
+    Args:
+        model: A pretrained model or HookedTransformer.
+
+    Returns:
+        The base model module.
+
+    Raises:
+        ValueError: If the model has no ``base_model`` attribute.
+    """
+    if not hasattr(model, "base_model"):
+        available = [a for a in dir(model) if not a.startswith("_")]
+        raise ValueError(
+            f"Model {type(model).__name__} does not have a `base_model` attribute. "
+            f"Available attributes: {available[:15]}. "
+            f"If this is a custom model, please open an issue at: "
+            f"https://github.com/AlignmentResearch/tuned-lens/issues"
+        )
+    return model.base_model
+
+
+def _try_attribute_norm(base_model: th.nn.Module) -> Optional[nn.Module]:
+    """Try to find the final norm via attribute-based probing.
+
+    Checks common attribute names on the base model and its ``decoder``
+    sub-module (for OPT-style architectures). Returns the norm module if
+    found and it is an instance of ``nn.Module``, otherwise ``None``.
+
+    Args:
+        base_model: The unwrapped base model to probe.
+
+    Returns:
+        The final norm module, or ``None`` if not found.
+    """
+    # Direct attributes on base_model (covers Llama, Mistral, Gemma, GPT-2, etc.)
+    for attr in ("norm", "ln_f", "final_layer_norm"):
+        norm = getattr(base_model, attr, None)
+        if norm is not None and isinstance(norm, nn.Module):
+            return norm
+
+    # OPT-style: base_model.decoder.final_layer_norm
+    decoder = getattr(base_model, "decoder", None)
+    if decoder is not None:
+        norm = getattr(decoder, "final_layer_norm", None)
+        if norm is not None and isinstance(norm, nn.Module):
+            return norm
+
+    return None
+
 
 def get_unembedding_matrix(model: Model) -> nn.Linear:
     """The final linear tranformation from the model hidden state to the output."""
@@ -93,38 +180,60 @@ def get_unembedding_matrix(model: Model) -> nn.Linear:
 def get_final_norm(model: Model) -> Norm:
     """Get the final norm from a model.
 
-    This isn't standardized across models, so this will need to be updated as
-    we add new models.
+    Uses attribute-based probing to detect the final normalization layer,
+    which makes this function forward-compatible with new architectures that
+    follow standard naming conventions. Falls back to ``isinstance`` checks
+    for known architectures.
+
+    Args:
+        model: A pretrained model or HookedTransformer.
+
+    Returns:
+        The final normalization module.
+
+    Raises:
+        ValueError: If the model has no ``base_model`` or the norm is ``None``.
+        NotImplementedError: If the architecture is not recognized.
     """
     if _transformer_lens_available and isinstance(model, tl.HookedTransformer):
         return model.ln_final
 
-    if not hasattr(model, "base_model"):
-        raise ValueError("Model does not have a `base_model` attribute.")
+    base_model = _get_base_model(model)
 
-    base_model = model.base_model
-    if isinstance(base_model, models.opt.modeling_opt.OPTModel):
-        final_layer_norm = base_model.decoder.final_layer_norm
-    elif isinstance(base_model, models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
-        final_layer_norm = base_model.final_layer_norm
-    elif isinstance(
-        base_model,
-        (
-            models.bloom.modeling_bloom.BloomModel,
-            models.gpt2.modeling_gpt2.GPT2Model,
-            models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
-            models.gptj.modeling_gptj.GPTJModel,
-        ),
-    ):
-        final_layer_norm = base_model.ln_f
-    elif isinstance(base_model, models.llama.modeling_llama.LlamaModel):
-        final_layer_norm = base_model.norm
-    elif isinstance(base_model, models.mistral.modeling_mistral.MistralModel):
-        final_layer_norm = base_model.norm
-    elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
-        final_layer_norm = base_model.norm
-    else:
-        raise NotImplementedError(f"Unknown model type {type(base_model)}")
+    # Try attribute-based detection first (handles new architectures automatically)
+    final_layer_norm = _try_attribute_norm(base_model)
+
+    # Fall back to isinstance checks for known architectures
+    if final_layer_norm is None:
+        if isinstance(base_model, models.opt.modeling_opt.OPTModel):
+            final_layer_norm = base_model.decoder.final_layer_norm
+        elif isinstance(base_model, models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
+            final_layer_norm = base_model.final_layer_norm
+        elif isinstance(
+            base_model,
+            (
+                models.bloom.modeling_bloom.BloomModel,
+                models.gpt2.modeling_gpt2.GPT2Model,
+                models.gpt_neo.modeling_gpt_neo.GPTNeoModel,
+                models.gptj.modeling_gptj.GPTJModel,
+            ),
+        ):
+            final_layer_norm = base_model.ln_f
+        elif isinstance(base_model, models.llama.modeling_llama.LlamaModel):
+            final_layer_norm = base_model.norm
+        elif isinstance(base_model, models.mistral.modeling_mistral.MistralModel):
+            final_layer_norm = base_model.norm
+        elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
+            final_layer_norm = base_model.norm
+        else:
+            available = [a for a in dir(base_model) if not a.startswith("_")]
+            raise NotImplementedError(
+                f"Unsupported model architecture: {type(base_model).__name__}. "
+                f"Could not auto-detect a final layer norm via attribute probing. "
+                f"Available attributes: {available[:15]}. "
+                f"Please open an issue at: "
+                f"https://github.com/AlignmentResearch/tuned-lens/issues"
+            )
 
     if final_layer_norm is None:
         raise ValueError("Model does not have a final layer norm.")
@@ -134,8 +243,43 @@ def get_final_norm(model: Model) -> Norm:
     return final_layer_norm
 
 
+def _try_attribute_layers(
+    base_model: th.nn.Module,
+) -> Optional[tuple[list[str], th.nn.ModuleList]]:
+    """Try to find transformer layers via attribute-based probing.
+
+    Checks common attribute names on the base model and its ``decoder``
+    sub-module (for OPT-style architectures). Returns the path components
+    and the ``ModuleList`` if found.
+
+    Args:
+        base_model: The unwrapped base model to probe.
+
+    Returns:
+        A tuple of ``(path_components, module_list)`` or ``None``.
+    """
+    # Direct attributes on base_model (covers Llama, Mistral, Gemma, GPT-2, etc.)
+    for attr in ("layers", "h"):
+        layers = getattr(base_model, attr, None)
+        if isinstance(layers, th.nn.ModuleList):
+            return [attr], layers
+
+    # OPT-style: base_model.decoder.layers
+    decoder = getattr(base_model, "decoder", None)
+    if decoder is not None:
+        layers = getattr(decoder, "layers", None)
+        if isinstance(layers, th.nn.ModuleList):
+            return ["decoder", "layers"], layers
+
+    return None
+
+
 def get_transformer_layers(model: Model) -> tuple[str, th.nn.ModuleList]:
     """Get the decoder layers from a model.
+
+    Uses attribute-based probing to detect transformer layers, which makes
+    this function forward-compatible with new architectures. Falls back to
+    ``isinstance`` checks for known architectures.
 
     Args:
         model: The model to search.
@@ -144,14 +288,21 @@ def get_transformer_layers(model: Model) -> tuple[str, th.nn.ModuleList]:
         A tuple containing the key path to the layer list and the list itself.
 
     Raises:
-        ValueError: If no such list exists.
+        ValueError: If the model has no ``base_model`` attribute.
+        NotImplementedError: If the architecture is not recognized.
     """
     # TODO implement this so that we can do hooked transformer training.
-    if not hasattr(model, "base_model"):
-        raise ValueError("Model does not have a `base_model` attribute.")
+    base_model = _get_base_model(model)
 
+    # Try attribute-based detection first
+    result = _try_attribute_layers(base_model)
+    if result is not None:
+        path_components, layers = result
+        path = ".".join(["base_model"] + path_components)
+        return path, layers
+
+    # Fall back to isinstance checks for known architectures
     path_to_layers = ["base_model"]
-    base_model = model.base_model
     if isinstance(base_model, models.opt.modeling_opt.OPTModel):
         path_to_layers += ["decoder", "layers"]
     elif isinstance(base_model, models.gpt_neox.modeling_gpt_neox.GPTNeoXModel):
@@ -173,7 +324,14 @@ def get_transformer_layers(model: Model) -> tuple[str, th.nn.ModuleList]:
     elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
         path_to_layers += ["layers"]
     else:
-        raise NotImplementedError(f"Unknown model type {type(base_model)}")
+        available = [a for a in dir(base_model) if not a.startswith("_")]
+        raise NotImplementedError(
+            f"Unsupported model architecture: {type(base_model).__name__}. "
+            f"Could not auto-detect transformer layers via attribute probing. "
+            f"Available attributes: {available[:15]}. "
+            f"Please open an issue at: "
+            f"https://github.com/AlignmentResearch/tuned-lens/issues"
+        )
 
     path_to_layers = ".".join(path_to_layers)
     return path_to_layers, get_key_path(model, path_to_layers)
