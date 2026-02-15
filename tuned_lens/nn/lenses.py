@@ -6,7 +6,7 @@ import logging
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Generator, Optional, Union
+from typing import Dict, Generator, Optional, Sequence, Union
 
 import torch as th
 from transformers import PreTrainedModel
@@ -46,6 +46,25 @@ class Lens(abc.ABC, th.nn.Module):
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
         """Decode hidden states into logits."""
         ...
+
+    @th.inference_mode()
+    def forward_all(
+        self, hidden_states: Sequence[th.Tensor]
+    ) -> list[th.Tensor]:
+        """Decode hidden states from all layers into logits.
+
+        Convenience method that applies :meth:`forward` to each layer's
+        hidden states in a single call under ``torch.inference_mode``.
+
+        Args:
+            hidden_states: Sequence of hidden state tensors, one per layer.
+                Each tensor should have shape ``(batch, seq_len, d_model)``.
+
+        Returns:
+            List of logit tensors, one per layer, each of shape
+            ``(batch, seq_len, vocab_size)``.
+        """
+        return [self.forward(h, idx=i) for i, h in enumerate(hidden_states)]
 
 
 class LogitLens(Lens):
@@ -169,7 +188,28 @@ class TunedLens(Lens):
         )
 
     def __getitem__(self, item: int) -> th.nn.Module:
-        """Get the probe module at the given index."""
+        """Get the probe module at the given index.
+
+        Supports Python-style negative indexing (e.g., ``-1`` for the last
+        layer translator).
+
+        Args:
+            item: Layer index.  Negative values count from the end.
+
+        Returns:
+            The translator module for the requested layer.
+
+        Raises:
+            IndexError: If the index is out of range.
+        """
+        num_layers = len(self.layer_translators)
+        if item < 0:
+            item = num_layers + item
+        if item < 0 or item >= num_layers:
+            raise IndexError(
+                f"Layer index {item} out of range for lens with "
+                f"{num_layers} translators."
+            )
         return self.layer_translators[item]
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
@@ -303,15 +343,57 @@ class TunedLens(Lens):
         with open(path / config, "w") as f:
             json.dump(self.config.to_dict(), f)
 
+    def _resolve_idx(self, idx: int) -> int:
+        """Normalize a possibly-negative layer index.
+
+        Args:
+            idx: Layer index.  Negative values count from the end.
+
+        Returns:
+            A non-negative layer index.
+
+        Raises:
+            IndexError: If the resolved index is out of range.
+        """
+        num_layers = len(self.layer_translators)
+        resolved = idx if idx >= 0 else num_layers + idx
+        if resolved < 0 or resolved >= num_layers:
+            raise IndexError(
+                f"Layer index {idx} out of range for lens with "
+                f"{num_layers} translators."
+            )
+        return resolved
+
     def transform_hidden(self, h: th.Tensor, idx: int) -> th.Tensor:
-        """Transform hidden state from layer `idx`."""
+        """Transform hidden state from layer ``idx``.
+
+        Supports negative indexing (e.g., ``-1`` for the last layer).
+
+        Args:
+            h: Hidden state tensor of shape ``(batch, seq_len, d_model)``.
+            idx: Layer index.  Negative values count from the end.
+
+        Returns:
+            Transformed hidden state, same shape as input.
+        """
         # Note that we add the translator output residually, in contrast to the formula
         # in the paper. By parametrizing it this way we ensure that weight decay
         # regularizes the transform toward the identity, not the zero transformation.
+        idx = self._resolve_idx(idx)
         return h + self[idx](h)
 
     def forward(self, h: th.Tensor, idx: int) -> th.Tensor:
-        """Transform and then decode the hidden states into logits."""
+        """Transform and then decode the hidden states into logits.
+
+        Supports negative indexing (e.g., ``-1`` for the last layer).
+
+        Args:
+            h: Hidden state tensor of shape ``(batch, seq_len, d_model)``.
+            idx: Layer index.  Negative values count from the end.
+
+        Returns:
+            Logit tensor of shape ``(batch, seq_len, vocab_size)``.
+        """
         h = self.transform_hidden(h, idx)
         return self.unembed.forward(h)
 
