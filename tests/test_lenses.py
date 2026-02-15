@@ -156,3 +156,74 @@ def test_tuned_lens_generate_smoke(random_small_model: trf.PreTrainedModel):
     )
     assert tokens.shape[-1] <= 11
     assert tokens.shape[-1] > 1
+
+
+# --- Tests for negative indexing ---
+
+
+def test_tuned_lens_negative_index(random_tuned_lens: TunedLens):
+    """Negative index -1 should return the last translator."""
+    last = random_tuned_lens[-1]
+    explicit_last = random_tuned_lens[len(random_tuned_lens) - 1]
+    assert last is explicit_last
+
+
+def test_tuned_lens_negative_index_minus_n(random_tuned_lens: TunedLens):
+    """Negative index -N should return the first translator."""
+    n = len(random_tuned_lens)
+    first = random_tuned_lens[-n]
+    explicit_first = random_tuned_lens[0]
+    assert first is explicit_first
+
+
+def test_tuned_lens_index_out_of_range(random_tuned_lens: TunedLens):
+    """Out-of-range indices should raise IndexError."""
+    n = len(random_tuned_lens)
+    with pytest.raises(IndexError):
+        random_tuned_lens[n]
+    with pytest.raises(IndexError):
+        random_tuned_lens[-(n + 1)]
+
+
+def test_tuned_lens_forward_negative_idx(random_tuned_lens: TunedLens):
+    """forward() should accept negative layer indices."""
+    randn = th.randn(1, 10, 128)
+    logits_neg = random_tuned_lens.forward(randn, -1)
+    logits_pos = random_tuned_lens.forward(randn, len(random_tuned_lens) - 1)
+    assert th.allclose(logits_neg, logits_pos)
+
+
+def test_tuned_lens_transform_hidden_negative_idx(random_tuned_lens: TunedLens):
+    """transform_hidden() should accept negative layer indices."""
+    randn = th.randn(1, 10, 128)
+    h_neg = random_tuned_lens.transform_hidden(randn, -1)
+    h_pos = random_tuned_lens.transform_hidden(randn, len(random_tuned_lens) - 1)
+    assert th.allclose(h_neg, h_pos)
+
+
+# --- Tests for forward_all ---
+
+
+def test_logit_lens_forward_all(logit_lens):
+    """forward_all() should return one logit tensor per layer."""
+    hidden_states = [th.randn(1, 10, 128) for _ in range(3)]
+    results = logit_lens.forward_all(hidden_states)
+    assert len(results) == 3
+    for r in results:
+        assert r.shape == (1, 10, 100)
+
+
+def test_tuned_lens_forward_all(random_tuned_lens: TunedLens):
+    """forward_all() should return one logit tensor per layer."""
+    hidden_states = [th.randn(1, 10, 128) for _ in range(3)]
+    results = random_tuned_lens.forward_all(hidden_states)
+    assert len(results) == 3
+
+
+def test_forward_all_matches_sequential(random_tuned_lens: TunedLens):
+    """forward_all() results should match sequential forward() calls."""
+    hidden_states = [th.randn(1, 10, 128) for _ in range(3)]
+    batch_results = random_tuned_lens.forward_all(hidden_states)
+    for i, h in enumerate(hidden_states):
+        single = random_tuned_lens.forward(h, i)
+        assert th.allclose(batch_results[i], single)
