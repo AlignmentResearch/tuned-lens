@@ -202,15 +202,8 @@ class TunedLens(Lens):
         Raises:
             IndexError: If the index is out of range.
         """
-        num_layers = len(self.layer_translators)
-        if item < 0:
-            item = num_layers + item
-        if item < 0 or item >= num_layers:
-            raise IndexError(
-                f"Layer index {item} out of range for lens with "
-                f"{num_layers} translators."
-            )
-        return self.layer_translators[item]
+        resolved_idx = self._resolve_idx(item)
+        return self.layer_translators[resolved_idx]
 
     def __iter__(self) -> Generator[th.nn.Module, None, None]:
         """Get iterator over the translators within the lens."""
