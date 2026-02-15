@@ -163,7 +163,13 @@ class Train:
         if not self.dist.primary or not self.wandb:
             return None
 
-        from wandb.sdk.lib import runid
+        try:
+            from wandb.sdk.lib import runid
+        except ImportError:
+            raise ImportError(
+                "wandb is required for experiment tracking but is not installed. "
+                "Install it with: pip install tuned-lens[training]"
+            )
 
         return runid.generate_id()
 
@@ -173,7 +179,13 @@ class Train:
             return
 
         logger.debug("Initializing Weights & Biases ...")
-        import wandb
+        try:
+            import wandb
+        except ImportError:
+            raise ImportError(
+                "wandb is required for experiment tracking but is not installed. "
+                "Install it with: pip install tuned-lens[training]"
+            )
 
         wandb.init(
             config=dataclasses.asdict(self),
@@ -196,7 +208,13 @@ class Train:
         if not self.dist.primary or not self.wandb:
             return
 
-        import wandb
+        try:
+            import wandb
+        except ImportError:
+            raise ImportError(
+                "wandb is required for experiment tracking but is not installed. "
+                "Install it with: pip install tuned-lens[training]"
+            )
 
         log_dict = {}
         log_dict.update(

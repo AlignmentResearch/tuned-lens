@@ -19,11 +19,13 @@ dependencies = [
     "huggingface_hub>=0.16.4",
     "simple-parsing>=0.1.4",
     "flatten-dict>=0.4.1",
-    "wandb>=0.15.0",
 ]
 version = "0.2.0"
 
 [project.optional-dependencies]
+training = [
+    "wandb>=0.15.0",
+]
 dev = [
     "pre-commit",
     "bump2version",
