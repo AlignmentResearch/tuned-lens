@@ -15,6 +15,14 @@ import transformers as tr
 from torch import nn
 from transformers import models
 
+# GptOssForCausalLM was added in transformers 4.55; guard the import so that
+# older supported versions (pyproject pins transformers>=4.38.1) still import
+# this module. When unavailable, the isinstance branches below are simply skipped.
+try:
+    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssModel as _GptOssModel
+except ImportError:  # transformers < 4.55
+    _GptOssModel = None
+
 
 def get_value_for_key(obj: Any, key: str) -> Any:
     """Get a value using `__getitem__` if `key` is numeric and `getattr` otherwise."""
@@ -123,6 +131,8 @@ def get_final_norm(model: Model) -> Norm:
         final_layer_norm = base_model.norm
     elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
         final_layer_norm = base_model.norm
+    elif _GptOssModel is not None and isinstance(base_model, _GptOssModel):
+        final_layer_norm = base_model.norm
     else:
         raise NotImplementedError(f"Unknown model type {type(base_model)}")
 
@@ -171,6 +181,8 @@ def get_transformer_layers(model: Model) -> tuple[str, th.nn.ModuleList]:
     elif isinstance(base_model, models.mistral.modeling_mistral.MistralModel):
         path_to_layers += ["layers"]
     elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
+        path_to_layers += ["layers"]
+    elif _GptOssModel is not None and isinstance(base_model, _GptOssModel):
         path_to_layers += ["layers"]
     else:
         raise NotImplementedError(f"Unknown model type {type(base_model)}")
