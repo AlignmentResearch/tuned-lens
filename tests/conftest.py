@@ -28,6 +28,7 @@ def text_dataset(text_dataset_path: Path) -> Dataset:
         "facebook/opt-125m",
         "mockmodel/llama-tiny",
         "mockmodel/gemma-tiny",
+        "mockmodel/gpt-oss-tiny",
         "gpt2",
     ],
 )
@@ -52,6 +53,18 @@ def random_small_model(request: str) -> tr.PreTrainedModel:
             num_attention_heads=4,
             num_key_value_heads=4,
             head_dim=32,
+        )
+    elif small_model_name == "mockmodel/gpt-oss-tiny":
+        config = tr.GptOssConfig(
+            vocab_size=1_000,
+            hidden_size=128,
+            num_hidden_layers=4,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=32,
+            intermediate_size=256,
+            num_local_experts=4,
+            num_experts_per_tok=2,
         )
     else:
         config = tr.AutoConfig.from_pretrained(small_model_name)
