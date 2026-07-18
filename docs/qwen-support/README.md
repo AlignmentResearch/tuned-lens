@@ -4,6 +4,8 @@ This note documents my Qwen support contribution for `AlignmentResearch/tuned-le
 
 ## Issue
 
+Related issue: [AlignmentResearch/tuned-lens#143](https://github.com/AlignmentResearch/tuned-lens/issues/143)
+
 `tuned_lens.model_surgery.get_final_norm()` and
 `tuned_lens.model_surgery.get_transformer_layers()` did not recognize Qwen
 decoder models. For Qwen3, this raised:
