@@ -6,6 +6,21 @@ import transformers as tr
 from datasets import Dataset
 
 
+def _tiny_qwen_config(config_cls):
+    return config_cls(
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        max_position_embeddings=64,
+        bos_token_id=1,
+        eos_token_id=2,
+        pad_token_id=0,
+    )
+
+
 @pytest.fixture(scope="module")
 def text_dataset_path() -> Path:
     dir_path = Path(__file__).parent.absolute()
@@ -28,6 +43,8 @@ def text_dataset(text_dataset_path: Path) -> Dataset:
         "facebook/opt-125m",
         "mockmodel/llama-tiny",
         "mockmodel/gemma-tiny",
+        "mockmodel/qwen2-tiny",
+        "mockmodel/qwen3-tiny",
         "gpt2",
     ],
 )
@@ -53,6 +70,14 @@ def random_small_model(request: str) -> tr.PreTrainedModel:
             num_key_value_heads=4,
             head_dim=32,
         )
+    elif small_model_name == "mockmodel/qwen2-tiny":
+        if not hasattr(tr, "Qwen2Config"):
+            pytest.skip("Qwen2Config is not available in this Transformers version.")
+        config = _tiny_qwen_config(tr.Qwen2Config)
+    elif small_model_name == "mockmodel/qwen3-tiny":
+        if not hasattr(tr, "Qwen3Config"):
+            pytest.skip("Qwen3Config is not available in this Transformers version.")
+        config = _tiny_qwen_config(tr.Qwen3Config)
     else:
         config = tr.AutoConfig.from_pretrained(small_model_name)
 
