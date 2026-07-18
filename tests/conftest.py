@@ -11,9 +11,29 @@ def _tiny_qwen_config(config_cls):
         vocab_size=128,
         hidden_size=32,
         intermediate_size=64,
-        num_hidden_layers=2,
+        num_hidden_layers=4,
         num_attention_heads=4,
         num_key_value_heads=4,
+        max_position_embeddings=64,
+        bos_token_id=1,
+        eos_token_id=2,
+        pad_token_id=0,
+    )
+
+
+def _tiny_qwen_moe_config(config_cls):
+    return config_cls(
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        moe_intermediate_size=64,
+        shared_expert_intermediate_size=64,
+        num_hidden_layers=4,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        num_experts=4,
+        num_experts_per_tok=2,
+        decoder_sparse_step=1,
         max_position_embeddings=64,
         bos_token_id=1,
         eos_token_id=2,
@@ -44,7 +64,10 @@ def text_dataset(text_dataset_path: Path) -> Dataset:
         "mockmodel/llama-tiny",
         "mockmodel/gemma-tiny",
         "mockmodel/qwen2-tiny",
+        "mockmodel/qwen2-moe-tiny",
         "mockmodel/qwen3-tiny",
+        "mockmodel/qwen3-moe-tiny",
+        "mockmodel/qwen3-next-tiny",
         "gpt2",
     ],
 )
@@ -74,10 +97,24 @@ def random_small_model(request: str) -> tr.PreTrainedModel:
         if not hasattr(tr, "Qwen2Config"):
             pytest.skip("Qwen2Config is not available in this Transformers version.")
         config = _tiny_qwen_config(tr.Qwen2Config)
+    elif small_model_name == "mockmodel/qwen2-moe-tiny":
+        if not hasattr(tr, "Qwen2MoeConfig"):
+            pytest.skip("Qwen2MoeConfig is not available in this Transformers version.")
+        config = _tiny_qwen_moe_config(tr.Qwen2MoeConfig)
     elif small_model_name == "mockmodel/qwen3-tiny":
         if not hasattr(tr, "Qwen3Config"):
             pytest.skip("Qwen3Config is not available in this Transformers version.")
         config = _tiny_qwen_config(tr.Qwen3Config)
+    elif small_model_name == "mockmodel/qwen3-moe-tiny":
+        if not hasattr(tr, "Qwen3MoeConfig"):
+            pytest.skip("Qwen3MoeConfig is not available in this Transformers version.")
+        config = _tiny_qwen_moe_config(tr.Qwen3MoeConfig)
+    elif small_model_name == "mockmodel/qwen3-next-tiny":
+        if not hasattr(tr, "Qwen3NextConfig"):
+            pytest.skip(
+                "Qwen3NextConfig is not available in this Transformers version."
+            )
+        config = _tiny_qwen_config(tr.Qwen3NextConfig)
     else:
         config = tr.AutoConfig.from_pretrained(small_model_name)
 

@@ -1,7 +1,7 @@
 """Tools for finding and modifying components in a transformer model."""
 
 from contextlib import contextmanager
-from typing import Any, Generator, Optional, TypeVar, Union
+from typing import Any, Generator, TypeVar, Union
 
 try:
     import transformer_lens as tl
@@ -71,27 +71,16 @@ Norm = Union[
 ]
 
 
-def _get_optional_model_type(model_module: str, class_name: str) -> Optional[type]:
-    """Return a Transformers model class when it is available."""
-    try:
-        module = getattr(models, model_module)
-        modeling_module = getattr(module, f"modeling_{model_module}")
-        return getattr(modeling_module, class_name)
-    except (AttributeError, ImportError):
-        return None
-
-
-def _is_qwen_model(model: th.nn.Module) -> bool:
-    """Check whether a model is from the Qwen decoder-only family."""
-    qwen_model_types = tuple(
-        model_type
-        for model_type in (
-            _get_optional_model_type("qwen2", "Qwen2Model"),
-            _get_optional_model_type("qwen3", "Qwen3Model"),
-        )
-        if model_type is not None
+def _is_qwen_decoder_model(model: th.nn.Module) -> bool:
+    """Check whether a Qwen-family model has a decoder stack tuned-lens can use."""
+    config = getattr(model, "config", None)
+    model_type = getattr(config, "model_type", "")
+    return (
+        isinstance(model_type, str)
+        and model_type.startswith("qwen")
+        and isinstance(getattr(model, "layers", None), th.nn.ModuleList)
+        and getattr(model, "norm", None) is not None
     )
-    return bool(qwen_model_types) and isinstance(model, qwen_model_types)
 
 
 def get_unembedding_matrix(model: Model) -> nn.Linear:
@@ -146,7 +135,7 @@ def get_final_norm(model: Model) -> Norm:
         final_layer_norm = base_model.norm
     elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
         final_layer_norm = base_model.norm
-    elif _is_qwen_model(base_model):
+    elif _is_qwen_decoder_model(base_model):
         final_layer_norm = base_model.norm
     else:
         raise NotImplementedError(f"Unknown model type {type(base_model)}")
@@ -197,7 +186,7 @@ def get_transformer_layers(model: Model) -> tuple[str, th.nn.ModuleList]:
         path_to_layers += ["layers"]
     elif isinstance(base_model, models.gemma.modeling_gemma.GemmaModel):
         path_to_layers += ["layers"]
-    elif _is_qwen_model(base_model):
+    elif _is_qwen_decoder_model(base_model):
         path_to_layers += ["layers"]
     else:
         raise NotImplementedError(f"Unknown model type {type(base_model)}")
