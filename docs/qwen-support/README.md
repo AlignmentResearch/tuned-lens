@@ -29,19 +29,38 @@ The Qwen checks are conditional on the installed Transformers version. Older
 Transformers versions can still import `tuned_lens`; newer versions that expose
 Qwen2/Qwen3 classes get support automatically.
 
-## Smoke Result
+## Real Pretrained Result
 
-The snapshot below was generated from a deterministic tiny random `Qwen3Config`
-on CPU. It is not a quality benchmark; it is a proof that the Qwen3 model surgery
-path works end to end with `LogitLens` and `PredictionTrajectory`.
+The snapshot below was generated with the real pretrained
+`Qwen/Qwen3-0.6B` checkpoint, not a randomly initialized mock model. This is a
+short LogitLens integration result: it verifies that tuned-lens can locate the
+Qwen final norm and decoder layers, then build a `PredictionTrajectory` from the
+model's real hidden states.
 
-![Tiny Qwen3 LogitLens smoke result](qwen3_tiny_logit_lens_snapshot.png)
+![Qwen3-0.6B LogitLens result](qwen3_0_6b_logit_lens_result.png)
 
-| Layer | Top token id | Mean entropy | Mean forward KL |
-| --- | ---: | ---: | ---: |
-| 0 | 13 | 4.846087 | 0.010041 |
-| 1 | 63 | 4.845745 | 0.004934 |
-| output | 2 | 4.845909 | 0.000000 |
+Run details:
+
+- Model: `Qwen/Qwen3-0.6B`
+- Prompt: `AI alignment research helps language models`
+- Device: `cuda`
+- GPU: `NVIDIA GeForce RTX 5060 Ti`
+- Dtype: `float16`
+- Peak CUDA memory: `1.41 GB`
+- Layer path returned by model surgery: `base_model.layers`
+- Layers found: `28`
+- Final norm type: `Qwen3RMSNorm`
+
+| Layer | Top token at final prompt position | Top probability | Mean entropy | Mean forward KL |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | ` models` (4119) | 1.0000 | 0.0000 | 102.8691 |
+| 1 | ` model` (1614) | 0.2509 | 2.8800 | 11.4868 |
+| 14 | `erve` (5852) | 0.0979 | 5.2927 | 5.6683 |
+| 27 | ` to` (311) | 0.2655 | 4.8768 | 0.4478 |
+| output | ` to` (311) | 0.2135 | 4.8618 | 0.0000 |
+
+This is not a trained tuned-lens benchmark. It is a real pretrained-model
+compatibility and LogitLens trajectory result for Qwen3.
 
 Validation command:
 
